@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>vLLM planner · user guide</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<style>
+  body.docs-body { max-width: 920px; padding: 18px; }
+  .docs-hdr {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 10px; flex-wrap: wrap; margin-bottom: 10px;
+  }
+  .docs-hdr h1 { font-size: 16px; }
+  .docs-hdr .sub { font-size: 10px; color: var(--fg2); }
+  .docs-tabs { display: flex; gap: 6px; align-items: center; }
+  .docs-tabs a {
+    font-family: var(--sans); font-size: 10px; font-weight: 500;
+    background: var(--bg2); border: 1px solid var(--b1); border-radius: var(--r);
+    padding: 4px 10px; color: var(--fg0); text-decoration: none;
+    transition: background .08s;
+  }
+  .docs-tabs a:hover { background: var(--bg3); }
+  .docs-tabs a.on { background: var(--fg0); color: var(--bg0); border-color: var(--fg0); }
+
+  .toc {
+    display: flex; flex-wrap: wrap; gap: 4px 10px;
+    padding: 8px 10px; background: var(--bg1); border: 1px solid var(--b0);
+    border-radius: var(--r); margin-bottom: 10px; font-size: 11px;
+  }
+  .toc a { color: var(--acc); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+
+  .docs-section { margin-bottom: 14px; }
+  .docs-section h2 {
+    font-size: 13px; font-weight: 600; text-transform: none;
+    letter-spacing: 0; color: var(--fg0); margin-bottom: 6px;
+    font-family: var(--mono); padding-top: 4px;
+  }
+  .docs-section h3 {
+    font-size: 11px; font-weight: 600; margin: 8px 0 4px;
+    color: var(--fg0);
+  }
+  .docs-section p { font-size: 12px; color: var(--fg0); margin: 4px 0; }
+  .docs-section p.note { color: var(--fg1); font-size: 11px; }
+  .docs-section ul, .docs-section ol {
+    font-size: 12px; color: var(--fg0);
+    margin: 4px 0 4px 18px; padding: 0;
+  }
+  .docs-section li { margin: 2px 0; }
+  .docs-section code {
+    font-family: var(--mono); font-size: 11px;
+    background: var(--bg2); padding: 1px 4px; border-radius: 3px;
+    border: 1px solid var(--b0);
+  }
+  .docs-section kbd {
+    font-family: var(--mono); font-size: 10px;
+    background: var(--bg2); padding: 1px 5px; border-radius: 3px;
+    border: 1px solid var(--b1); border-bottom-width: 2px;
+  }
+  .kv {
+    display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px;
+    font-size: 11px; margin: 4px 0;
+  }
+  .kv dt { font-family: var(--mono); color: var(--fg0); font-weight: 500; white-space: nowrap; }
+  .kv dd { color: var(--fg1); margin: 0; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
+  .sw-served { background: var(--acc2); }
+  .sw-spilled { background: var(--amber); }
+  .sw-leaked { background: color-mix(in srgb, var(--amber) 45%, var(--red)); }
+  .sw-destroyed { background: var(--red); }
+</style>
+</head>
+<body class="docs-body">
+
+<div class="docs-hdr">
+  <div>
+    <h1>vLLM multi-model planner · user guide</h1>
+    <div class="sub">What the calculator does and how to drive it.</div>
+  </div>
+  <nav class="docs-tabs">
+    <a href="{{ url_for('index') }}">← Calculator</a>
+    <a href="{{ url_for('explainer') }}" class="on">User guide</a>
+  </nav>
+</div>
+
+<div class="toc">
+  <strong style="color:var(--fg2);">Jump to:</strong>
+  <a href="#tldr">TL;DR</a>
+  <a href="#quickstart">Quickstart</a>
+  <a href="#charts">Charts</a>
+  <a href="#hardware">Hardware</a>
+  <a href="#models">Models</a>
+  <a href="#workload">Workload</a>
+  <a href="#efficiency">Efficiency</a>
+  <a href="#compare">Compare (A/B)</a>
+  <a href="#market">Internal market</a>
+  <a href="#glossary">Glossary</a>
+</div>
+
+<section class="docs-section panel" id="tldr">
+  <h2>TL;DR — what this is</h2>
+  <p>
+    A roofline-style planner for vLLM deployments. You describe the hardware you have (GPUs, memory caps),
+    the models you want to serve (with precision and parallelism), and the demand —
+    a portfolio of <em>use cases</em>, each with a token demand, difficulty / quality SLO, WTP
+    ceiling, capability requirements, and an input/output length preset. The planner estimates
+    peak throughput and per-user latency under vLLM's continuous batching, and projects how that
+    demand routes across your cluster versus a corporate cloud fallback.
+  </p>
+  <p class="note">
+    It's a closed-form estimator, not a simulator. Numbers are for sizing conversations
+    (GPU count, precision, TP/PP/DP), not SLA guarantees. Calibrate against vLLM's
+    runtime metrics on representative workloads before trusting fine detail.
+  </p>
+</section>
+
+<section class="docs-section panel" id="quickstart">
+  <h2>Quickstart</h2>
+  <ol>
+    <li><strong>Add a GPU pool.</strong> Click <kbd>+ Add GPU</kbd>, pick a card (e.g. MI355X, H100),
+      and choose how many are in the pool.</li>
+    <li><strong>Add one or more models.</strong> Click <kbd>+ Add model</kbd> and pick from the catalog.
+      The planner auto-chooses a GPU count and a TP/PP/DP topology that fits.</li>
+    <li><strong>Shape the workload.</strong> Open the <em>Use cases</em> panel and pick each use
+      case's <em>Input shape</em> / <em>Output shape</em> presets (<code>Chat</code>,
+      <code>Long doc</code>, <code>Code</code>, <code>Classify</code>, <code>RAG</code>). The
+      planner's aggregate prefill/decode distribution is a demand-weighted blend of those choices.
+      Optionally set a prefix-hit rate in the panel below.</li>
+    <li><strong>Read the chart.</strong> Switch between <em>User Pareto</em> (tok/s per user vs concurrency)
+      and <em>Processing Pareto</em> (requests/sec vs batch size).</li>
+    <li><strong>(Optional)</strong> Open the <em>Internal market</em> panel below the chart
+      to see how demand from projects routes onto this deployment vs cloud.</li>
+    <li><strong>(Optional)</strong> Click <kbd>⊞ Duplicate To Compare</kbd> to fork the current
+      config into a B-side and edit it independently for A/B comparisons.</li>
+  </ol>
+</section>
+
+<section class="docs-section panel" id="charts">
+  <h2>The charts</h2>
+  <p>The main chart below the config panels has two modes, selected via the tabs beneath it:</p>
+
+  <h3>User Pareto</h3>
+  <p>
+    Plots <strong>tok/s per user</strong> vs <strong>concurrent users</strong> (both log-scale). This is
+    the latency view: adding users drops per-user throughput until the system is bandwidth- or
+    KV-bound. The curve flattens where each model is memory-bandwidth limited on decode, and
+    drops off a cliff when the KV cache runs out of room (OOM — shown as a break in the line).
+    Hover any point to see total tok/s and ms/token for that operating point.
+  </p>
+
+  <h3>Processing Pareto</h3>
+  <p>
+    Plots <strong>requests/sec</strong> vs <strong>batch size</strong> (both log-scale). This is the
+    throughput view: how many requests/sec the deployment sustains end-to-end, including prefill
+    and decode together (with their interference blend). Useful for sizing batch-oriented workloads
+    where per-user latency matters less than aggregate throughput.
+  </p>
+
+  <p class="note">
+    Each deployed model contributes one line. In compare mode (A/B), panel B's lines are drawn
+    dashed and suffixed with <code>(B)</code>. A legend under the config area shows each line's
+    model, phase (P/D), topology, and precision.
+  </p>
+</section>
+
+<section class="docs-section panel" id="hardware">
+  <h2>Configuring hardware</h2>
+
+  <h3>GPU pools</h3>
+  <p>
+    Each pool is a bag of identical GPUs. The card header shows the GPU type, memory bandwidth,
+    vendor, and how many of the pool's GPUs are still free (not claimed by any model).
+    Use the <kbd>−</kbd> / <kbd>+</kbd> buttons to resize the pool; removing GPUs that are
+    already assigned will trim the neediest model's count down automatically.
+  </p>
+  <p class="note">
+    The bandwidth shown in the card header is the vendor's published peak memory bandwidth.
+    For a few device families with sparse public inference disclosure, the planner may use a
+    more conservative sustained-bandwidth proxy internally.
+  </p>
+
+  <h3>TCO $/GPU·hr</h3>
+  <p>
+    Amortized total cost of ownership per GPU-hour: hardware capex spread over its useful life,
+    plus power, cooling, datacenter, and ops. When set (non-zero), it powers the daily cluster
+    cost and the <em>coverage / margin</em> readout in the internal-market panel. Leave it at 0
+    and those readouts are suppressed.
+  </p>
+
+  <h3>Memory cap</h3>
+  <dl class="kv">
+    <dt>gpu_mem_util</dt>
+    <dd>Requested fraction of device memory (HBM or unified memory) the runtime can use (0.50–0.98). Weights and profiled non-KV runtime
+      memory are subtracted from this to determine the KV budget.</dd>
+    <dt>Profiled non-KV</dt>
+    <dd>GB reserved per GPU for activations, CUDA graphs, NCCL scratch, sampler state, and other
+      runtime memory not captured by the static weight footprint. Larger → less KV headroom.</dd>
+  </dl>
+</section>
+
+<section class="docs-section panel" id="models">
+  <h2>Configuring models</h2>
+
+  <h3>Adding a model</h3>
+  <p>
+    <kbd>+ Add model</kbd> opens a picker grouped by category (dense, MoE, reasoning, …).
+    On add, the planner picks the smallest GPU count on the best-fitting pool that has a valid
+    topology in BF16 (falling back through the lower-memory precision options if BF16 doesn't fit), then tunes TP/PP/DP to whichever
+    valid strategy maximizes peak throughput.
+  </p>
+
+  <h3>Per-model controls</h3>
+  <dl class="kv">
+    <dt>Precision</dt>
+    <dd>Per-model weight precision. FP8 uses 1 B/param and FP8 KV cache. NVFP4 and MXFP4 use E2M1
+      4-bit weights plus block-scale metadata, while keeping KV cache at FP8 for a less optimistic
+      serving estimate.</dd>
+    <dt>On &lt;pool&gt;</dt>
+    <dd>Visible when you have more than one GPU pool. Move the model between pools.</dd>
+    <dt>GPUs</dt>
+    <dd>How many GPUs from the chosen pool this model uses. Each +/– retunes parallelism.</dd>
+    <dt>P row</dt>
+    <dd>Valid <em>prefill</em> topology buttons. Labels read <code>TPx·PPy·DPz</code>, omitting
+      dims that equal 1. A highlighted button is the active choice.</dd>
+    <dt>D row</dt>
+    <dd>Same, for <em>decode</em>. Prefill and decode can use different topologies; the planner
+      models the handoff via the <code>P/D interference</code> blend.</dd>
+  </dl>
+
+  <h3>Topology glossary</h3>
+  <dl class="kv">
+    <dt>TP (tensor parallel)</dt>
+    <dd>Shards each layer's weights across TP GPUs. All-reduces every layer — latency-sensitive,
+      prefer within a single node.</dd>
+    <dt>PP (pipeline parallel)</dt>
+    <dd>Stages the model across PP GPUs; each micro-batch flows through stages. Cheaper cross-node
+      than TP, but adds pipeline bubbles.</dd>
+    <dt>DP (data parallel)</dt>
+    <dd>Replicates the model across DP independent instances; each serves its own batch. Throughput
+      scales roughly linearly with DP.</dd>
+  </dl>
+  <p class="note">
+    The planner warns when TP spans nodes (cross-node all-reduces tank bandwidth) and when MoE
+    multi-node expert traffic or long-context KV sharding isn't modeled — treat those views as
+    optimistic.
+  </p>
+
+  <h3>Memory readouts</h3>
+  <p>
+    Each model card shows two lines after topology: <code>P ... GB effective KV · ~N prompts
+    at L tok</code> and <code>D ... GB effective KV · ~N slots</code>. These are the prefill-
+    and decode-side KV budgets after subtracting weights and profiled non-KV, plus the
+    batch-size or concurrency that budget supports at the current workload lengths.
+  </p>
+</section>
+
+<section class="docs-section panel" id="workload">
+  <h2>Workload shape</h2>
+
+  <h3>Per use case: Input / Output shape</h3>
+  <p>
+    Each use case card owns its own <em>Input shape</em> and <em>Output shape</em> preset
+    (<code>Chat</code>, <code>RAG</code>, <code>Long doc</code>, <code>Code</code>,
+    <code>Classify</code>). The aggregate prefill/decode distribution consumed by the rooflines
+    is a <strong>demand-weighted blend</strong> across all active use cases — weight each bucket
+    by <code>project.tokens_day</code>. Change a preset and the planner retunes every model's
+    topology for the new averaged sequence length.
+  </p>
+  <p class="note">
+    Before, the Input / Output length distribution lived in two standalone slider cards. They're
+    gone now — the same information is split across use cases, which also lets you explain
+    <em>why</em> a particular distribution applies (classification has different shapes than
+    deep research).
+  </p>
+
+  <h3>Quality and token efficiency — why the right model matters</h3>
+  <p>
+    Each use case declares a <em>Difficulty</em> (task hardness, 0..100) and a <em>Quality SLO</em>
+    (minimum success rate). The planner inverts
+    <code>success_rate = sigmoid(k·(quality − difficulty))</code> to compute a
+    <strong>required model quality floor</strong>, shown inline on the card
+    (<code>Needs model quality ≥ 0.xx</code>). Any deployed model whose
+    <em>quality</em> falls below that floor is rejected at routing time. Model quality is
+    calibrated from Artificial Analysis' Intelligence Index into the 0.30–0.95 range.
+  </p>
+  <p>
+    Each model also has a <em>token efficiency</em> multiplier (η). A model that uses ~10M output
+    tokens on the Intelligence Index reference has η = 1.00×; a more verbose model
+    (Nemotron Nano, ~140M tokens for the same benchmarks) has η ≈ 0.07×, meaning it costs roughly
+    10× more tokens than Gemma 4 31B (≈ 1.4×) to answer the same question. The internal market
+    divides on-prem $/M by η to compute an <em>effective $/M</em>, so a verbose model that's
+    cheap per token often loses to a compact one with the same headline price.
+  </p>
+  <p class="note">
+    Both quality (Q) and efficiency (η) are visible on every deployed model card — the two
+    numbers sit right below the weight footprint. Use them to reason about which use case
+    will route where before running the market.
+  </p>
+
+  <h3>Prefix reuse</h3>
+  <p>
+    <em>Prefix hit rate</em> models vLLM's Automatic Prefix Caching: the fraction of prompt tokens
+    served from cache instead of re-prefilled. It only affects prefill-sensitive metrics;
+    pure-decode and aggregate Pareto curves are unchanged. Effective prefill length
+    = input_len × (1 − hit_rate).
+  </p>
+</section>
+
+<section class="docs-section panel" id="efficiency">
+  <h2>Efficiency parameters</h2>
+  <p>
+    Under <kbd>⚙ Efficiency parameters</kbd> in the cluster panel. These are the knobs that make
+    the roofline match reality; the defaults are sane for current vLLM builds, but you'll want to
+    calibrate per-workload.
+  </p>
+
+  <h3>Prefill-only</h3>
+  <dl class="kv">
+    <dt>BW efficiency</dt><dd>Fraction of peak memory + collective bandwidth achieved during prefill.</dd>
+    <dt>Compute efficiency</dt><dd>Fraction of peak FLOP/s achieved during prefill.</dd>
+    <dt>Overhead factor</dt><dd>Flat runtime overhead applied to prefill.</dd>
+    <dt>Paged KV overhead</dt><dd>Tax for KV paging during prompt ingestion.</dd>
+    <dt>AR overlap</dt><dd>Fraction of all-reduce hidden behind prefill compute.</dd>
+  </dl>
+
+  <h3>Decode-only</h3>
+  <dl class="kv">
+    <dt>BW / Compute / Overhead / Paged KV / AR overlap</dt>
+    <dd>Same meaning as prefill, but applied to the decode loop.</dd>
+    <dt>Sched budget</dt>
+    <dd>Approximate scheduler working-set token budget before decode efficiency degrades.
+      Caps the number of concurrent decode slots per replica.</dd>
+  </dl>
+
+  <h3>Shared</h3>
+  <dl class="kv">
+    <dt>KV slack reserve</dt><dd>Residual KV loss after allocation (fragmentation, edges).</dd>
+    <dt>MoE imbalance</dt><dd>Multiplier penalizing expert skew and routing tails. 1.00× = perfect balance.</dd>
+    <dt>P/D interference</dt><dd>Blend between fully overlapped prefill+decode (0%) and fully
+      serialized (100%). Higher means prefill starves decode and vice versa.</dd>
+  </dl>
+</section>
+
+<section class="docs-section panel" id="compare">
+  <h2>Compare (A/B)</h2>
+  <p>
+    Click <kbd>⊞ Duplicate To Compare</kbd> (top-right) to fork the current state into a second
+    panel. Edits on either side are independent. Both configs render on the same chart —
+    B's curves are dashed — and both appear in the internal-market panel side by side.
+    Click <kbd>✕ Close Compare</kbd> to collapse back to a single config.
+  </p>
+  <p class="note">
+    Typical use: clone the deployed config, change one thing (precision, GPU count, an efficiency
+    knob), and eyeball whether it moves the Pareto frontier or shifts internal-market fates.
+  </p>
+</section>
+
+<section class="docs-section panel" id="market">
+  <h2>Internal market (revenue projection)</h2>
+  <p>
+    A demand-side layer stacked on top of the throughput model. You describe <em>projects</em>
+    (workload streams with a price ceiling and a quality requirement); the planner routes those
+    streams across your deployed models, spills excess to cloud, and tells you what happens to
+    the rest.
+  </p>
+
+  <h3>Use cases — the demand side</h3>
+  <dl class="kv">
+    <dt>Demand (tok/day)</dt><dd>Daily token volume the use case brings.</dd>
+    <dt>WTP ceiling ($/M)</dt><dd>Willingness-to-pay per million tokens. If effective on-prem price
+      exceeds this, the use case prefers cloud; if cloud also exceeds it, the work is destroyed.
+      Effective $/M divides raw $/M by the routed model's token_efficiency, so a verbose model
+      effectively costs more than its headline price.</dd>
+    <dt>Difficulty</dt><dd>Task difficulty ∈ [0, 1], paired with each model's benchmark-anchored
+      <em>quality</em> via <code>success_rate(quality, difficulty)</code> to decide eligibility.</dd>
+    <dt>Quality SLO</dt><dd>Floor on <code>success_rate</code>. Candidate models below this are
+      rejected. The card derives a <em>Needs model quality ≥ q</em> line inline — invert
+      <code>sigmoid(k·(q − difficulty)) = slo</code> to get the minimum eligible quality.</dd>
+    <dt>Input / Output shape</dt><dd>Per use case preset for prompt / output length distribution.
+      The aggregate distribution consumed by the rooflines is the demand-weighted blend across all
+      use cases' presets.</dd>
+    <dt>Requires (capabilities)</dt><dd>Hard capability gates (tool use, vision, long-context, …);
+      a model must supply ALL listed capabilities to be eligible.</dd>
+    <dt>Latent demand / unlock</dt><dd>Hidden pool that only materializes when the cheapest viable
+      on-prem $/M falls at or below the unlock threshold. All-or-nothing per routing pass.</dd>
+  </dl>
+  <p class="note">
+    Ceiling order: higher-WTP projects win capacity first. Project presets seed realistic
+    difficulty/demand/WTP combos (classification, chatbot, coding, research).
+  </p>
+
+  <h3>Where demand ends up — the fate bar</h3>
+  <ul>
+    <li><span class="swatch sw-served"></span><strong>Served</strong> — routed to one of your
+      deployed models; counted at internal $/M.</li>
+    <li><span class="swatch sw-spilled"></span><strong>Spilled</strong> — a compatible model is
+      deployed, but you're out of GPU capacity, so overflow goes to cloud.</li>
+    <li><span class="swatch sw-leaked"></span><strong>Leaked</strong> — no deployed model matches
+      (capabilities, SLO, or pricing beats internal), so the project uses cloud directly.</li>
+    <li><span class="swatch sw-destroyed"></span><strong>Destroyed</strong> — even the cheapest
+      compatible cloud model is above WTP, or no cloud model meets the SLO. The work is shelved.</li>
+  </ul>
+
+  <h3>Corpo cloud catalog</h3>
+  <p>
+    Procurement decides which cloud models the gateway exposes. The active catalog appears as tags;
+    switching between <code>current</code> and <code>advocated</code> shows the demand-destruction
+    impact of expanding vendor access. Reference cloud $/M for each project is the cheapest
+    compatible model in the active catalog.
+  </p>
+
+  <h3>Supply — deployed models table</h3>
+  <p>
+    One row per deployed model: quality, token efficiency, capabilities, GPUs, daily-token
+    capacity, demand placed, utilization, and on-prem $/M. Tags: <code>SATURATED</code> means
+    all capacity consumed (adding GPUs would stop spill); <code>IDLE</code> means no project
+    routed here (quality doesn't meet SLOs, or $/M exceeds every ceiling).
+  </p>
+
+  <h3>Advanced — day shape, night batching, workload</h3>
+  <dl class="kv">
+    <dt>Day shape</dt><dd>Hourly demand profile (e.g. workday, flat, nocturnal). Changes the peak-
+      to-mean ratio; sustainable daily tokens = peak RPS × 86400 × tokens/req ÷ peak-factor.</dd>
+    <dt>Night batching</dt><dd>Flattens peak for batch-eligible projects by offering a discount
+      overnight. Demand shifts via an elasticity parameter.</dd>
+    <dt>Workload readout</dt><dd>Average in/out lengths and active prefix-hit rate used by the
+      market pricing.</dd>
+  </dl>
+</section>
+
+<section class="docs-section panel" id="glossary">
+  <h2>Glossary</h2>
+  <dl class="kv">
+    <dt>Roofline</dt>
+    <dd>A closed-form bound on throughput from either bandwidth (KV/weight fetches) or compute
+      (FLOPs), whichever binds first.</dd>
+    <dt>Continuous batching</dt>
+    <dd>vLLM's scheduler: decode slots are refilled request-by-request rather than in fixed
+      micro-batches, keeping the GPU busy across uneven request lengths.</dd>
+    <dt>KV cache</dt>
+    <dd>Per-token attention state that must live in accelerator memory for the duration of a request. KV per
+      token depends on model dimensions and precision.</dd>
+    <dt>MLA</dt>
+    <dd>Multi-head Latent Attention (DeepSeek-style): compresses the KV cache, so decode
+      concurrency is far higher than vanilla attention for the same memory budget.</dd>
+    <dt>MoE</dt>
+    <dd>Mixture-of-Experts. Total params are large but only a subset activates per token.
+      Throughput uses <em>active</em> params for compute, plus an imbalance multiplier for the
+      routing tail.</dd>
+    <dt>Prefill / Decode</dt>
+    <dd>Prefill = ingesting the prompt (compute-bound, wide). Decode = generating output tokens
+      one step at a time (bandwidth-bound, many concurrent).</dd>
+    <dt>Effective $/M</dt>
+    <dd>Internal $/M divided by a per-model token-efficiency multiplier. Models that think more
+      or are more verbose cost more per unit of delivered value.</dd>
+  </dl>
+</section>
+
+</body>
+</html>

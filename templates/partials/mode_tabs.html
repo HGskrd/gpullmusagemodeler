@@ -1,0 +1,5 @@
+{% for k, label in VISIBLE_PLOT_MODES %}
+<button hx-post="/mode" hx-vals='{"mode":"{{ k }}"}'
+        hx-target="#main-content"
+        class="{{ 'on' if A.mode == k else '' }}">{{ label }}</button>
+{% endfor %}

@@ -1,0 +1,166 @@
+{# Single model card #}
+<div class="card" style="position:relative;">
+  <button class="ghost sm" style="position:absolute;top:3px;right:3px;color:var(--red);padding:1px 4px;"
+          hx-post="/model/remove" hx-target="#main-content"
+          hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}'>✕</button>
+
+  <div style="display:flex;align-items:center;gap:4px;margin-bottom:4px;">
+    <span class="dot" style="background:{{ m.color }};"></span>
+    <span style="font-size:11px;font-weight:600;">{{ m.name }}</span>
+    <select class="prec-select" name="prec" title="{{ PRECISION_DESCRIPTIONS[am.prec] }}"
+            style="margin-left:auto;"
+            hx-post="/model/prec" hx-target="#main-content" hx-trigger="change" hx-include="this"
+            hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}'>
+      {% for prec in PRECISIONS %}
+      <option value="{{ prec }}" {{ 'selected' if am.prec == prec else '' }}>{{ PRECISION_LABELS[prec] }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="T" style="margin-bottom:3px;">
+    {{ "%.1f"|format(m.weight_gb(am.prec)) }} GB weights{% if info.mixed_weight_precision %} · ~{{ "%.2f"|format(info.weight_bpp) }} B/param avg{% endif %}{{ ' · MLA KV' if m.is_mla else '' }}
+  </div>
+  {% for alert in info.precision_alerts %}
+  <div class="warn">⚠ {{ alert }}</div>
+  {% endfor %}
+  <div class="T" style="margin-bottom:3px;display:flex;gap:6px;">
+    <span class="tip" title="Benchmark-anchored model quality on a 0..1 axis (AA Intelligence Index, calibrated to 0.30..0.95). Paired with each use case's difficulty via success_rate() — model is eligible when its quality clears the use case's required-quality floor.">Q&nbsp;{{ "%.2f"|format(m.quality) }}</span>
+    <span class="tip" title="Token efficiency: 1.00× = 10M output tokens on AA's Intelligence Index reference; 0.50× = twice as verbose (thinks ~2× longer); 2.00× = half as many tokens. Effective $/M divides internal $/M by this, so verbose models cost more per unit of delivered answer — Nemotron Nano's ~0.07× is roughly 10× the tokens of Gemma 4 31B's ~1.4× on the same benchmarks.">η&nbsp;{{ "%.2f"|format(m.token_efficiency) }}×</span>
+  </div>
+  {% if m.is_moe %}
+  <div class="T" style="margin-bottom:3px;">
+    {{ "%.1f"|format(m.active_params / 1e9) }}B active · {{ "%.2f"|format(state.moe_imbalance) }}× expert imbalance
+  </div>
+  {% endif %}
+
+  {% if state.gpus|length > 1 %}
+  <div class="flex" style="margin-bottom:3px;gap:3px;">
+    <span class="T" style="min-width:28px;">On</span>
+    <select hx-post="/model/gpu_pool" hx-target="#main-content"
+            hx-trigger="change" hx-include="this"
+            hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}'
+            name="gpu_uid">
+      {% for gp2 in state.gpus %}
+      <option value="{{ gp2.uid }}" {{ 'selected' if gp2.uid == am.gpu_uid else '' }}>
+        {{ GPUS[gp2.gpu_type].name }} ({{ gp2.count }})
+      </option>
+      {% endfor %}
+    </select>
+  </div>
+  {% endif %}
+
+  <div class="flex" style="margin-bottom:3px;gap:2px;">
+    <span class="T" style="min-width:28px;">GPUs</span>
+    {% set limit = [info.max_avail, 16]|min %}
+    {% for i in range(0, limit + 1) %}
+      {% if i <= 8 or i % 2 == 0 or i == limit %}
+      <button class="sm" style="min-width:20px;padding:2px 3px;{{ 'background:var(--fg0);color:var(--bg0);border-color:var(--fg0);' if i == am.gpu_count else '' }}"
+              hx-post="/model/count" hx-target="#main-content"
+              hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}","count":"{{ i }}"}'>{{ i }}</button>
+      {% endif %}
+    {% endfor %}
+  </div>
+
+  {% if am.gpu_count > 0 and info.strats|length > 0 %}
+  <div class="flex" style="margin-bottom:3px;gap:2px;">
+    <span class="T" style="min-width:28px;">P</span>
+    {% for tp_val, pp_val, dp_val in info.strats %}
+      {% set sel = (tp_val == am.prefill_tp and pp_val == am.prefill_pp and dp_val == am.prefill_dp) %}
+      {% if tp_val == 1 and pp_val == 1 and dp_val == 1 %}
+        {% set strat_label = 'TP' + tp_val|string %}
+      {% elif pp_val == 1 %}
+        {% set strat_label = 'TP' + tp_val|string + '×DP' + dp_val|string %}
+      {% elif dp_val == 1 %}
+        {% set strat_label = 'TP' + tp_val|string + '×PP' + pp_val|string %}
+      {% else %}
+        {% set strat_label = 'TP' + tp_val|string + '×PP' + pp_val|string + '×DP' + dp_val|string %}
+      {% endif %}
+      <button class="sm" style="padding:2px 4px;{{ 'background:'+m.color+';color:white;border-color:'+m.color+';' if sel else '' }}"
+              hx-post="/model/strat" hx-target="#main-content"
+              hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}","phase":"prefill","tp":"{{ tp_val }}","pp":"{{ pp_val }}","dp":"{{ dp_val }}"}'>
+        {{ strat_label }}
+      </button>
+    {% endfor %}
+  </div>
+  {% if info.prefill_comm_summary %}
+  <div class="T" style="margin-bottom:3px;">P {{ info.prefill_comm_summary }}</div>
+  {% endif %}
+  {% if info.prefill_exceeds_node %}
+  <div class="warn">⚠ Prefill TP spans nodes.</div>
+  {% endif %}
+  {% for alert in info.prefill_alerts %}
+  <div class="warn">⚠ {{ alert }}</div>
+  {% endfor %}
+
+  <div class="flex" style="margin-bottom:3px;gap:2px;">
+    <span class="T" style="min-width:28px;">D</span>
+    {% for tp_val, pp_val, dp_val in info.strats %}
+      {% set sel = (tp_val == am.tp and pp_val == am.pp and dp_val == am.dp) %}
+      {% if tp_val == 1 and pp_val == 1 and dp_val == 1 %}
+        {% set strat_label = 'TP' + tp_val|string %}
+      {% elif pp_val == 1 %}
+        {% set strat_label = 'TP' + tp_val|string + '×DP' + dp_val|string %}
+      {% elif dp_val == 1 %}
+        {% set strat_label = 'TP' + tp_val|string + '×PP' + pp_val|string %}
+      {% else %}
+        {% set strat_label = 'TP' + tp_val|string + '×PP' + pp_val|string + '×DP' + dp_val|string %}
+      {% endif %}
+      <button class="sm" style="padding:2px 4px;{{ 'background:'+m.color+';color:white;border-color:'+m.color+';' if sel else '' }}"
+              hx-post="/model/strat" hx-target="#main-content"
+              hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}","phase":"decode","tp":"{{ tp_val }}","pp":"{{ pp_val }}","dp":"{{ dp_val }}"}'>
+        {{ strat_label }}
+      </button>
+    {% endfor %}
+  </div>
+  {% if info.decode_comm_summary %}
+  <div class="T" style="margin-bottom:3px;">D {{ info.decode_comm_summary }}</div>
+  {% endif %}
+  {% if info.decode_exceeds_node %}
+  <div class="warn">⚠ Decode TP spans nodes.</div>
+  {% endif %}
+  {% for alert in info.decode_alerts %}
+  <div class="warn">⚠ {{ alert }}</div>
+  {% endfor %}
+  {% elif am.gpu_count > 0 %}
+  <div style="font-size:10px;color:var(--red);">No feasible {{ PRECISION_LABELS[am.prec] }} topology within the current memory cap.</div>
+  {% if info.alt_prec and info.alt_fits_now %}
+  <div class="T">Switch to {{ PRECISION_LABELS[info.alt_prec] }} to run on {{ am.gpu_count }} GPUs.</div>
+  {% elif info.selected_pool_min_gpu_count %}
+  <div class="T">{{ PRECISION_LABELS[am.prec] }} needs at least {{ info.selected_pool_min_gpu_count }} GPUs on this pool.</div>
+  {% else %}
+  <div class="T">{{ PRECISION_LABELS[am.prec] }} does not fit on this pool under the current memory cap.</div>
+  {% endif %}
+  {% if info.alt_prec and not info.alt_fits_now %}
+    {% if info.alt_pool_min_gpu_count %}
+    <div class="T">{{ PRECISION_LABELS[info.alt_prec] }} needs at least {{ info.alt_pool_min_gpu_count }} GPUs on this pool.</div>
+    {% else %}
+    <div class="T">{{ PRECISION_LABELS[info.alt_prec] }} does not fit on this pool under the current memory cap.</div>
+    {% endif %}
+  {% endif %}
+  {% endif %}
+
+  {% if am.gpu_count == 0 %}
+    <div class="T">Not deployed</div>
+    {% if info.selected_pool_min_gpu_count %}
+    <div class="T">{{ PRECISION_LABELS[am.prec] }} needs at least {{ info.selected_pool_min_gpu_count }} GPUs on this pool.</div>
+    {% elif info.alt_prec and info.alt_pool_min_gpu_count %}
+    <div class="T">{{ PRECISION_LABELS[info.alt_prec] }} needs at least {{ info.alt_pool_min_gpu_count }} GPUs on this pool.</div>
+    {% endif %}
+  {% else %}
+    {% if info.prefill_fits %}
+    <div class="T" title="Prefill requested {{ "%.1f"|format(info.prefill_mem.requested / 1e9) }} GB · weights {{ "%.1f"|format(info.prefill_mem.weights / 1e9) }} GB · profiled non-KV {{ "%.1f"|format(info.prefill_mem.profiled_non_kv / 1e9) }} GB · KV reserved {{ "%.1f"|format(info.prefill_mem.kv_reserved / 1e9) }} GB">
+      P {{ info.prefill_kv_gb }} GB effective KV · ~{{ info.prefill_max_batch }} prompts at {{ info.prefill_probe_len|fmt_num }} tok
+    </div>
+    {% else %}
+    <div style="font-size:10px;color:var(--red);">Prefill does not fit within the requested memory cap.</div>
+    {% endif %}
+
+    {% if info.decode_fits %}
+    <div class="T" title="Decode requested {{ "%.1f"|format(info.decode_mem.requested / 1e9) }} GB · weights {{ "%.1f"|format(info.decode_mem.weights / 1e9) }} GB · profiled non-KV {{ "%.1f"|format(info.decode_mem.profiled_non_kv / 1e9) }} GB · KV reserved {{ "%.1f"|format(info.decode_mem.kv_reserved / 1e9) }} GB">
+      D {{ info.decode_kv_gb }} GB effective KV · ~{{ info.decode_max_slots }} slots{{ ' (MLA compressed)' if m.is_mla else '' }}
+    </div>
+    {% else %}
+    <div style="font-size:10px;color:var(--red);">Decode does not fit within the requested memory cap.</div>
+    {% endif %}
+  {% endif %}
+</div>

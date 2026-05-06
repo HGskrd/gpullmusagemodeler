@@ -1,0 +1,29 @@
+{% set effective_len = effective_prefill_length(input_len, state.prefix_hit_rate) %}
+<div class="panel">
+  <h2>Prefix Reuse</h2>
+
+  <div style="display:flex;align-items:center;gap:5px;">
+    <span class="T tip" title="Estimated share of prompt tokens served from vLLM Automatic Prefix Caching. This reduces shared-prefix prefill only; decode work is unchanged.">Prefix hit rate</span>
+    <input type="range" min="0" max="100" value="{{ (state.prefix_hit_rate * 100)|int }}" style="flex:1;"
+           hx-post="/settings/prefix-hit" hx-target="#main-content"
+           hx-trigger="change" hx-vals='{"panel":"{{ panel }}"}'
+           name="value"
+           data-live-target="#prefix-hit-val-{{ panel }}"
+           data-live-suffix="%" />
+    <span class="M" id="prefix-hit-val-{{ panel }}" style="font-size:10px;min-width:34px;">{{ (state.prefix_hit_rate * 100)|int }}%</span>
+  </div>
+
+  <div class="T" style="margin-top:3px;">
+    Effective prefill input: {{ "{:,}".format(effective_len) }} / {{ "{:,}".format(input_len) }} tok
+  </div>
+
+  {% if state.mode in ('data', 'userexp') %}
+  <div class="T" style="margin-top:1px;">
+    Applied to prefill-sensitive estimates only. Gains shrink when outputs are long.
+  </div>
+  {% else %}
+  <div class="T" style="margin-top:1px;">
+    Stored as a workload knob. Pure decode, pareto, and aggregate charts are unchanged.
+  </div>
+  {% endif %}
+</div>

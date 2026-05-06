@@ -1,0 +1,162 @@
+<div class="panel">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;">
+    <h2 style="margin:0;">{{ label or 'Cluster' }}</h2>
+    <div class="picker-wrap">
+      <button class="acc sm" data-picker="gpu" onclick="togglePicker(this, '/picker/gpu?panel={{ panel }}')">+ Add GPU</button>
+    </div>
+  </div>
+
+  {% for gp in state.gpus %}
+  {% set used = state.used_gpu_for_pool(gp.uid) %}
+  {% set free = gp.count - used %}
+  <div class="card" style="margin-bottom:4px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;">
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ GPUS[gp.gpu_type].name }}</div>
+        <div class="T">{{ "%.1f"|format(GPUS[gp.gpu_type].bw / 1e12) }} TB/s · {{ GPUS[gp.gpu_type].vendor_label }}{% if free < gp.count %} · <span style="color:var(--amber);">{{ free }}/{{ gp.count }} free</span>{% endif %}</div>
+      </div>
+      <div class="qty">
+        <button hx-post="/gpu/qty" hx-target="#main-content" hx-vals='{"panel":"{{ panel }}","uid":"{{ gp.uid }}","delta":"-1"}' {{ 'disabled' if gp.count <= 0 else '' }}>−</button>
+        <span>{{ gp.count }}</span>
+        <button hx-post="/gpu/qty" hx-target="#main-content" hx-vals='{"panel":"{{ panel }}","uid":"{{ gp.uid }}","delta":"1"}'>+</button>
+      </div>
+      <button class="ghost sm" hx-post="/gpu/remove" hx-target="#main-content" hx-vals='{"panel":"{{ panel }}","uid":"{{ gp.uid }}"}' style="color:var(--red);padding:2px 4px;">✕</button>
+    </div>
+    <div style="display:flex;align-items:center;gap:4px;margin-top:4px;">
+      <span class="T tip" style="white-space:nowrap;" title="Amortized total cost of ownership per GPU-hour: hardware capex spread over its useful life, plus power, cooling, datacenter, and ops.">TCO $/GPU·hr</span>
+      <input type="number" min="0" max="100" step="0.01" name="value"
+             style="width:72px;font-size:11px;"
+             value="{{ "%.2f"|format(gp.cost_per_gpu_hour) }}"
+             hx-post="/gpu/cost" hx-target="#main-content" hx-trigger="change"
+             hx-vals='{"panel":"{{ panel }}","uid":"{{ gp.uid }}"}' />
+      {% if gp.cost_per_gpu_hour > 0 %}
+      <span class="T" style="font-family:var(--mono);">{{ "%.0f"|format(gp.pool_cost_day) }}/day for {{ gp.count }} GPUs</span>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+
+  <div style="display:flex;align-items:center;gap:5px;margin-top:4px;">
+    <span class="T tip" title="Requested fraction of device memory (HBM or unified memory) the runtime can use before weights and profiled non-KV memory are subtracted.">gpu_mem_util</span>
+    <input type="range" min="50" max="98" value="{{ (state.mu * 100)|int }}" style="flex:1;"
+           hx-post="/settings/mu" hx-target="#main-content" hx-trigger="change"
+           hx-vals='{"panel":"{{ panel }}"}' name="value"
+           data-live-target="#settings-mu-val-{{ panel }}"
+           data-live-scale="0.01" data-live-decimals="2" />
+    <span class="M T" id="settings-mu-val-{{ panel }}">{{ "%.2f"|format(state.mu) }}</span>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:5px;margin-top:4px;">
+    <span class="T tip" title="Runtime memory reserved per GPU for activations, CUDA graphs, NCCL scratch, sampler state, and other non-KV overhead not captured by weights.">Profiled non-KV</span>
+    <input type="range" min="0" max="32" value="{{ state.profiled_non_kv_gb|int }}" step="1" style="flex:1;"
+           hx-post="/settings/non-kv" hx-target="#main-content" hx-trigger="change"
+           hx-vals='{"panel":"{{ panel }}"}' name="value"
+           data-live-target="#settings-nonkv-val-{{ panel }}"
+           data-live-suffix=" GB" />
+    <span class="M T" id="settings-nonkv-val-{{ panel }}">{{ "%.0f"|format(state.profiled_non_kv_gb) }} GB</span>
+  </div>
+
+  <details style="margin-top:5px;">
+    <summary class="T" style="cursor:pointer;user-select:none;font-weight:500;">⚙ Efficiency parameters</summary>
+    <div class="T" style="margin-top:4px;font-weight:600;">Prefill-only</div>
+    <div style="margin-top:3px;display:grid;grid-template-columns:1fr 1fr;gap:3px 10px;">
+      {% for label2, key, val, min_v, max_v, tip in [
+        ('BW efficiency', 'prefill_bw_eff', state.prefill_bw_eff, 50, 100, 'Fraction of peak memory and collective bandwidth achieved during prefill'),
+        ('Compute efficiency', 'prefill_comp_eff', state.prefill_comp_eff, 50, 100, 'Fraction of peak FLOP/s achieved during prefill'),
+        ('Overhead factor', 'prefill_overhead', state.prefill_overhead, 0, 25, 'Runtime overhead applied to prefill'),
+        ('Paged KV overhead', 'prefill_paged_oh', state.prefill_paged_oh, 0, 25, 'KV paging tax during prompt ingestion'),
+        ('AR overlap', 'prefill_ar_overlap', state.prefill_ar_overlap, 0, 80, 'All-reduce hidden behind prefill compute'),
+      ] %}
+      <div style="display:flex;align-items:center;gap:4px;">
+        <span class="T tip" title="{{ tip }}" style="min-width:90px;">{{ label2 }}</span>
+        <input type="range" min="{{ min_v }}" max="{{ max_v }}" value="{{ (val * 100)|int }}"
+               style="flex:1;min-width:50px;"
+               hx-post="/settings/eff" hx-target="#main-content" hx-trigger="change"
+               hx-vals='{"panel":"{{ panel }}","key":"{{ key }}"}' name="value"
+               data-live-target="#eff-{{ key }}-val-{{ panel }}"
+               data-live-suffix="%" />
+        <span class="M T" id="eff-{{ key }}-val-{{ panel }}" style="min-width:40px;text-align:right;">{{ (val * 100)|int }}%</span>
+      </div>
+      {% endfor %}
+    </div>
+
+    <div class="T" style="margin-top:6px;font-weight:600;">Decode-only</div>
+    <div style="margin-top:3px;display:grid;grid-template-columns:1fr 1fr;gap:3px 10px;">
+      {% for label2, key, val, min_v, max_v, tip in [
+        ('BW efficiency', 'decode_bw_eff', state.decode_bw_eff, 50, 100, 'Fraction of peak memory and collective bandwidth achieved during decode'),
+        ('Compute efficiency', 'decode_comp_eff', state.decode_comp_eff, 50, 100, 'Fraction of peak FLOP/s achieved during decode'),
+        ('Overhead factor', 'decode_overhead', state.decode_overhead, 0, 25, 'Runtime overhead applied to decode'),
+        ('Paged KV overhead', 'decode_paged_oh', state.decode_paged_oh, 0, 25, 'KV paging tax during decode'),
+        ('AR overlap', 'decode_ar_overlap', state.decode_ar_overlap, 0, 80, 'All-reduce hidden behind decode compute'),
+      ] %}
+      <div style="display:flex;align-items:center;gap:4px;">
+        <span class="T tip" title="{{ tip }}" style="min-width:90px;">{{ label2 }}</span>
+        <input type="range" min="{{ min_v }}" max="{{ max_v }}" value="{{ (val * 100)|int }}"
+               style="flex:1;min-width:50px;"
+               hx-post="/settings/eff" hx-target="#main-content" hx-trigger="change"
+               hx-vals='{"panel":"{{ panel }}","key":"{{ key }}"}' name="value"
+               data-live-target="#eff-{{ key }}-val-{{ panel }}"
+               data-live-suffix="%" />
+        <span class="M T" id="eff-{{ key }}-val-{{ panel }}" style="min-width:40px;text-align:right;">{{ (val * 100)|int }}%</span>
+      </div>
+      {% endfor %}
+      <div style="display:flex;align-items:center;gap:4px;">
+        <span class="T tip" title="Approximate scheduler working-set budget before decode efficiency degrades." style="min-width:90px;">Sched budget</span>
+        <input type="range" min="2048" max="65536" step="1024" value="{{ state.decode_sched_budget }}"
+               style="flex:1;min-width:50px;"
+               hx-post="/settings/int" hx-target="#main-content" hx-trigger="change"
+               hx-vals='{"panel":"{{ panel }}","key":"decode_sched_budget"}' name="value"
+               data-live-target="#eff-decode_sched_budget-val-{{ panel }}"
+               data-live-format="fmt_num" />
+        <span class="M T" id="eff-decode_sched_budget-val-{{ panel }}" style="min-width:56px;text-align:right;">{{ state.decode_sched_budget|fmt_num }}</span>
+      </div>
+    </div>
+
+    <div class="T" style="margin-top:6px;font-weight:600;">Shared</div>
+    <div style="margin-top:3px;display:grid;grid-template-columns:1fr 1fr;gap:3px 10px;">
+      {% for label2, key, val, min_v, max_v, tip, kind in [
+        ('KV slack reserve', 'kv_slack', state.kv_slack, 0, 10, 'Residual KV loss after allocation', 'pct'),
+        ('MoE imbalance', 'moe_imbalance', state.moe_imbalance, 100, 200, 'Penalty for expert skew and routing tails', 'x'),
+        ('P/D interference', 'pd_interference', state.pd_interference, 0, 100, 'Blend between bottlenecked overlap and fully serialized prefill/decode', 'pct'),
+      ] %}
+      <div style="display:flex;align-items:center;gap:4px;">
+        <span class="T tip" title="{{ tip }}" style="min-width:90px;">{{ label2 }}</span>
+        <input type="range" min="{{ min_v }}" max="{{ max_v }}" value="{{ (val * 100)|int }}"
+               style="flex:1;min-width:50px;"
+               hx-post="/settings/eff" hx-target="#main-content" hx-trigger="change"
+               hx-vals='{"panel":"{{ panel }}","key":"{{ key }}"}' name="value"
+               data-live-target="#eff-{{ key }}-val-{{ panel }}"
+               {% if kind == 'x' %}data-live-scale="0.01" data-live-decimals="2" data-live-suffix="×"{% else %}data-live-suffix="%"{% endif %} />
+        <span class="M T" id="eff-{{ key }}-val-{{ panel }}" style="min-width:50px;text-align:right;">{% if kind == 'x' %}{{ "%.2f"|format(val) }}×{% else %}{{ (val * 100)|int }}%{% endif %}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </details>
+</div>
+
+<div class="panel">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;">
+    <h2 style="margin:0;">Models</h2>
+    <div class="picker-wrap">
+      <button class="acc sm" data-picker="model" onclick="togglePicker(this, '/picker/model?panel={{ panel }}')" {{ 'disabled' if state.gpus|length == 0 else '' }}>+ Add model</button>
+    </div>
+  </div>
+  <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(250px,1fr));">
+  {% for info in get_model_infos(state) %}
+    {% set am = info.am %}
+    {% set m = info.model %}
+    {% include "partials/model_card.html" %}
+  {% endfor %}
+  </div>
+  {% include "partials/membar.html" %}
+</div>
+
+{% include "partials/use_cases_panel.html" %}
+
+{% with input_len=state.task_il %}
+  {% include "partials/prefix_reuse.html" %}
+{% endwith %}
+
+{% if state.mode == 'data' %}
+  {% include "partials/task.html" %}
+{% endif %}

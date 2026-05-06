@@ -1,0 +1,260 @@
+{% set p = compute_revenue_projection(state) %}
+{% set f = p.fates %}
+<div class="projection-block">
+
+  {% if label %}
+  <h3 style="margin:0;">{{ label }}</h3>
+  {% endif %}
+
+  {# ── Headline: demand served vs leaked vs destroyed ─────────────────────── #}
+  <div class="card">
+    <div class="projection-headline">
+      <div class="hs">
+        <span class="T">Demand (use cases)</span>
+        <span class="val">{{ f.total_tokens|fmt_num }}</span>
+        <span class="sub">tokens/day across {{ state.projects|length }} use case{{ '' if state.projects|length == 1 else 's' }}</span>
+      </div>
+      <div class="hs">
+        <span class="T">Served internally</span>
+        <span class="val good">{{ (f.served_pct)|round(0)|int }}%</span>
+        <span class="sub">{{ f.served_tokens|fmt_num }} tok · {{ p.value_served_day|fmt_money }}/day captured</span>
+      </div>
+      <div class="hs">
+        <span class="T">Leaked to cloud</span>
+        <span class="val {{ 'bad' if (f.spilled_pct + f.leaked_pct) >= 25 else ('warn' if (f.spilled_pct + f.leaked_pct) > 0 else '') }}">
+          {{ (f.spilled_pct + f.leaked_pct)|round(0)|int }}%
+        </span>
+        <span class="sub">{{ p.value_cloud_day|fmt_money }}/day would flow out to cloud</span>
+      </div>
+      <div class="hs">
+        <span class="T">Destroyed</span>
+        <span class="val {{ 'bad' if f.destroyed_pct >= 10 else ('warn' if f.destroyed_pct > 0 else '') }}">
+          {{ f.destroyed_pct|round(0)|int }}%
+        </span>
+        <span class="sub">price too high — work not done</span>
+      </div>
+      <div class="hs">
+        <span class="T">Coverage</span>
+        <span class="val {{ 'good' if p.coverage >= 1.5 else ('warn' if p.coverage >= 1 else 'bad') }}">
+          {% if p.cost_day > 0 %}{{ "%.2f"|format(p.coverage) }}×{% else %}—{% endif %}
+        </span>
+        <span class="sub">
+          {% if p.cost_day > 0 %}margin {{ p.margin_day|fmt_money }}/day · cluster {{ p.cost_day|fmt_money }}/day
+          {% else %}set TCO $/GPU·hr to see{% endif %}
+        </span>
+      </div>
+      <div class="hs">
+        <span class="T tip" title="Served tokens × cluster power × grid gCO₂/kWh (day-shape-weighted). Power = GPU TDP × utilization factor.">CO₂ / day</span>
+        <span class="val">
+          {% if p.co2_kg_day_total > 0 %}{{ "%.1f"|format(p.co2_kg_day_total) }} kg{% else %}—{% endif %}
+        </span>
+        <span class="sub">
+          {% if p.co2_g_per_task_avg > 0 %}avg {{ "%.1f"|format(p.co2_g_per_task_avg * 1000) }} kg / M tasks{% else %}set TDP{% endif %}
+        </span>
+      </div>
+    </div>
+
+    {% if f.total_tokens > 0 %}
+    <div class="fate-bar-wrap" style="margin-top:10px;">
+      <div class="fate-bar" role="img" aria-label="Where demand ends up">
+        {% if f.served_pct > 0 %}<div class="fate-seg served" style="flex:{{ f.served_pct }};" title="Served on your GPUs · {{ f.served_tokens|fmt_num }} tok/day">{% if f.served_pct >= 10 %}Served {{ f.served_pct|round(0)|int }}%{% endif %}</div>{% endif %}
+        {% if f.spilled_pct > 0 %}<div class="fate-seg spilled" style="flex:{{ f.spilled_pct }};" title="Right model deployed but capacity saturated · {{ f.spilled_tokens|fmt_num }} tok/day spilled to cloud">{% if f.spilled_pct >= 10 %}Spilled {{ f.spilled_pct|round(0)|int }}%{% endif %}</div>{% endif %}
+        {% if f.leaked_pct > 0 %}<div class="fate-seg leaked" style="flex:{{ f.leaked_pct }};" title="No matching model or internally priced out · {{ f.leaked_tokens|fmt_num }} tok/day leaked to cloud">{% if f.leaked_pct >= 10 %}Leaked {{ f.leaked_pct|round(0)|int }}%{% endif %}</div>{% endif %}
+        {% if f.destroyed_pct > 0 %}<div class="fate-seg destroyed" style="flex:{{ f.destroyed_pct }};" title="Even cloud is above WTP — work is shelved · {{ f.destroyed_tokens|fmt_num }} tok/day destroyed">{% if f.destroyed_pct >= 10 %}Destroyed {{ f.destroyed_pct|round(0)|int }}%{% endif %}</div>{% endif %}
+      </div>
+      <div class="fate-legend">
+        <span><i class="sw served"></i> Served on your GPUs</span>
+        <span><i class="sw spilled"></i> Spilled — right model, not enough GPUs</span>
+        <span><i class="sw leaked"></i> Leaked — wrong or no model / priced out</span>
+        <span><i class="sw destroyed"></i> Destroyed — cloud too expensive, work dropped</span>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  {# ── Per-use-case fate & diagnostic (read-only) ─────────────────────────── #}
+  {% if state.projects %}
+  <div class="card">
+    <div class="T" style="margin-bottom:4px;font-weight:600;color:var(--fg0);">Per use case</div>
+    <div class="project-list">
+      {% for row in p.projects %}
+      {% set proj = row.project %}
+      <div class="project-row {{ 'danger' if row.destroyed_pct >= 50 else '' }}">
+        <div class="pr-fate-head">
+          <span class="pr-fate-name">{{ proj.name }}</span>
+          <span class="T">ELO {{ (proj.difficulty * 3000)|round|int }} · SLO {{ (row.min_success_rate * 100)|round|int }}% · WTP ${{ "%.2f"|format(proj.wtp_per_m) }}/M</span>
+          <span class="T" style="margin-left:auto;">
+            {% if row.cloud_blocked %}
+              Cloud ref: <strong class="bad">blocked</strong>
+            {% else %}
+              Cloud ref ({{ row.cloud_label }}): <strong>${{ "%.2f"|format(row.cloud_pm) }}/M</strong>{% if row.cloud_pm > proj.wtp_per_m %}<span class="bad"> · above WTP</span>{% endif %}
+              {% if row.cloud_grid_gco2_per_kwh > 0 %}
+              <span class="T tip" style="margin-left:4px;" title="Averaged across Vertex zones this model is served from: {{ row.cloud_regions|map('string')|join(', ') }}">· grid {{ "%.0f"|format(row.cloud_grid_gco2_per_kwh) }} gCO₂/kWh</span>
+              {% endif %}
+            {% endif %}
+          </span>
+        </div>
+
+        {% if proj.tokens_day > 0 or row.latent_active_tokens > 0 %}
+        <div class="fate-bar" title="{{ row.served|fmt_num }} served · {{ (row.spilled + row.leaked)|fmt_num }} to cloud · {{ row.destroyed|fmt_num }} destroyed">
+          {% if row.served_pct > 0 %}<div class="fate-seg served" style="flex:{{ row.served_pct }};">{% if row.served_pct >= 12 %}{{ row.served_pct|round(0)|int }}%{% endif %}</div>{% endif %}
+          {% if row.spilled_pct > 0 %}<div class="fate-seg spilled" style="flex:{{ row.spilled_pct }};">{% if row.spilled_pct >= 12 %}{{ row.spilled_pct|round(0)|int }}%{% endif %}</div>{% endif %}
+          {% if row.leaked_pct > 0 %}<div class="fate-seg leaked" style="flex:{{ row.leaked_pct }};">{% if row.leaked_pct >= 12 %}{{ row.leaked_pct|round(0)|int }}%{% endif %}</div>{% endif %}
+          {% if row.destroyed_pct > 0 %}<div class="fate-seg destroyed" style="flex:{{ row.destroyed_pct }};">{% if row.destroyed_pct >= 12 %}{{ row.destroyed_pct|round(0)|int }}%{% endif %}</div>{% endif %}
+        </div>
+        {% if row.any_served %}
+        <div class="T" style="margin-top:4px;display:flex;flex-wrap:wrap;gap:8px;">
+          <span title="Revenue captured internally, priced at cloud substitute (or WTP if cloud is blocked).">💰 {{ row.value_served|fmt_money }}/day served</span>
+          <span title="Internal GPU-day cost allocated to tokens this use case consumed.">· spent {{ row.internal_cost_day|fmt_money }}/day</span>
+          <span class="{{ 'good' if row.margin_day > 0 else 'bad' }}" title="value_served − internal_cost_day">· margin {{ row.margin_day|fmt_money }}/day</span>
+          {% if row.value_spilled + row.value_leaked > 0 %}
+          <span class="warn" title="Value that flees to cloud because capacity saturated or priced out.">· {{ (row.value_spilled + row.value_leaked)|fmt_money }}/day to cloud</span>
+          {% endif %}
+          {% if row.value_destroyed > 0 %}
+          <span class="bad" title="Work shelved — cloud also above WTP, or no compatible cloud model.">· {{ row.value_destroyed|fmt_money }}/day destroyed</span>
+          {% endif %}
+          {% if row.co2_kg_day > 0 %}
+          <span title="Day-shape-weighted CO₂ of tokens served internally for this use case. Avg = served-token-weighted across the deployed models that actually ran this work.">🌱 {{ "%.2f"|format(row.co2_kg_day) }} kg CO₂/day · avg {{ "%.1f"|format(row.co2_g_per_task_avg * 1000) }} kg/M tasks</span>
+          {% endif %}
+        </div>
+        {% endif %}
+        <div class="pr-diag">
+          {% if row.served_pct > 99.5 %}
+            <span class="ok">✓ Fully served internally{% if row.any_suboptimal %} <span class="warn">(via a stretched model — extra tokens spent)</span>{% endif %}</span>
+          {% elif row.cap_blocked_for_project %}
+            <span class="bad">✗ No deployed model supplies the required capability set {{ row.requires|join(", ") }} — {{ ((row.leaked_pct + row.destroyed_pct))|round(0)|int }}% of demand can't be served on-prem.</span>
+          {% elif row.slo_blocked_for_project %}
+            <span class="bad">✗ No deployed model meets the {{ (row.min_success_rate * 100)|round|int }}% SLO at ELO {{ (proj.difficulty * 3000)|round|int }} — lower the SLO, lower the difficulty, or deploy a higher-quality model.</span>
+          {% elif row.served > 0 and row.spilled > 0 %}
+            <span class="warn">▲ Add GPUs — capacity saturated at ELO {{ (proj.difficulty * 3000)|round|int }}, {{ (row.spilled_pct)|round(0)|int }}% spills to cloud ({{ row.value_spilled|fmt_money }}/day leaking){% if row.any_suboptimal %}; some served via a stretched model (token tax in effect){% endif %}</span>
+          {% elif row.destroyed > 0 and row.cloud_blocked %}
+            <span class="bad">✗ No cloud model in the catalog meets this use case's SLO at ELO {{ (proj.difficulty * 3000)|round|int }} — {{ (row.destroyed_pct)|round(0)|int }}% of demand is destroyed (work shelved).</span>
+          {% elif row.leaked > 0 and not row.has_compatible %}
+            <span class="bad">✗ No compatible model deployed → 100% flees to cloud ({{ row.value_leaked|fmt_money }}/day leaking)</span>
+          {% elif row.leaked > 0 %}
+            <span class="bad">✗ Your on-prem $/M beats your ceiling — users skip internal → {{ row.value_leaked|fmt_money }}/day leaks</span>
+          {% elif row.destroyed > 0 %}
+            <span class="bad">✗ Cloud ({{ row.cloud_label }}: ${{ "%.2f"|format(row.cloud_pm) }}/M) exceeds WTP — {{ (row.destroyed_pct)|round(0)|int }}% of demand is shelved</span>
+          {% endif %}
+          {% if row.latent_unlocked %}
+            <span class="ok">↑ Latent pool unlocked: +{{ row.latent_active_tokens|fmt_num }} tok/day (cheapest ${{ "%.2f"|format(row.cheapest_effective_pm) }}/M ≤ ${{ "%.2f"|format(proj.unlock_price_per_m) }}/M unlock)</span>
+          {% elif row.latent_close_to_unlock %}
+            <span class="warn">○ Latent pool close to unlock — cheapest is ${{ "%.2f"|format(row.cheapest_effective_pm) }}/M, need ≤ ${{ "%.2f"|format(proj.unlock_price_per_m) }}/M ({{ proj.latent_jobs_day|fmt_num }} tok/day waiting).</span>
+          {% endif %}
+        </div>
+        {% else %}
+        <div class="T">Set demand &gt; 0 in the use-case card to route it.</div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {# ── Supply: per-model demand fit ────────────────────────────────────────── #}
+  {% if p.has_supply %}
+  <div class="card">
+    <div class="T" style="margin-bottom:4px;font-weight:600;color:var(--fg0);">Supply · Deployed models</div>
+    <table class="projection-table">
+      <thead>
+        <tr>
+          <th>Model</th>
+          <th title="Benchmark-anchored capability score ∈ [0,1]. Paired with each use case's difficulty by success_rate().">Quality</th>
+          <th title="Per-model token-budget multiplier. 1.0 = reference; >1 = terser; <1 = more verbose/thinks more. Effective $/M = internal × (1 / token_efficiency).">Tok eff</th>
+          <th>Capabilities</th>
+          <th>GPUs</th>
+          <th>Cap tokens/day</th>
+          <th>Demand placed</th>
+          <th>Util</th>
+          <th>$/M internal</th>
+          <th title="Tokens consumed to complete one task at current input/output lengths. Verbose models (low token_efficiency) inflate output tokens.">Tok/task</th>
+          <th title="Kilograms CO₂-eq per million tasks, day-shape-weighted. Energy = cluster_power × tokens_per_task / tokens_per_sec. Cluster power derives from GPU TDP × utilization factor.">kgCO₂/M tasks</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in p.models %}
+        <tr>
+          <td>
+            <span class="dot" style="background:{{ m.color }};"></span>
+            <span style="margin-left:4px;">{{ m.name }}</span>
+          </td>
+          <td class="muted">{{ (m.quality * 100)|round(0)|int }}%</td>
+          <td class="muted">{{ "%.2f"|format(m.token_efficiency) }}×</td>
+          <td>
+            {% for cap in MODEL_CAPABILITIES if cap in m.model.capabilities %}
+            <span class="tag muted" style="font-size:10px;margin-right:2px;" title="{{ CAPABILITY_LABELS[cap] }}">{{ CAPABILITY_LABELS[cap] }}</span>
+            {% endfor %}
+          </td>
+          <td>{{ m.gpu_count }}</td>
+          <td>{% if m.runnable %}{{ m.daily_tokens_cap|fmt_num }}{% else %}<span class="bad">—</span>{% endif %}</td>
+          <td>{{ m.served_tokens|fmt_num }}</td>
+          <td class="{{ 'good' if m.utilization >= 0.7 else ('warn' if m.utilization >= 0.3 else 'muted') }}">
+            {% if m.runnable %}{{ (m.utilization * 100)|round(0)|int }}%{% else %}—{% endif %}
+          </td>
+          <td>
+            {% if m.runnable and m.internal_pm > 0 %}${{ "%.2f"|format(m.internal_pm) }}{% else %}—{% endif %}
+          </td>
+          <td class="muted">
+            {% if m.tokens_per_task > 0 %}{{ m.tokens_per_task|fmt_num }}{% else %}—{% endif %}
+          </td>
+          <td class="muted" title="{{ COUNTRIES.get(m.country, m.country) }} · day {{ '%.0f'|format(m.grid_gco2_per_kwh_day) }} / night {{ '%.0f'|format(m.grid_gco2_per_kwh_night) }} gCO₂/kWh · night {{ '%.1f'|format(m.co2_g_per_task_night * 1000) }} kg/M tasks · {{ '%.1f'|format(m.co2_kg_day) }} kg/day served">
+            {% if m.co2_g_per_task_day > 0 %}{{ "%.1f"|format(m.co2_g_per_task_day * 1000) }}{% else %}—{% endif %}
+          </td>
+          <td>
+            {% if m.saturated %}<span class="tag warn" title="All daily capacity consumed — adding GPUs would stop spill">SATURATED</span>
+            {% elif m.runnable and m.utilization < 0.05 %}<span class="tag muted" title="No use case routed here — quality doesn't meet any use case's SLO, or effective $/M is above use case WTP">IDLE</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="card">
+    <div class="T">Deploy at least one runnable model to see the internal market.</div>
+  </div>
+  {% endif %}
+
+  {# ── Advanced: day shape + night batching (collapsed by default) ─────────── #}
+  <details class="card adv-card">
+    <summary><span class="T" style="font-weight:600;">Advanced · day shape, night batching, workload</span></summary>
+    <div class="lever-grid" style="margin-top:8px;">
+      <div class="lv">
+        <span class="T">Day shape</span>
+        <select name="value"
+                hx-post="/projection/choice" hx-target="#main-content" hx-trigger="change"
+                hx-vals='{"panel":"{{ panel }}","key":"projection_day_shape"}'>
+          {% for key, shape in DAY_SHAPES.items() %}
+          <option value="{{ key }}" {{ "selected" if state.projection_day_shape == key else "" }}>{{ shape.label }}</option>
+          {% endfor %}
+        </select>
+        <span class="T">peak/mean {{ "%.2f"|format(p.peak_factor) }}× · effective {{ "%.2f"|format(p.peak_factor_eff) }}×</span>
+      </div>
+
+      <div class="lv" style="align-self:end;">
+        <label style="display:flex;align-items:center;gap:6px;font-size:11px;">
+          <input type="checkbox" name="value"
+                 {{ "checked" if state.projection_night_batching else "" }}
+                 hx-post="/projection/toggle" hx-target="#main-content" hx-trigger="change"
+                 hx-vals='{"panel":"{{ panel }}","key":"projection_night_batching"}' />
+          <strong>Night batching</strong>
+        </label>
+        <span class="T">
+          Flattens peak for batch-eligible use cases.
+          {% if p.batch_share > 0 %}Currently {{ (p.batch_share * 100)|round(0)|int }}% of demand is batch-eligible.{% endif %}
+        </span>
+      </div>
+
+      <div class="lv">
+        <span class="T">Workload</span>
+        <span class="T">avg {{ p.workload_in_len|round|int }} in / {{ p.workload_out_len|round|int }} out · prefix hit {{ (state.prefix_hit_rate * 100)|round|int }}%</span>
+      </div>
+    </div>
+    <div class="T" style="margin-top:6px;">
+      Capacity honors the peak-factor: sustainable daily tokens = peak RPS × 86400 × tokens/req ÷ peak-factor. Day shape with bigger peaks shrinks usable capacity.
+    </div>
+  </details>
+
+</div>

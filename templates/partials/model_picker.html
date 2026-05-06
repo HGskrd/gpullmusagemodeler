@@ -1,0 +1,13 @@
+{# Model picker dropdown - loaded via HTMX into picker element #}
+{% for cat, ms in models_by_category.items() %}
+  <div class="cat">{{ cat }}</div>
+  {% for m in ms %}
+  <div class="item"
+       hx-post="/model/add" hx-target="#main-content"
+       hx-vals='{"panel":"{{ panel }}","model_key":"{{ m.key }}"}'>
+    <span class="dot" style="background:{{ m.color }};"></span>
+    <span>{{ m.name }}</span>
+    <span class="T">{{ m.size_label }}</span>
+  </div>
+  {% endfor %}
+{% endfor %}

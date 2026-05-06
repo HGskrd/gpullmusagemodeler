@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Planner Admin</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f5f2eb;
+    --panel: #fffdf8;
+    --line: #ddd4c5;
+    --text: #1f1d18;
+    --muted: #6a6357;
+    --accent: #245c73;
+    --chip: #ece5d7;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif; font-size: 13px; line-height: 1.4; }
+
+  .page { padding: 18px 22px; max-width: 1300px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px; }
+
+  /* Topbar */
+  .topbar { display: flex; justify-content: space-between; align-items: center; }
+  h1 { font-size: 17px; font-weight: 600; }
+  .meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .meta strong { color: var(--text); }
+  .btn { border: 1px solid var(--line); background: var(--panel); border-radius: 6px; padding: 5px 12px; font: inherit; font-size: 12px; cursor: pointer; color: var(--text); }
+  .btn:hover { background: var(--chip); }
+
+  /* Filter bar */
+  .filterbar { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+  .search {
+    border: 1px solid var(--line); background: var(--panel); border-radius: 6px;
+    padding: 5px 10px; font: inherit; font-size: 12px; width: 260px; outline: none; color: var(--text);
+  }
+  .search:focus { border-color: var(--accent); }
+  .fbtn {
+    border: 1px solid var(--line); background: var(--panel); border-radius: 6px;
+    padding: 4px 10px; font: inherit; font-size: 11px; cursor: pointer; color: var(--muted);
+  }
+  .fbtn:hover { background: var(--chip); }
+  .fbtn.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .vis-count { font-size: 12px; color: var(--muted); margin-left: auto; }
+
+  /* Visitor card */
+  .vc {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .vc.hidden { display: none; }
+
+  /* Card header */
+  .vc-head {
+    display: flex; align-items: baseline; gap: 10px;
+    padding: 9px 14px;
+    background: #ede8df;
+    border-bottom: 1px solid var(--line);
+  }
+  .vid { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; font-weight: 700; color: var(--accent); }
+  .vc-meta { font-size: 11px; color: var(--muted); }
+
+  /* Latest config snapshot */
+  .vc-latest {
+    padding: 9px 14px 10px;
+    border-bottom: 1px solid var(--line);
+    background: #fffcf4;
+    display: flex; flex-direction: column; gap: 3px;
+  }
+  .vc-hw { font-size: 13px; font-weight: 600; color: var(--text); }
+  .vc-models { font-size: 12px; color: var(--muted); }
+  .vc-cmp { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .vc-cmp-label { font-weight: 600; color: #5a3a7e; }
+  .vc-empty { font-size: 12px; color: var(--muted); font-style: italic; padding: 9px 14px 10px; border-bottom: 1px solid var(--line); }
+
+  /* Timeline table */
+  .vc-tbl { width: 100%; border-collapse: collapse; }
+  .vc-tbl td { padding: 5px 10px; border-bottom: 1px solid #ece7dd; vertical-align: top; }
+  .vc-tbl tr:last-child td { border-bottom: 0; }
+  .vc-tbl tr.dr:hover td { background: rgba(245,242,235,0.6); }
+  .vc-tbl tr.hidden { display: none; }
+
+  /* Timeline header row */
+  .vc-tbl thead th {
+    padding: 5px 10px;
+    background: #f5f1ea;
+    color: var(--muted);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    font-weight: 700;
+    text-align: left;
+    border-bottom: 1px solid var(--line);
+  }
+
+  /* Time */
+  .ts { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11px; color: var(--muted); white-space: nowrap; }
+
+  /* Tab ID */
+  .tab-id { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 10px; color: var(--muted); opacity: 0.7; margin-left: 4px; }
+
+  /* Hardware / model text */
+  .hw { font-size: 12px; max-width: 340px; word-break: break-word; }
+  .hwb { color: var(--muted); font-size: 11px; }
+
+  /* Badges */
+  .badge { display: inline-block; border-radius: 4px; padding: 1px 6px; font-size: 11px; white-space: nowrap; line-height: 1.6; }
+  .b-gpu     { background: #dce9f2; color: #1a4762; }
+  .b-model   { background: #d8f0e5; color: #1a5a32; }
+  .b-open    { background: var(--chip); color: var(--muted); }
+  .b-compare { background: #ecdff5; color: #5a3a7e; }
+  .b-other   { background: #f2e9cc; color: #5a4010; }
+
+  /* JSON */
+  .jtog { font-size: 11px; color: var(--accent); cursor: pointer; background: none; border: none; font: inherit; text-decoration: underline dotted; padding: 0; white-space: nowrap; }
+  .jtog:hover { text-decoration: underline; }
+  .jpre {
+    display: none; margin-top: 5px; padding: 8px 10px;
+    background: #171613; color: #f0ebe0; border-radius: 6px;
+    font-family: "IBM Plex Mono", monospace; font-size: 10px; line-height: 1.5;
+    max-height: 220px; overflow: auto; white-space: pre; min-width: 260px; max-width: 500px;
+  }
+
+  /* Empty */
+  .empty { padding: 40px; color: var(--muted); text-align: center; }
+
+  /* Floating visitor navigator */
+  .vnav {
+    position: fixed;
+    bottom: 20px;
+    right: 22px;
+    display: flex;
+    align-items: center;
+    gap: 0;
+    background: var(--text);
+    color: #f0ebe0;
+    border-radius: 8px;
+    font-size: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.22);
+    z-index: 100;
+    overflow: hidden;
+    user-select: none;
+  }
+  .vnav-btn {
+    background: none;
+    border: none;
+    color: #f0ebe0;
+    font-size: 15px;
+    padding: 7px 11px;
+    cursor: pointer;
+    line-height: 1;
+    transition: background 0.1s;
+  }
+  .vnav-btn:hover { background: rgba(255,255,255,0.12); }
+  .vnav-btn:disabled { opacity: 0.3; cursor: default; }
+  .vnav-btn:disabled:hover { background: none; }
+  .vnav-label {
+    padding: 0 8px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    white-space: nowrap;
+    border-left: 1px solid rgba(255,255,255,0.15);
+    border-right: 1px solid rgba(255,255,255,0.15);
+    line-height: 1;
+  }
+  .vnav-label .vnav-vid { font-weight: 700; color: #a8d4e6; }
+  .vnav-label .vnav-pos { color: rgba(240,235,224,0.6); font-size: 10px; margin-left: 5px; }
+  .vnav-hint { font-size: 9px; color: rgba(240,235,224,0.4); padding: 0 8px 0 0; font-family: "IBM Plex Mono", monospace; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="topbar">
+    <div>
+      <h1>Planner Admin</h1>
+      <div class="meta">
+        <strong>{{ total_snapshots }}</strong> snapshot{{ '' if total_snapshots == 1 else 's' }} &nbsp;·&nbsp;
+        <strong>{{ visitors|length }}</strong> visitor{{ '' if visitors|length == 1 else 's' }}
+      </div>
+    </div>
+    <form method="post" action="/admin/logout">
+      <button class="btn" type="submit">Log out</button>
+    </form>
+  </div>
+
+  <div class="filterbar">
+    <input class="search" id="search" type="text" placeholder="Filter visitor, GPU, model, reason…" oninput="applyFilter()" autocomplete="off" spellcheck="false">
+    <button class="fbtn on"  id="f-all"     type="button" onclick="setF('all')">All</button>
+    <button class="fbtn"     id="f-gpu"     type="button" onclick="setF('gpu')">GPU</button>
+    <button class="fbtn"     id="f-model"   type="button" onclick="setF('model')">Model</button>
+    <button class="fbtn"     id="f-compare" type="button" onclick="setF('compare')">Compare</button>
+    <button class="fbtn"     id="f-open"    type="button" onclick="setF('open')">Opens</button>
+    <span class="vis-count" id="vis-count"></span>
+  </div>
+
+  {% if visitors %}
+  <div id="cards">
+    {% for visitor in visitors %}
+    {%- set latest = visitor.snapshots[0] -%}
+    {%- set earliest = visitor.snapshots[-1] -%}
+    <div class="vc" id="vc-{{ loop.index }}" style="margin-bottom: 10px;">
+
+      {# Card header #}
+      <div class="vc-head">
+        <span class="vid" title="{{ visitor.visitor_id }}">{{ visitor.visitor_id[:8] }}</span>
+        <span class="vc-meta">
+          first seen <span data-ts="{{ earliest.created_at }}" title="{{ earliest.created_at }}">{{ earliest.created_at[:10] }}</span>
+          &nbsp;·&nbsp; last seen <span data-ts="{{ latest.last_seen }}" title="{{ latest.last_seen }}">{{ latest.last_seen[:16] }}</span>
+          &nbsp;·&nbsp; {{ visitor.snapshots|length }} event{{ 's' if visitor.snapshots|length != 1 else '' }}
+        </span>
+      </div>
+
+      {# Latest config #}
+      {%- if latest.summary.panel_a.gpu_summary %}
+      <div class="vc-latest">
+        <div class="vc-hw">{{ latest.summary.panel_a.gpu_summary }}</div>
+        {%- if latest.summary.panel_a.model_summary %}
+        <div class="vc-models">{{ latest.summary.panel_a.model_summary }}</div>
+        {%- endif %}
+        {%- if latest.summary.compare_enabled and latest.summary.panel_b.gpu_summary %}
+        <div class="vc-cmp">
+          <span class="vc-cmp-label">B:&nbsp;</span>{{ latest.summary.panel_b.gpu_summary }}
+          {%- if latest.summary.panel_b.model_summary %} &mdash; {{ latest.summary.panel_b.model_summary }}{%- endif %}
+        </div>
+        {%- endif %}
+      </div>
+      {%- else %}
+      <div class="vc-empty">No hardware configured yet.</div>
+      {%- endif %}
+
+      {# Timeline #}
+      <table class="vc-tbl">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Event</th>
+            <th>Hardware</th>
+            <th>Models</th>
+            <th>JSON</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for snapshot in visitor.snapshots %}
+          {%- set cat = snapshot.reason.split('_')[0] -%}
+          <tr class="dr"
+              data-vc="{{ loop.index0 == 0 and 'latest' or '' }}"
+              data-cat="{{ cat }}"
+              data-cmp="{{ '1' if snapshot.summary.compare_enabled else '0' }}"
+              data-q="{{ (visitor.visitor_id[:8] ~ ' ' ~ (snapshot.summary.panel_a.gpu_summary or '') ~ ' ' ~ (snapshot.summary.panel_a.model_summary or '') ~ ' ' ~ snapshot.reason ~ ' ' ~ (snapshot.summary.mode or '') ~ ' ' ~ snapshot.tab_id)|lower }}">
+
+            {# Time #}
+            <td>
+              <span class="ts" data-ts="{{ snapshot.last_seen }}" title="{{ snapshot.last_seen }}">{{ snapshot.last_seen[:16] }}</span>
+              {%- if snapshot.tab_id != 'default' %}<span class="tab-id">{{ snapshot.tab_id[:6] }}</span>{%- endif %}
+            </td>
+
+            {# Event reason #}
+            <td>
+              <span class="badge b-{{ cat if cat in ['gpu', 'model', 'open', 'compare'] else 'other' }}">{{ snapshot.reason }}</span>
+            </td>
+
+            {# Hardware #}
+            <td class="hw">
+              {{ snapshot.summary.panel_a.gpu_summary or '—' }}
+              {%- if snapshot.summary.compare_enabled and snapshot.summary.panel_b.gpu_summary %}
+              <div class="hwb">B: {{ snapshot.summary.panel_b.gpu_summary }}</div>
+              {%- endif %}
+            </td>
+
+            {# Models #}
+            <td class="hw">
+              {{ snapshot.summary.panel_a.model_summary or '—' }}
+              {%- if snapshot.summary.compare_enabled and snapshot.summary.panel_b.model_summary %}
+              <div class="hwb">B: {{ snapshot.summary.panel_b.model_summary }}</div>
+              {%- endif %}
+            </td>
+
+            {# JSON #}
+            <td>
+              <button class="jtog" type="button" onclick="toggleJson(this)"
+                      data-j='{{ {"panel_a": snapshot.panel_a, "panel_b": snapshot.panel_b}|tojson }}'>json</button>
+              <div class="jpre"></div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty">No snapshots yet.</div>
+  {% endif %}
+
+</div>
+
+{% if visitors %}
+<div class="vnav" id="vnav">
+  <button class="vnav-btn" id="vnav-prev" type="button" title="Previous visitor (k)">&#8593;</button>
+  <div class="vnav-label">
+    <span class="vnav-vid" id="vnav-vid"></span><span class="vnav-pos" id="vnav-pos"></span>
+  </div>
+  <button class="vnav-btn" id="vnav-next" type="button" title="Next visitor (j)">&#8595;</button>
+  <span class="vnav-hint">j/k</span>
+</div>
+{% endif %}
+
+<script>
+// ── Relative timestamps ──────────────────────────────────────────────
+function relTime(iso) {
+  const s = Math.floor((Date.now() - new Date(iso)) / 1000);
+  if (s < 5)    return 'just now';
+  if (s < 60)   return s + 's ago';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' +
+         d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+document.querySelectorAll('[data-ts]').forEach(el => {
+  el.textContent = relTime(el.dataset.ts);
+  el.title = el.dataset.ts;
+});
+
+// ── JSON lazy render ─────────────────────────────────────────────────
+function toggleJson(btn) {
+  const pre = btn.nextElementSibling;
+  if (pre.style.display === 'block') { pre.style.display = 'none'; return; }
+  if (!pre._filled) {
+    try { pre.textContent = JSON.stringify(JSON.parse(btn.dataset.j), null, 2); }
+    catch { pre.textContent = btn.dataset.j; }
+    pre._filled = true;
+  }
+  pre.style.display = 'block';
+}
+
+// ── Filter ───────────────────────────────────────────────────────────
+let activeF = 'all';
+const cards = Array.from(document.querySelectorAll('.vc'));
+
+function setF(f) {
+  activeF = f;
+  document.querySelectorAll('.fbtn').forEach(b => b.classList.remove('on'));
+  document.getElementById('f-' + f).classList.add('on');
+  applyFilter();
+}
+
+function applyFilter() {
+  const q = document.getElementById('search').value.toLowerCase().trim();
+  let visibleCards = 0;
+  let visibleRows = 0;
+
+  cards.forEach(card => {
+    const rows = Array.from(card.querySelectorAll('tr.dr'));
+    let cardHasVisibleRow = false;
+
+    rows.forEach(row => {
+      const cat = row.dataset.cat;
+      const cmp = row.dataset.cmp === '1';
+      const fOk =
+        activeF === 'all' ||
+        (activeF === 'gpu'     && cat === 'gpu') ||
+        (activeF === 'model'   && cat === 'model') ||
+        (activeF === 'compare' && cmp) ||
+        (activeF === 'open'    && cat === 'open');
+      const qOk = !q || row.dataset.q.includes(q);
+      const show = fOk && qOk;
+      row.classList.toggle('hidden', !show);
+      if (show) { cardHasVisibleRow = true; visibleRows++; }
+    });
+
+    card.classList.toggle('hidden', !cardHasVisibleRow);
+    if (cardHasVisibleRow) visibleCards++;
+  });
+
+  const label = q || activeF !== 'all'
+    ? visibleCards + ' visitor' + (visibleCards === 1 ? '' : 's') + ', ' + visibleRows + ' event' + (visibleRows === 1 ? '' : 's')
+    : '';
+  document.getElementById('vis-count').textContent = label;
+  if (typeof vnavIdx !== 'undefined') { vnavIdx = 0; vnavUpdate(); }
+}
+
+applyFilter();
+
+// ── Visitor navigator ────────────────────────────────────────────────
+let vnavIdx = 0;
+
+function vnavVisible() {
+  return cards.filter(c => !c.classList.contains('hidden'));
+}
+
+function vnavUpdate() {
+  const visible = vnavVisible();
+  const prevBtn = document.getElementById('vnav-prev');
+  const nextBtn = document.getElementById('vnav-next');
+  const vidLabel = document.getElementById('vnav-vid');
+  const posLabel = document.getElementById('vnav-pos');
+  if (!visible.length) {
+    if (prevBtn) prevBtn.disabled = true;
+    if (nextBtn) nextBtn.disabled = true;
+    if (vidLabel) vidLabel.textContent = 'none';
+    if (posLabel) posLabel.textContent = '0/0';
+    return;
+  }
+  vnavIdx = Math.max(0, Math.min(vnavIdx, visible.length - 1));
+  const card = visible[vnavIdx];
+  const vid = card.querySelector('.vid');
+  vidLabel.textContent = vid ? vid.textContent : '?';
+  posLabel.textContent = (vnavIdx + 1) + '/' + visible.length;
+  prevBtn.disabled = vnavIdx === 0;
+  nextBtn.disabled = vnavIdx === visible.length - 1;
+}
+
+function scrollCardIntoView(card) {
+  const top = Math.max(0, window.scrollY + card.getBoundingClientRect().top - 12);
+  window.scrollTo({ top, behavior: 'smooth' });
+}
+
+function vnavGo(delta) {
+  const visible = vnavVisible();
+  if (!visible.length) return;
+  vnavIdx = Math.max(0, Math.min(vnavIdx + delta, visible.length - 1));
+  scrollCardIntoView(visible[vnavIdx]);
+  vnavUpdate();
+}
+
+// Update navigator position when scrolling
+const cardEls = cards;
+window.addEventListener('scroll', () => {
+  const visible = vnavVisible();
+  if (!visible.length) return;
+  // Find which card is most visible in the viewport
+  let best = 0, bestScore = -Infinity;
+  visible.forEach((card, i) => {
+    const rect = card.getBoundingClientRect();
+    const score = Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0);
+    if (score > bestScore) { bestScore = score; best = i; }
+  });
+  if (best !== vnavIdx) { vnavIdx = best; vnavUpdate(); }
+}, { passive: true });
+
+// Keyboard nav
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 'j') vnavGo(1);
+  if (e.key === 'k') vnavGo(-1);
+});
+
+document.getElementById('vnav-prev')?.addEventListener('click', event => {
+  event.preventDefault();
+  vnavGo(-1);
+});
+
+document.getElementById('vnav-next')?.addEventListener('click', event => {
+  event.preventDefault();
+  vnavGo(1);
+});
+
+vnavUpdate();
+</script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+{# Use cases panel — parallels the Models panel #}
+<div class="panel">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;">
+    <h2 style="margin:0;">Use cases</h2>
+    <div class="picker-wrap">
+      <button class="acc sm" data-picker="project" onclick="togglePicker(this, '/picker/project?panel={{ panel }}')">+ Add use case</button>
+    </div>
+  </div>
+  {% if state.projects %}
+  <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(230px,1fr));">
+    {% for proj in state.projects %}
+      {% include "partials/project_card.html" %}
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="T" style="padding:8px 2px;">No use cases yet. Add one to see how your deployment serves demand.</div>
+  {% endif %}
+</div>

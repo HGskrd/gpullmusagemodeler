@@ -1,0 +1,21 @@
+<div id="projectionContent" style="margin-top:10px;" hx-swap-oob="outerHTML">
+  <div style="margin-bottom:6px;">
+    <h2 style="margin:0;">Economic impact</h2>
+    <div class="T">Given your hardware, deployed models, and configured use cases: where does demand actually land? Served on your GPUs, spilled to cloud because you're under-provisioned, leaked because no deployed model meets the SLO at that difficulty, or destroyed because price exceeded the ceiling. Reference cloud prices come from the cheapest compatible catalog model (compatibility = success_rate(cloud.quality, difficulty) ≥ min_success_rate).</div>
+  </div>
+
+  <div class="compare-container">
+    <div class="cp">
+      {% with state=A, panel="A", label="Config A" if B else "" %}
+        {% include "partials/revenue_projection_panel.html" %}
+      {% endwith %}
+    </div>
+    {% if B %}
+    <div class="cp">
+      {% with state=B, panel="B", label="Config B" %}
+        {% include "partials/revenue_projection_panel.html" %}
+      {% endwith %}
+    </div>
+    {% endif %}
+  </div>
+</div>

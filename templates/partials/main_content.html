@@ -1,0 +1,37 @@
+{# Main content that gets swapped on every state change #}
+<div class="compare-container">
+  <div class="cp">
+    {% with state=A, panel="A", label="Config A" if B else "" %}
+      {% include "partials/panel.html" %}
+    {% endwith %}
+  </div>
+  {% if B %}
+  <div class="cp">
+    {% with state=B, panel="B", label="Config B" %}
+      {% include "partials/panel.html" %}
+    {% endwith %}
+  </div>
+  {% endif %}
+</div>
+
+{% if A.mode != 'data' %}
+<div class="flex" style="gap:8px;margin-top:4px;">
+  {% for panels in [(A, '')] + ([(B, ' (B)')] if B else []) %}
+    {% set state = panels[0] %}
+    {% set suffix = panels[1] %}
+    {% for am in state.models %}
+      {% if am.gpu_count > 0 %}
+        {% set m = MODELS[am.model_key] %}
+        {% set phase = 'P' if state.mode == 'data' else 'D' %}
+        {% set phase_tp = am.prefill_tp if state.mode == 'data' else am.tp %}
+        {% set phase_pp = am.prefill_pp if state.mode == 'data' else am.pp %}
+        {% set phase_dp = am.prefill_dp if state.mode == 'data' else am.dp %}
+        <span class="flex" style="gap:3px;">
+          <span class="dot" style="background:{{ m.color }};width:5px;height:5px;{{ 'border:1px dashed var(--fg2);' if suffix else '' }}"></span>
+          <span class="T">{{ m.name }} {{ phase }} {{ strategy_label(phase_tp, phase_pp, phase_dp) }} · {{ PRECISION_LABELS[am.prec] }}{{ suffix }}</span>
+        </span>
+      {% endif %}
+    {% endfor %}
+  {% endfor %}
+</div>
+{% endif %}

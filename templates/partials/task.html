@@ -1,0 +1,35 @@
+{# Task profile panel for data processing mode #}
+<div class="panel">
+  <h2>Task profile</h2>
+  <div class="flex" style="margin-bottom:4px;">
+    {% for tk, tv in TASK_PRESETS.items() %}
+    <button class="sm"
+            hx-post="/task/preset" hx-target="#main-content"
+            hx-vals='{"panel":"{{ panel }}","key":"{{ tk }}"}'>{{ tk }}</button>
+    {% endfor %}
+  </div>
+
+  <div style="display:flex;align-items:center;gap:5px;margin-bottom:2px;">
+    <span class="T" style="min-width:36px;">Input</span>
+    <input type="range" min="6" max="17" value="{{ state.task_il|log2int }}" style="flex:1;"
+           hx-post="/task/length" hx-target="#main-content"
+           hx-trigger="change"
+           hx-vals='{"panel":"{{ panel }}","kind":"in"}'
+           name="value"
+           data-live-target="#task-in-val-{{ panel }}"
+           data-live-format="log2-tok" />
+    <span class="M" id="task-in-val-{{ panel }}" style="font-size:10px;min-width:44px;">{{ "{:,}".format(state.task_il) }}</span>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:5px;">
+    <span class="T" style="min-width:36px;">Output</span>
+    <input type="range" min="3" max="14" value="{{ state.task_ol|log2int }}" style="flex:1;"
+           hx-post="/task/length" hx-target="#main-content"
+           hx-trigger="change"
+           hx-vals='{"panel":"{{ panel }}","kind":"out"}'
+           name="value"
+           data-live-target="#task-out-val-{{ panel }}"
+           data-live-format="log2-tok" />
+    <span class="M" id="task-out-val-{{ panel }}" style="font-size:10px;min-width:44px;">{{ "{:,}".format(state.task_ol) }}</span>
+  </div>
+</div>

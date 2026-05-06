@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>vLLM Multi-Model Planner</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+<script src="https://unpkg.com/htmx.org@2.0.4"></script>
+</head>
+<body>
+
+<div id="toast" class="toast" hidden></div>
+
+<div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
+  <div>
+    <h1>vLLM multi-model planner</h1>
+    <p class="T">Roofline throughput estimates · continuous batching · profiled non-KV anchored KV capacity</p>
+  </div>
+  <div class="flex" style="gap:6px;">
+    <a href="{{ url_for('explainer') }}"
+       style="font-family:var(--sans);font-size:10px;font-weight:500;background:var(--bg2);border:1px solid var(--b1);border-radius:var(--r);padding:3px 8px;color:var(--fg0);text-decoration:none;white-space:nowrap;"
+       title="What this calculator does and how to use it">
+      📘 User guide
+    </a>
+    <div class="flex" id="compareControls" style="gap:6px;">
+      {% include "partials/compare_controls.html" %}
+    </div>
+  </div>
+</div>
+
+<div id="main-content">
+  {% block content %}{% endblock %}
+</div>
+
+<div class="tabs" id="modeTabs" style="margin-top:6px;">
+  {% include "partials/mode_tabs.html" %}
+</div>
+
+<div style="position:relative;width:100%;height:370px;margin-top:4px;">
+  <div id="mc"></div>
+</div>
+
+{% include "partials/revenue_projection.html" %}
+
+<p class="T" style="margin-top:6px;">Roofline estimates · vLLM continuous batching · separate prefill and decode efficiency knobs · KV capacity anchored to requested per-GPU memory minus weights minus profiled non-KV runtime memory · MoE uses activated params for core compute plus an adjustable expert-imbalance penalty · APC/prefix-hit workload knob for prefill-sensitive views · explicit prefill/decode interference blend · paged-KV runtime overhead and residual KV slack modeled · cross-node TP warning.</p>
+
+<details class="method-note">
+  <summary class="T">Calibration note</summary>
+  <p class="T" style="max-width:96ch;">
+    Some of the planner's missing realism is already visible in vLLM runtime metrics: running requests, KV-cache usage, prefix-cache hits, prompt tokens, and generation tokens. vLLM's async scheduling and CUDA-graph capture sizing also move real latency and throughput. In practice, the best calibration loop is empirical: fit the planner's knobs against those metrics for a few representative workloads instead of refining the closed-form model in isolation.
+  </p>
+</details>
+
+<script>
+/* Minimal JS: only ECharts rendering + picker toggling */
+let chart = null;
+let lastChartData = null;
+const colorSchemeQuery = matchMedia('(prefers-color-scheme:dark)');
+
+/* Keep page scroll stable across HTMX swaps of #main-content.
+ * Without this, replacing the whole config section re-anchors the scroll
+ * near the top of that container and jumps the user around as they
+ * tweak sliders. */
+let _savedScrollY = null;
+function rememberScroll() { _savedScrollY = window.scrollY; }
+function restoreScroll() {
+  if (_savedScrollY == null) return;
+  const y = _savedScrollY;
+  _savedScrollY = null;
+  window.scrollTo({ top: y, left: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
+}
+const TAB_PARAM = 'tab_id';
+const TAB_STORAGE_KEY = 'planner_tab_id';
+
+function newTabId() {
+  if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+  const bytes = new Uint32Array(4);
+  if (window.crypto && window.crypto.getRandomValues) {
+    window.crypto.getRandomValues(bytes);
+    return Array.from(bytes, n => n.toString(16).padStart(8, '0')).join('-');
+  }
+  return `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`;
+}
+
+function storedTabId() {
+  try {
+    return window.sessionStorage.getItem(TAB_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function setStoredTabId(tabId) {
+  try {
+    window.sessionStorage.setItem(TAB_STORAGE_KEY, tabId);
+  } catch {}
+}
+
+function removeTabIdFromUrl() {
+  const current = new URL(window.location.href);
+  if (!current.searchParams.has(TAB_PARAM)) return;
+  current.searchParams.delete(TAB_PARAM);
+  const clean = `${current.pathname}${current.search}${current.hash}`;
+  window.history.replaceState(null, '', clean || '/');
+}
+
+function initTabId() {
+  const params = new URLSearchParams(window.location.search);
+  const legacyUrlTabId = params.get(TAB_PARAM);
+  const tabId = storedTabId() || legacyUrlTabId || newTabId();
+  setStoredTabId(tabId);
+  removeTabIdFromUrl();
+  return tabId;
+}
+
+const currentTabIdValue = initTabId();
+
+function currentTabId() {
+  return currentTabIdValue;
+}
+
+function withTabUrl(url) {
+  const next = new URL(url, window.location.origin);
+  next.searchParams.delete(TAB_PARAM);
+  return `${next.pathname}${next.search}`;
+}
+
+function requestHeaders(extra = {}) {
+  return {
+    'X-Tab-ID': currentTabId(),
+    ...extra,
+  };
+}
+
+function disposeChart() {
+  if (chart) {
+    chart.dispose();
+    chart = null;
+  }
+}
+
+function chartTheme() {
+  const dk = colorSchemeQuery.matches;
+  return {
+    dk,
+    gc: dk ? 'rgba(255,255,255,.05)' : 'rgba(0,0,0,.04)',
+    tc: dk ? 'rgba(255,255,255,.5)' : 'rgba(0,0,0,.4)',
+    bg: dk ? '#1a1a18' : '#ffffff',
+    border: dk ? 'rgba(255,255,255,.12)' : 'rgba(0,0,0,.1)',
+    text: dk ? '#e4e4e0' : '#1a1a18',
+    fontFamily: 'IBM Plex Sans',
+  };
+}
+
+function normalizeDatasets(datasets, dk) {
+  return (datasets || []).map(ds => {
+    if (!ds._isAggregate) return ds;
+    return {
+      ...ds,
+      borderColor: dk ? '#ddd' : '#222',
+      backgroundColor: dk ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)',
+    };
+  });
+}
+
+function dashStyle(borderDash) {
+  return borderDash && borderDash.length ? 'dashed' : 'solid';
+}
+
+function makeSeries(ds, showPoints) {
+  const lw = Number(ds.borderWidth || 2);
+  return {
+    name: ds.label,
+    type: 'line',
+    data: (ds.data || []).map(point => ({
+      value: [Number(point.x), point.y == null ? null : Number(point.y)],
+      raw: point,
+    })),
+    connectNulls: Boolean(ds.spanGaps),
+    showSymbol: Boolean(showPoints),
+    symbol: 'circle',
+    symbolSize: 5,
+    smooth: Number(ds.tension || 0),
+    lineStyle: {
+      color: ds.borderColor,
+      width: lw,
+      type: dashStyle(ds.borderDash),
+    },
+    itemStyle: {
+      color: ds.borderColor,
+      borderColor: 'rgba(255,255,255,0.75)',
+      borderWidth: 1.5,
+    },
+    areaStyle: ds.fill ? { color: ds.backgroundColor || ds.borderColor } : undefined,
+    emphasis: {
+      focus: 'series',
+      symbolSize: 8,
+      lineStyle: { width: lw + 1.5 },
+      itemStyle: { borderWidth: 2 },
+    },
+    blur: {
+      lineStyle: { opacity: 0.1 },
+      itemStyle: { opacity: 0.1 },
+    },
+  };
+}
+
+function axisCommon(theme, title, formatter, extra = {}) {
+  return {
+    scale: true,
+    name: title,
+    nameLocation: 'middle',
+    nameTextStyle: {
+      color: theme.tc,
+      fontFamily: theme.fontFamily,
+      fontSize: 11,
+    },
+    splitLine: { lineStyle: { color: theme.gc } },
+    axisLine: { lineStyle: { color: theme.gc } },
+    axisTick: { lineStyle: { color: theme.gc } },
+    axisLabel: {
+      color: theme.tc,
+      fontFamily: theme.fontFamily,
+      fontSize: 10,
+      formatter: value => formatter(Number(value)),
+    },
+    ...extra,
+  };
+}
+
+function tooltipBase(theme, trigger, formatter) {
+  const shadow = theme.dk ? 'rgba(0,0,0,.55)' : 'rgba(0,0,0,.14)';
+  return {
+    trigger,
+    backgroundColor: theme.bg,
+    borderColor: theme.border,
+    borderWidth: 1,
+    padding: [9, 13],
+    confine: true,
+    extraCssText: `box-shadow:0 6px 24px ${shadow};border-radius:7px;`,
+    textStyle: { color: theme.text, fontFamily: theme.fontFamily, fontSize: 11 },
+    axisPointer: trigger === 'axis' ? {
+      type: 'cross',
+      snap: false,
+      crossStyle: { color: theme.tc, opacity: 0.55, width: 1 },
+      lineStyle: { color: theme.tc, opacity: 0.35, type: 'dashed', width: 1 },
+      label: { show: false },
+    } : undefined,
+    formatter,
+  };
+}
+
+function baseOption(theme, tooltipFormatter, trigger) {
+  return {
+    animation: true,
+    animationDuration: 280,
+    animationEasing: 'cubicOut',
+    textStyle: { fontFamily: theme.fontFamily },
+    grid: { top: 18, right: 18, bottom: 48, left: 22, containLabel: true },
+    legend: { show: false },
+    tooltip: tooltipBase(theme, trigger || 'item', tooltipFormatter),
+  };
+}
+
+function axisRow(p, theme, yStr) {
+  const oom = yStr === 'OOM';
+  return `<div style="display:flex;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
+    `<span style="display:inline-block;width:10px;height:2.5px;border-radius:2px;background:${p.color};flex-shrink:0;"></span>` +
+    `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px;color:${theme.text};">${p.seriesName}</span>` +
+    `<span style="font-weight:600;margin-left:4px;color:${oom ? 'var(--red)' : theme.text};">${yStr}</span>` +
+    `</div>`;
+}
+
+function axisHeader(theme, label, value) {
+  return `<div style="font-size:9px;color:${theme.tc};text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;padding-bottom:5px;border-bottom:1px solid ${theme.border};">${label}: <b style="color:${theme.text};">${value}</b></div>`;
+}
+
+function hydrateHtmx(root) {
+  if (root && window.htmx) htmx.process(root);
+}
+
+/* Live slider-to-display mirroring. Sliders POST on `change` (release); while
+ * dragging, the `input` event updates the element at `data-live-target` so the
+ * user sees the value move without a round-trip per frame.
+ *
+ * Attributes on the slider:
+ *   data-live-target   CSS selector for the element to update
+ *   data-live-scale    Multiplier applied to slider value before display (default 1)
+ *   data-live-decimals Decimal places (default 0)
+ *   data-live-suffix   Appended to the formatted number (default "")
+ *   data-live-format   "fmt_num" or "log2-tok" — special formatters
+ */
+function formatLiveValue(slider, raw) {
+  const fmt = slider.dataset.liveFormat;
+  if (fmt === 'log2-tok') {
+    return Math.round(Math.pow(2, raw)).toLocaleString();
+  }
+  if (fmt === 'fmt_num') {
+    const v = Number(raw);
+    if (v >= 1e9) return (v / 1e9).toFixed(2) + 'B';
+    if (v >= 1e6) return (v / 1e6).toFixed(2) + 'M';
+    if (v >= 1e3) return (v / 1e3).toFixed(1) + 'k';
+    return String(Math.round(v));
+  }
+  const scale = Number(slider.dataset.liveScale || 1);
+  const decimals = Number(slider.dataset.liveDecimals || 0);
+  const suffix = slider.dataset.liveSuffix || '';
+  return (raw * scale).toFixed(decimals) + suffix;
+}
+
+function writeLiveValue(target, text) {
+  if (!target) return;
+  if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') {
+    target.value = text;
+  } else {
+    target.textContent = text;
+  }
+}
+
+function bindLiveSliders(root) {
+  (root || document).querySelectorAll('input[type="range"][data-live-target]').forEach(slider => {
+    if (slider._liveBound) return;
+    slider._liveBound = true;
+    slider.addEventListener('input', () => {
+      const target = document.querySelector(slider.dataset.liveTarget);
+      writeLiveValue(target, formatLiveValue(slider, Number(slider.value)));
+    });
+  });
+}
+
+function showToast(message) {
+  const toast = document.getElementById('toast');
+  if (!toast || !message) return;
+  toast.textContent = message;
+  toast.hidden = false;
+  clearTimeout(showToast._timer);
+  showToast._timer = setTimeout(() => { toast.hidden = true; }, 3200);
+}
+
+function applyOobSwaps(fragment) {
+  fragment.querySelectorAll('[hx-swap-oob]').forEach(node => {
+    const id = node.id;
+    const swap = node.getAttribute('hx-swap-oob');
+    const current = id ? document.getElementById(id) : null;
+    const replacement = node.cloneNode(true);
+    replacement.removeAttribute('hx-swap-oob');
+    node.remove();
+    if (!current || swap !== 'outerHTML') return;
+    current.replaceWith(replacement);
+    hydrateHtmx(replacement);
+  });
+}
+
+function replaceHtml(target, html) {
+  if (!target) return;
+  rememberScroll();
+  const tpl = document.createElement('template');
+  tpl.innerHTML = html;
+  applyOobSwaps(tpl.content);
+  target.replaceChildren(tpl.content);
+  hydrateHtmx(target);
+  bindLiveSliders(target);
+  initProjCharts();
+  restoreScroll();
+}
+
+function syncCurrentTabState() {
+  return fetch(withTabUrl('/session/sync'), {
+    headers: requestHeaders({ 'HX-Request': 'true' }),
+  }).then(async r => {
+    const text = await r.text();
+    if (!r.ok) throw new Error(text || `Request failed (${r.status})`);
+    replaceHtml(document.getElementById('main-content'), text);
+  });
+}
+
+function refreshChart() {
+  fetch(withTabUrl('/api/chart-data'), { headers: requestHeaders() })
+    .then(r => r.json())
+    .then(data => renderChart(data))
+    .catch(console.error);
+}
+
+function renderChart(data) {
+  lastChartData = data;
+  disposeChart();
+  const el = document.getElementById('mc');
+  if (!el || !window.echarts) return;
+
+  const theme = chartTheme();
+  const datasets = normalizeDatasets(data.datasets, theme.dk);
+  chart = echarts.init(el);
+
+  const fmtBatch = v => v >= 1e3 ? (v/1e3).toFixed(v >= 1e4 ? 0 : 1).replace('.0', '')+'k' : Math.round(v);
+  const fmtUserTok = v => v >= 100 ? Math.round(v).toLocaleString() : v >= 10 ? v.toFixed(1) : v.toFixed(2);
+  const fmtRate = v => v >= 100 ? Math.round(v).toLocaleString() : v >= 10 ? v.toFixed(1) : v.toFixed(2);
+
+  if (data.mode === 'userpareto') {
+    chart.setOption({
+      ...baseOption(theme, paramsArr => {
+        if (!Array.isArray(paramsArr) || !paramsArr.length) return '';
+        const xVal = Number(paramsArr[0].axisValue ?? paramsArr[0].data?.value?.[0]);
+        let html = axisHeader(theme, 'Concurrent users', fmtBatch(xVal));
+        [...paramsArr]
+          .sort((a, b) => (b.data?.raw?.y ?? -Infinity) - (a.data?.raw?.y ?? -Infinity))
+          .forEach(p => {
+            const raw = p.data?.raw;
+            const yStr = raw?.y != null ? `${fmtUserTok(Number(raw.y))} tok/s/user` : 'OOM';
+            const detail = raw?.y != null ? ` <span style="color:${theme.tc};font-size:10px;">total ${Number(raw.total_tps).toLocaleString()} tok/s · ${Number(raw.lat).toFixed(1)}ms/tok</span>` : '';
+            const oom = raw?.y == null;
+            html += `<div style="display:flex;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
+              `<span style="display:inline-block;width:10px;height:2.5px;border-radius:2px;background:${p.color};flex-shrink:0;"></span>` +
+              `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px;color:${theme.text};">${p.seriesName}</span>` +
+              `<span style="margin-left:4px;text-align:right;font-weight:600;color:${oom ? 'var(--red)' : theme.text};">${yStr}${detail}</span>` +
+              `</div>`;
+          });
+        return html;
+      }, 'axis'),
+      xAxis: axisCommon(theme, 'Concurrent users', v => fmtBatch(Number(v)), {
+        type: 'log',
+        min: 1,
+        max: data.x_max,
+        nameGap: 30,
+      }),
+      yAxis: axisCommon(theme, 'tok/s/user', fmtUserTok, {
+        type: 'log',
+        nameGap: 52,
+      }),
+      series: datasets.map(ds => makeSeries(ds, true)),
+    });
+    return;
+  }
+
+  if (data.mode === 'processingpareto') {
+    chart.setOption({
+      ...baseOption(theme, paramsArr => {
+        if (!Array.isArray(paramsArr) || !paramsArr.length) return '';
+        const xVal = Number(paramsArr[0].axisValue ?? paramsArr[0].data?.value?.[0]);
+        let html = axisHeader(theme, 'Batch size', fmtBatch(xVal));
+        [...paramsArr]
+          .sort((a, b) => (b.data?.raw?.y ?? -Infinity) - (a.data?.raw?.y ?? -Infinity))
+          .forEach(p => {
+            const raw = p.data?.raw;
+            const yStr = raw?.y != null ? `${fmtRate(Number(raw.y))} req/s` : 'OOM';
+            const detail = raw?.y != null ? ` <span style="color:${theme.tc};font-size:10px;">avg in ${Number(raw.in_len).toLocaleString()} / out ${Number(raw.out_len).toLocaleString()} · ${Number(raw.tps).toLocaleString()} tok/s</span>` : '';
+            const oom = raw?.y == null;
+            html += `<div style="display:flex;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
+              `<span style="display:inline-block;width:10px;height:2.5px;border-radius:2px;background:${p.color};flex-shrink:0;"></span>` +
+              `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px;color:${theme.text};">${p.seriesName}</span>` +
+              `<span style="margin-left:4px;text-align:right;font-weight:600;color:${oom ? 'var(--red)' : theme.text};">${yStr}${detail}</span>` +
+              `</div>`;
+          });
+        return html;
+      }, 'axis'),
+      grid: { top: 58, right: 18, bottom: 48, left: 22, containLabel: true },
+      legend: {
+        show: true,
+        type: 'scroll',
+        top: 0,
+        left: 8,
+        right: 8,
+        height: 36,
+        icon: 'roundRect',
+        itemWidth: 16,
+        itemHeight: 5,
+        textStyle: { color: theme.tc, fontFamily: theme.fontFamily, fontSize: 10 },
+        pageIconColor: theme.tc,
+        pageTextStyle: { color: theme.tc, fontFamily: theme.fontFamily, fontSize: 10 },
+      },
+      xAxis: axisCommon(theme, 'Batch size', v => fmtBatch(Number(v)), {
+        type: 'log',
+        min: 1,
+        max: data.x_max,
+        nameGap: 30,
+      }),
+      yAxis: axisCommon(theme, 'Requests/sec', fmtRate, {
+        type: 'log',
+        nameGap: 52,
+      }),
+      series: datasets.map(ds => makeSeries(ds, true)),
+    });
+    return;
+  }
+}
+
+/* Internal-market hourly utilization charts (one ECharts instance per panel). */
+const projCharts = new Map();
+
+function disposeProjChart(id) {
+  const inst = projCharts.get(id);
+  if (inst) { inst.dispose(); projCharts.delete(id); }
+}
+
+function projChartFmtNum(v) {
+  if (v >= 1e9) return (v / 1e9).toFixed(2) + 'B';
+  if (v >= 1e6) return (v / 1e6).toFixed(2) + 'M';
+  if (v >= 1e3) return (v / 1e3).toFixed(1) + 'k';
+  return Math.round(v).toString();
+}
+
+function projChartFmtMoney(v) {
+  const s = v < 0 ? '-' : '';
+  const a = Math.abs(v);
+  if (a >= 1e9) return s + '$' + (a / 1e9).toFixed(2) + 'B';
+  if (a >= 1e6) return s + '$' + (a / 1e6).toFixed(2) + 'M';
+  if (a >= 1e3) return s + '$' + (a / 1e3).toFixed(1) + 'k';
+  return s + '$' + a.toFixed(2);
+}
+
+function renderProjChart(el) {
+  if (!el || !window.echarts) return;
+  let data;
+  try { data = JSON.parse(el.dataset.projChart || '{}'); } catch { return; }
+  const hourly = data.hourly || [];
+  if (!hourly.length) return;
+
+  disposeProjChart(el.id);
+  const theme = chartTheme();
+  const cs = getComputedStyle(document.documentElement);
+  const acc = (cs.getPropertyValue('--acc') || '#2255aa').trim();
+  const acc2 = (cs.getPropertyValue('--acc2') || '#1a7a55').trim();
+  const amber = (cs.getPropertyValue('--amber') || '#a06800').trim();
+  const red = (cs.getPropertyValue('--red') || '#b42e2e').trim();
+  const fg2 = (cs.getPropertyValue('--fg2') || '#7a7a72').trim();
+  const nightFill = theme.dk
+    ? 'rgba(85,136,221,0.12)'
+    : 'rgba(34,85,170,0.10)';
+
+  // Hour-centred x positions (matches the old SVG which placed each point at hour+0.5).
+  const servedPts = hourly.map(h => [h.hour + 0.5, Math.min(h.served_pct, 150)]);
+  const requestedPts = hourly.map(h => [h.hour + 0.5, Math.min(h.requested_pct, 150)]);
+  const thrashPts = hourly.filter(h => h.stall_state === 'thrash').map(h => [h.hour + 0.5, 145]);
+  const stallPts = hourly.filter(h => h.stall_state === 'stall').map(h => [h.hour + 0.5, 145]);
+
+  const inst = echarts.init(el);
+  projCharts.set(el.id, inst);
+
+  inst.setOption({
+    animation: false,
+    textStyle: { fontFamily: theme.fontFamily },
+    grid: { top: 14, right: 10, bottom: 22, left: 10, containLabel: true },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: theme.bg,
+      borderColor: theme.border,
+      borderWidth: 1,
+      padding: [8, 10],
+      confine: true,
+      textStyle: { color: theme.text, fontFamily: theme.fontFamily, fontSize: 11 },
+      axisPointer: {
+        type: 'line',
+        snap: true,
+        lineStyle: { color: theme.tc, opacity: 0.45, type: 'dashed', width: 1 },
+        label: { show: false },
+      },
+      formatter: paramsArr => {
+        if (!Array.isArray(paramsArr) || !paramsArr.length) return '';
+        const xVal = Number(paramsArr[0].axisValue);
+        const hour = Math.floor(xVal);
+        const h = hourly[hour];
+        if (!h) return '';
+        const hh = String(h.hour).padStart(2, '0') + ':00';
+        let badge = '';
+        if (h.stall_state === 'thrash') {
+          badge = ` <span style="color:${amber};font-weight:600;">· thrashing</span>`;
+        } else if (h.stall_state === 'stall') {
+          badge = ` <span style="color:${red};font-weight:600;">· STALL</span>`;
+        }
+        const night = h.is_night ? ` <span style="color:${theme.tc};">· night</span>` : '';
+        return (
+          `<div style="font-size:11px;color:${theme.text};">` +
+            `<div style="font-weight:600;margin-bottom:3px;">${hh}${night}${badge}</div>` +
+            `<div>demand <b>${Math.round(h.requested_pct)}%</b> · served <b>${Math.round(h.served_pct)}%</b></div>` +
+            `<div style="color:${theme.tc};margin-top:2px;">` +
+              `${projChartFmtNum(h.tokens)} tok · ${projChartFmtMoney(h.value)}` +
+            `</div>` +
+          `</div>`
+        );
+      },
+    },
+    xAxis: {
+      type: 'value',
+      min: 0,
+      max: 24,
+      interval: 6,
+      axisLine: { lineStyle: { color: theme.gc } },
+      axisTick: { lineStyle: { color: theme.gc } },
+      splitLine: { show: false },
+      axisLabel: {
+        color: theme.tc,
+        fontFamily: theme.fontFamily,
+        fontSize: 10,
+        formatter: v => String(v % 24).padStart(2, '0') + ':00',
+      },
+    },
+    yAxis: {
+      type: 'value',
+      min: 0,
+      max: 150,
+      interval: 50,
+      axisLine: { show: false },
+      axisTick: { show: false },
+      splitLine: { lineStyle: { color: theme.gc } },
+      axisLabel: {
+        color: theme.tc,
+        fontFamily: theme.fontFamily,
+        fontSize: 9,
+        formatter: v => v + '%',
+      },
+    },
+    series: [
+      {
+        name: 'served',
+        type: 'line',
+        smooth: 0.25,
+        showSymbol: false,
+        data: servedPts,
+        lineStyle: { color: acc2, width: 1.3, opacity: 0.85 },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: acc2 + '8c' },
+            { offset: 1, color: acc2 + '10' },
+          ]),
+        },
+        z: 2,
+        markArea: {
+          silent: true,
+          itemStyle: { color: nightFill },
+          data: [
+            [{ xAxis: 0 }, { xAxis: 6 }],
+            [{ xAxis: 22 }, { xAxis: 24 }],
+          ],
+        },
+        markLine: {
+          symbol: 'none',
+          silent: true,
+          lineStyle: { color: fg2, type: 'dashed', width: 1, opacity: 0.55 },
+          label: {
+            formatter: 'peak',
+            position: 'insideEndTop',
+            color: fg2,
+            fontFamily: theme.fontFamily,
+            fontSize: 9,
+          },
+          data: [{ yAxis: 100 }],
+        },
+      },
+      {
+        name: 'requested',
+        type: 'line',
+        smooth: 0.25,
+        showSymbol: false,
+        data: requestedPts,
+        lineStyle: { color: amber, width: 1.3, type: 'dashed', opacity: 0.9 },
+        z: 3,
+      },
+      {
+        name: 'thrash',
+        type: 'scatter',
+        data: thrashPts,
+        symbol: 'rect',
+        symbolSize: [22, 3],
+        itemStyle: { color: amber },
+        silent: true,
+        z: 4,
+      },
+      {
+        name: 'stall',
+        type: 'scatter',
+        data: stallPts,
+        symbol: 'rect',
+        symbolSize: [22, 3],
+        itemStyle: { color: red },
+        silent: true,
+        z: 4,
+      },
+    ],
+  });
+}
+
+function initProjCharts() {
+  document.querySelectorAll('[data-proj-chart]').forEach(renderProjChart);
+  // Drop instances whose containers were removed from the DOM.
+  for (const id of Array.from(projCharts.keys())) {
+    if (!document.getElementById(id)) disposeProjChart(id);
+  }
+}
+
+/* Picker toggle (only JS needed for dropdowns) */
+let openPicker = null;
+function closePicker() { if (openPicker) { openPicker.remove(); openPicker = null; } }
+document.addEventListener('click', e => {
+  if (!e.target.closest('.picker') && !e.target.closest('[data-picker]')) closePicker();
+});
+
+function togglePicker(btn, url) {
+  const wrap = btn.closest('.picker-wrap');
+  const shouldCloseOnly = openPicker && openPicker.parentElement === wrap;
+  closePicker();
+  if (shouldCloseOnly) return;
+  const pk = document.createElement('div');
+  pk.className = 'picker';
+  pk.innerHTML = '<div style="padding:10px;text-align:center;" class="T">Loading...</div>';
+  wrap.appendChild(pk);
+  openPicker = pk;
+  fetch(withTabUrl(url), { headers: requestHeaders() }).then(r => r.text()).then(html => { replaceHtml(pk, html); });
+}
+
+function postPartial(url, body) {
+  return fetch(url, {
+    method: 'POST',
+    headers: requestHeaders({
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'HX-Request': 'true',
+    }),
+    body: body || '',
+  }).then(async r => {
+    const text = await r.text();
+    if (r.ok) return text;
+    let message = text || `Request failed (${r.status})`;
+    try {
+      const data = JSON.parse(text);
+      if (data && data.error) message = data.error;
+    } catch {}
+    throw new Error(message);
+  });
+}
+
+function addGpuFromPicker(panel, gpuType) {
+  const count = Number(window.selectedGpuCount ?? 8) || 8;
+  const body = `panel=${encodeURIComponent(panel)}&gpu_type=${encodeURIComponent(gpuType)}&count=${encodeURIComponent(count)}`;
+  postPartial('/gpu/add', body)
+    .then(html => {
+      replaceHtml(document.getElementById('main-content'), html);
+      closePicker();
+      document.body.dispatchEvent(new Event('refreshChart'));
+    })
+    .catch(err => showToast(err.message));
+}
+
+/* GPU count selector in picker */
+window.selectedGpuCount = 8;
+document.addEventListener('click', e => {
+  const gcb = e.target.closest('[data-gcnt]');
+  if (gcb) {
+    window.selectedGpuCount = parseInt(gcb.dataset.gcnt);
+    gcb.closest('.gpu-count-sel').querySelectorAll('button').forEach(b => b.classList.remove('selected'));
+    gcb.classList.add('selected');
+  }
+});
+
+/* After HTMX swap, refresh chart */
+document.body.addEventListener('refreshChart', () => {
+  refreshChart();
+});
+
+document.body.addEventListener('htmx:configRequest', e => {
+  e.detail.headers['X-Tab-ID'] = currentTabId();
+});
+
+document.body.addEventListener('htmx:beforeSwap', e => {
+  if (e.detail.target && e.detail.target.id === 'main-content') {
+    rememberScroll();
+  }
+});
+
+document.body.addEventListener('htmx:afterSwap', e => {
+  if (e.detail.target.id === 'main-content') {
+    closePicker();
+    restoreScroll();
+  }
+  bindLiveSliders(e.detail.target || document);
+  initProjCharts();
+});
+
+document.body.addEventListener('htmx:responseError', e => {
+  let message = `Request failed (${e.detail.xhr.status})`;
+  try {
+    const data = JSON.parse(e.detail.xhr.responseText);
+    if (data && data.error) message = data.error;
+  } catch {}
+  showToast(message);
+});
+
+function onColorSchemeChange() {
+  if (lastChartData) renderChart(lastChartData);
+  initProjCharts();
+}
+if (colorSchemeQuery.addEventListener) {
+  colorSchemeQuery.addEventListener('change', onColorSchemeChange);
+} else if (colorSchemeQuery.addListener) {
+  colorSchemeQuery.addListener(onColorSchemeChange);
+}
+
+window.addEventListener('resize', () => {
+  if (chart) chart.resize();
+  projCharts.forEach(inst => inst.resize());
+});
+
+/* Initial tab-state load */
+document.addEventListener('DOMContentLoaded', () => {
+  bindLiveSliders(document);
+  syncCurrentTabState()
+    .catch(console.error)
+    .finally(refreshChart);
+});
+</script>
+</body>
+</html>

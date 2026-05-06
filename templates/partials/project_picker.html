@@ -1,0 +1,17 @@
+{# Use-case picker dropdown - loaded via HTMX into picker element #}
+<div class="cat">Presets</div>
+{% for preset in PROJECT_PRESETS %}
+<div class="item"
+     hx-post="/project/add" hx-target="#main-content"
+     hx-vals='{"panel":"{{ panel }}","preset":"{{ preset.key }}"}'>
+  <span>{{ preset.name }}</span>
+  <span class="T">ELO {{ (preset.difficulty * 3000)|round(0)|int }}</span>
+</div>
+{% endfor %}
+<div class="cat">Custom</div>
+<div class="item"
+     hx-post="/project/add" hx-target="#main-content"
+     hx-vals='{"panel":"{{ panel }}"}'>
+  <span>Blank use case</span>
+  <span class="T">start from scratch</span>
+</div>

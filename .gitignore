@@ -1,0 +1,16 @@
+# macOS
+.DS_Store
+
+# Environment variables
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Flask instance folder (local DB / data files)
+instance/
+
+# Claude Code
+.claude/

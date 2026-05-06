@@ -1,0 +1,1241 @@
+"""GPU, model, and distribution data definitions."""
+
+import math
+from dataclasses import dataclass
+
+
+FP8_SPEEDUP_DEFAULT = 1.4
+FP8_SPEEDUP_OPTIONS = [1.0, 1.2, 1.4, 1.6]
+MIXED_NATIVE_BF16_WEIGHT_BPP = 1.35
+MIXED_NATIVE_FP8_WEIGHT_BPP = 1.10
+FP4_FP8_MOE_WEIGHT_BPP = 0.70
+MXFP4_WEIGHT_BPP = (4 + 8 / 32) / 8
+NVFP4_WEIGHT_BPP = (4 + 8 / 16) / 8
+VENDOR_LABELS = {
+    "nv": "NVIDIA",
+    "amd": "AMD",
+    "intel": "Intel",
+    "apple": "Apple",
+}
+
+
+@dataclass(frozen=True)
+class PrecisionSpec:
+    key: str
+    label: str
+    nominal_weight_bytes_per_param: float
+    effective_weight_bytes_per_param: float
+    kv_cache_bytes_per_elem: float
+    description: str
+
+
+PRECISION_SPECS: dict[str, PrecisionSpec] = {
+    "bf16": PrecisionSpec(
+        "bf16",
+        "BF16",
+        2.0,
+        2.0,
+        2.0,
+        "BF16 weights and KV cache.",
+    ),
+    "fp8": PrecisionSpec(
+        "fp8",
+        "FP8",
+        1.0,
+        1.0,
+        1.0,
+        "FP8 weights and FP8 KV cache.",
+    ),
+    "nvfp4": PrecisionSpec(
+        "nvfp4",
+        "NVFP4",
+        0.5,
+        NVFP4_WEIGHT_BPP,
+        1.0,
+        "E2M1 FP4 weights with FP8 scale per 16 values and tensor scaling; KV cache stays FP8.",
+    ),
+    "mxfp4": PrecisionSpec(
+        "mxfp4",
+        "MXFP4",
+        0.5,
+        MXFP4_WEIGHT_BPP,
+        1.0,
+        "OCP MXFP4 E2M1 weights with E8M0 scale per 32 values; KV cache stays FP8.",
+    ),
+}
+PRECISIONS = tuple(PRECISION_SPECS.keys())
+PRECISION_LABELS = {key: spec.label for key, spec in PRECISION_SPECS.items()}
+PRECISION_DESCRIPTIONS = {key: spec.description for key, spec in PRECISION_SPECS.items()}
+
+
+def normalize_precision(prec: str | None) -> str:
+    return prec if prec in PRECISION_SPECS else "bf16"
+
+
+def bytes_per_param(prec: str) -> float:
+    return PRECISION_SPECS[normalize_precision(prec)].nominal_weight_bytes_per_param
+
+
+def kv_cache_bytes_per_elem(prec: str) -> float:
+    return PRECISION_SPECS[normalize_precision(prec)].kv_cache_bytes_per_elem
+
+
+@dataclass
+class GPU:
+    key: str
+    name: str
+    vendor: str  # 'nv', 'amd', 'intel', or 'apple'
+    mem: float  # bytes
+    bw: float  # bytes/s, published peak memory bandwidth shown in the UI
+    bf16: float  # FLOP/s
+    fp8: float  # FLOP/s
+    scale_up_p2p_bw_bidir: float  # bytes/s, per-GPU aggregate bidirectional peer BW for node_size topology
+    node_size: int = 8
+    planner_bw: float | None = None  # bytes/s, optional sustained bandwidth proxy used by planner math
+    fp4: float | None = None  # FLOP/s for native dense FP4/MXFP4/NVFP4 tensor paths, when available
+    tdp_watts: float = 0.0  # published board TDP — used with a utilization factor for CO2 math
+
+    @property
+    def mem_gb(self) -> float:
+        return self.mem / 1e9
+
+    @property
+    def bw_tbs(self) -> float:
+        return self.bw / 1e12
+
+    @property
+    def vendor_label(self) -> str:
+        return VENDOR_LABELS.get(self.vendor, self.vendor.title())
+
+    @property
+    def effective_bw(self) -> float:
+        return self.planner_bw if self.planner_bw is not None else self.bw
+
+    @property
+    def scale_up_collective_bw(self) -> float:
+        """One-direction per-GPU bandwidth used by the ring collective model."""
+        return self.scale_up_p2p_bw_bidir / 2
+
+
+@dataclass(frozen=True)
+class GPUPlannerOption:
+    label: str
+    gpu_key: str
+
+
+@dataclass(frozen=True)
+class GPUCard:
+    name: str
+    vendor: str
+    architecture: str
+    vram: str
+    use_case: str
+    planner_options: tuple[GPUPlannerOption, ...] = ()
+    note: str | None = None
+
+
+# Capability flags. Projects can require one or more; models must supply them to be eligible.
+# Kept deliberately coarse — the planner isn't a model quality benchmark, it's a capacity model.
+MODEL_CAPABILITIES: tuple[str, ...] = ("tools", "ctx_128k", "images", "reasoning")
+CAPABILITY_LABELS = {
+    "tools":     "Tool use",
+    "ctx_128k":  "≥128k ctx",
+    "images":    "Image input",
+    "reasoning": "Thinking / reasoning",
+}
+# Every modern open-weights model supports tool-calling and long context. "images" and
+# "reasoning" are the ones that actually discriminate.
+DEFAULT_MODEL_CAPABILITIES: frozenset[str] = frozenset({"tools", "ctx_128k"})
+
+
+@dataclass
+class Model:
+    key: str
+    name: str
+    cat: str
+    color: str
+    total_params: float  # parameter count
+    active_params: float  # activated parameter count
+    is_moe: bool
+    layers: int
+    num_heads: int
+    kv_heads: int
+    head_dim: int
+    is_mla: bool
+    mla_kv_dim: int = 0
+    mla_rope_dim: int = 0
+    kv_layers: int = 0
+    bf16_weight_bytes_per_param: float = 2.0
+    fp8_weight_bytes_per_param: float = 1.0
+    hidden: bool = False
+    extra_capabilities: frozenset[str] = frozenset()
+    # Benchmark-anchored capability axes used by the revenue projection.
+    # quality ∈ [0,1]: abstract success axis paired with task difficulty via success_rate().
+    # token_efficiency > 0: per-model token-budget multiplier baseline — 1.0 = 10M output
+    # tokens on Artificial Analysis' Intelligence Index, >1 = uses fewer tokens, <1 = verbose.
+    quality: float = 0.5
+    token_efficiency: float = 1.0
+
+    @property
+    def capabilities(self) -> frozenset[str]:
+        return DEFAULT_MODEL_CAPABILITIES | self.extra_capabilities
+
+    @property
+    def size_label(self) -> str:
+        tp_b = self.total_params / 1e9
+        ap_b = self.active_params / 1e9
+        if self.is_moe:
+            return f"{tp_b:.0f}B-A{ap_b:.0f}B"
+        return f"{tp_b:.0f}B"
+
+    @property
+    def hidden_size(self) -> int:
+        return self.num_heads * self.head_dim
+
+    @property
+    def kv_layer_count(self) -> int:
+        return self.kv_layers or self.layers
+
+    def weight_bytes_per_param(self, prec: str) -> float:
+        prec = normalize_precision(prec)
+        if prec == "bf16":
+            return self.bf16_weight_bytes_per_param
+        if prec == "fp8":
+            return self.fp8_weight_bytes_per_param
+        # Keep model-specific high-precision islands when a native FP8 catalog entry is
+        # already above 1 B/param. This avoids pretending FP4 converts every tensor.
+        retained_bpp = max(0.0, self.fp8_weight_bytes_per_param - PRECISION_SPECS["fp8"].effective_weight_bytes_per_param)
+        return PRECISION_SPECS[prec].effective_weight_bytes_per_param + retained_bpp
+
+    def uses_mixed_weight_precision(self, prec: str) -> bool:
+        return not math.isclose(self.weight_bytes_per_param(prec), bytes_per_param(prec), rel_tol=1e-9, abs_tol=1e-9)
+
+    def weight_bytes(self, prec: str) -> float:
+        return self.total_params * self.weight_bytes_per_param(prec)
+
+    def weight_gb(self, prec: str) -> float:
+        return self.weight_bytes(prec) / 1e9
+
+    def active_weight_bytes(self, prec: str) -> float:
+        params = self.active_params if self.is_moe else self.total_params
+        return params * self.weight_bytes_per_param(prec)
+
+
+AA_INTELLIGENCE_INDEX_MIN = 7.0
+AA_INTELLIGENCE_INDEX_MAX = 51.0
+AA_QUALITY_MIN = 0.30
+AA_QUALITY_MAX = 0.95
+AA_TOKEN_EFFICIENCY_REF_OUTPUT_TOKENS_M = 10.0
+
+
+def aa_intelligence_to_quality(score: float) -> float:
+    clipped = min(max(score, AA_INTELLIGENCE_INDEX_MIN), AA_INTELLIGENCE_INDEX_MAX)
+    span = max(AA_INTELLIGENCE_INDEX_MAX - AA_INTELLIGENCE_INDEX_MIN, 1.0)
+    t = (clipped - AA_INTELLIGENCE_INDEX_MIN) / span
+    return AA_QUALITY_MIN + (AA_QUALITY_MAX - AA_QUALITY_MIN) * t
+
+
+def aa_output_tokens_to_efficiency(output_tokens_m: float) -> float:
+    return AA_TOKEN_EFFICIENCY_REF_OUTPUT_TOKENS_M / max(output_tokens_m, 0.1)
+
+
+GPUS: dict[str, GPU] = {
+    # Normalized to per-GPU aggregate bidirectional peer-to-peer bandwidth for each local topology.
+    # AMD values use aggregate peer-to-peer bandwidth rather than raw per-link or total-transport IF figures.
+    # Public NVIDIA product pages often quote sparse tensor throughput; use dense rates for planner math.
+    # Ampere GPUs without native FP8 use BF16/FP16 tensor throughput for the FP8 planner path.
+    "A100": GPU("A100", "A100 80GB SXM", "nv", 80e9, 2.039e12, 312e12, 312e12, 600e9, 8),
+    "A100_40": GPU("A100_40", "A100 40GB PCIe", "nv", 40e9, 1.555e12, 156e12, 156e12, 64e9, 8),
+    "H100": GPU("H100", "H100 80GB SXM", "nv", 80e9, 3.35e12, 989e12, 1979e12, 900e9, 8),
+    "H200": GPU("H200", "H200 141GB SXM", "nv", 141e9, 4.8e12, 989e12, 1979e12, 900e9, 8),
+    "L40S": GPU("L40S", "L40S 48GB", "nv", 48e9, 864e9, 362.05e12, 733e12, 64e9, 8),
+    "L4": GPU("L4", "L4 24GB", "nv", 24e9, 300e9, 121e12, 242.5e12, 64e9, 8),
+    "RTXPRO6000_BSE": GPU("RTXPRO6000_BSE", "RTX PRO 6000 Blackwell Server Edition 96GB", "nv", 96e9, 1.597e12, 1e15, 2e15, 128e9, 8),
+    "DGX_SPARK": GPU("DGX_SPARK", "DGX Spark GB10 128GB", "nv", 128e9, 273e9, 125e12, 250e12, 25e9, 1),
+    "GB200": GPU("GB200", "GB200 Grace Blackwell 186GB/GPU", "nv", 186e9, 8e12, 2.5e15, 5e15, 3.6e12, 72),
+    "B200": GPU("B200", "B200 180GB SXM", "nv", 180e9, 8e12, 2.25e15, 4.5e15, 1.8e12, 8),
+    "B300": GPU("B300", "B300 Blackwell Ultra 288GB SXM", "nv", 288e9, 8e12, 2.25e15, 4.5e15, 1.8e12, 8),
+    "A6000": GPU("A6000", "RTX A6000 48GB", "nv", 48e9, 768e9, 154.85e12, 154.85e12, 112.5e9, 2),
+    "A4000": GPU("A4000", "RTX A4000 16GB", "nv", 16e9, 448e9, 76.7e12, 76.7e12, 64e9, 1),
+    "JETSON_AGX_THOR": GPU("JETSON_AGX_THOR", "Jetson AGX Thor 128GB", "nv", 128e9, 273e9, 258.75e12, 517.5e12, 25e9, 1),
+    "MI250X": GPU("MI250X", "MI250X 128GB", "amd", 128e9, 3.2e12, 383e12, 383e12, 800e9, 8),
+    "MI300X": GPU("MI300X", "MI300X 192GB", "amd", 192e9, 5.3e12, 1307e12, 2615e12, 896e9, 8),
+    "MI325X": GPU("MI325X", "MI325X 256GB", "amd", 256e9, 6e12, 1307e12, 2615e12, 896e9, 8),
+    "MI350X": GPU("MI350X", "MI350X 288GB", "amd", 288e9, 8e12, 2010e12, 4020e12, 1075.2e9, 8),
+    "MI355X": GPU("MI355X", "MI355X 288GB", "amd", 288e9, 8e12, 2512e12, 5037e12, 1075.2e9, 8),
+    "MI400": GPU("MI400", "MI400 Series Preview 432GB", "amd", 432e9, 19.6e12, 10e15, 20e15, 260e12 / 72.0, 72),
+    # Intel does not publish dense BF16/FP8 peak figures for these public pages, so the planner
+    # uses transparent proxy rooflines derived from the nearest available official disclosures.
+    "Gaudi3": GPU("Gaudi3", "Gaudi 3 128GB", "intel", 128e9, 3.7e12, 1.3e15, 2.6e15, 900e9, 4),
+    "CrescentIsland": GPU("CrescentIsland", "Crescent Island Preview 160GB", "intel", 160e9, 1.0e12, 183.5e12, 367e12, 128e9, 8),
+    "ArcProB60": GPU("ArcProB60", "Arc Pro B60 24GB", "intel", 24e9, 456e9, 98.5e12, 197e12, 64e9, 8),
+    "ArcProB50": GPU("ArcProB50", "Arc Pro B50 16GB", "intel", 16e9, 224e9, 85e12, 170e12, 64e9, 8),
+    # Apple publishes peak unified-memory bandwidth and GPU-core counts, but not dense BF16/FP8
+    # tensor rooflines or sustained inference bandwidth. We therefore keep Apple's peak bandwidth
+    # for display, while planner_bw + BF16/FP8 proxies are calibrated conservatively against
+    # whatcani.run Apple-device decode/prefill scaling across MLX/GGUF runs.
+    "MAC_MINI_M4_PRO": GPU("MAC_MINI_M4_PRO", "Mac mini M4 Pro 64GB", "apple", 64e9, 273e9, 16e12, 16e12, 50e9, 1, 273e9),
+    "MAC_STUDIO_M4_MAX": GPU("MAC_STUDIO_M4_MAX", "Mac Studio M4 Max 128GB", "apple", 128e9, 546e9, 26e12, 26e12, 50e9, 1, 410e9),
+    "MAC_STUDIO_M3_ULTRA": GPU("MAC_STUDIO_M3_ULTRA", "Mac Studio M3 Ultra 512GB", "apple", 512e9, 819e9, 48e12, 48e12, 50e9, 1, 560e9),
+}
+
+GPU_FP4_FLOPS = {
+    # Native dense FP4 tensor paths. Sparse marketing figures are intentionally not used.
+    "RTXPRO6000_BSE": 4e15,
+    "DGX_SPARK": 500e12,
+    "GB200": 10e15,
+    "B200": 9e15,
+    "B300": 15e15,
+    "JETSON_AGX_THOR": 1035e12,
+    "MI350X": 9.2e15,
+    "MI355X": 10.1e15,
+    "MI400": 40e15,
+}
+for _k, _fp4 in GPU_FP4_FLOPS.items():
+    if _k in GPUS:
+        GPUS[_k].fp4 = float(_fp4)
+
+# Published board TDPs (watts). Used with a utilization factor to estimate per-task energy.
+# Sources: vendor product pages; Mac figures use whole-system measured peak.
+GPU_TDP_WATTS = {
+    "A100": 400, "A100_40": 250, "H100": 700, "H200": 700, "L40S": 350, "L4": 72,
+    "RTXPRO6000_BSE": 600, "DGX_SPARK": 140, "GB200": 1200, "B200": 1000, "B300": 1200,
+    "A6000": 300, "A4000": 140, "JETSON_AGX_THOR": 130,
+    "MI250X": 560, "MI300X": 750, "MI325X": 1000, "MI350X": 1000, "MI355X": 1400, "MI400": 1500,
+    "Gaudi3": 900, "CrescentIsland": 300, "ArcProB60": 200, "ArcProB50": 70,
+    "MAC_MINI_M4_PRO": 140, "MAC_STUDIO_M4_MAX": 270, "MAC_STUDIO_M3_ULTRA": 480,
+}
+for _k, _w in GPU_TDP_WATTS.items():
+    if _k in GPUS:
+        GPUS[_k].tdp_watts = float(_w)
+
+GPU_CARDS: list[GPUCard] = [
+    GPUCard(
+        "H200 SXM/PCIe",
+        "NVIDIA",
+        "Hopper",
+        "141 GB HBM3e",
+        "Large-scale LLM inference, HPC, memory-bound workloads",
+        (GPUPlannerOption("Add", "H200"),),
+        "Planner uses the calibrated H200 141 GB SXM profile.",
+    ),
+    GPUCard(
+        "H100 SXM/PCIe",
+        "NVIDIA",
+        "Hopper",
+        "80 GB HBM3",
+        "AI training & inference, general-purpose accelerator",
+        (GPUPlannerOption("Add", "H100"),),
+        "Planner uses the calibrated H100 80 GB SXM profile.",
+    ),
+    GPUCard(
+        "A100 40/80 GB",
+        "NVIDIA",
+        "Ampere",
+        "40 or 80 GB HBM2e",
+        "Training, inference, ML workloads (still widely available)",
+        (
+            GPUPlannerOption("Add 80GB SXM", "A100"),
+            GPUPlannerOption("Add 40GB PCIe", "A100_40"),
+        ),
+        "Includes separate 80GB SXM and 40GB PCIe planner profiles.",
+    ),
+    GPUCard(
+        "L40S",
+        "NVIDIA",
+        "Ada Lovelace",
+        "48 GB GDDR6",
+        "Mixed AI/graphics, rendering, video, digital twins",
+        (GPUPlannerOption("Add", "L40S"),),
+        "Uses the public NVIDIA L40S dense tensor and memory specs.",
+    ),
+    GPUCard(
+        "L4",
+        "NVIDIA",
+        "Ada Lovelace",
+        "24 GB GDDR6",
+        "Video transcoding, light inference, virtual desktops",
+        (GPUPlannerOption("Add", "L4"),),
+        "Uses the public NVIDIA L4 dense tensor and memory specs.",
+    ),
+    GPUCard(
+        "RTX PRO 6000 Blackwell Server Edition",
+        "NVIDIA",
+        "Blackwell",
+        "96 GB GDDR7",
+        "Graphics-intensive AI, virtual workstations (GCP)",
+        (GPUPlannerOption("Add", "RTXPRO6000_BSE"),),
+        "Planner uses the NVIDIA Server Edition memory and tensor figures; modeled as an 8-GPU PCIe server topology.",
+    ),
+    GPUCard(
+        "DGX Spark",
+        "NVIDIA",
+        "Grace Blackwell",
+        "128 GB LPDDR5x unified memory",
+        "Desktop AI supercomputer for local prototyping, inference, and fine-tuning",
+        (GPUPlannerOption("Add", "DGX_SPARK"),),
+        "Planner uses the GB10 128GB/273GB/s profile. Dense BF16/FP8 rooflines are derived from NVIDIA's published sparse FP4 figure.",
+    ),
+    GPUCard(
+        "GB200 (Grace + Blackwell)",
+        "NVIDIA",
+        "Blackwell",
+        "paired GPU config",
+        "AI supercomputing, large-model training",
+        (GPUPlannerOption("Add", "GB200"),),
+        "Modeled per Blackwell GPU inside the GB200 Grace Blackwell Superchip and 72-GPU NVLink domain.",
+    ),
+    GPUCard(
+        "B200",
+        "NVIDIA",
+        "Blackwell",
+        "180 GB HBM3e",
+        "AI training/inference, scaling beyond Hopper",
+        (GPUPlannerOption("Add", "B200"),),
+        "Uses the published HGX B200 dense roofline and 180GB HBM3e profile.",
+    ),
+    GPUCard(
+        "B300 / Blackwell Ultra",
+        "NVIDIA",
+        "Blackwell Ultra",
+        "up to 288 GB HBM3e",
+        "Cutting-edge AI/HPC, limited early-access",
+        (GPUPlannerOption("Add", "B300"),),
+        "Uses the published HGX B300 dense roofline with the 288GB-per-GPU Blackwell Ultra memory profile.",
+    ),
+    GPUCard(
+        "RTX A6000",
+        "NVIDIA",
+        "Ampere",
+        "48 GB GDDR6 ECC",
+        "Workstation inference and development, with 2-way NVLink",
+        (GPUPlannerOption("Add", "A6000"),),
+        "Planner uses the dense half of NVIDIA's sparse tensor figure and the 2-way NVLink bandwidth.",
+    ),
+    GPUCard(
+        "RTX A4000",
+        "NVIDIA",
+        "Ampere",
+        "16 GB GDDR6",
+        "Entry workstation GPU for lightweight inference and development",
+        (GPUPlannerOption("Add", "A4000"),),
+    ),
+    GPUCard(
+        "MI250X",
+        "AMD",
+        "CDNA 2",
+        "64 GB HBM2e",
+        "General-purpose HPC and AI inference",
+        (GPUPlannerOption("Add", "MI250X"),),
+        "Planner models the full MI250X accelerator at 128GB; the 64GB figure commonly refers to one GCD.",
+    ),
+    GPUCard(
+        "MI300X",
+        "AMD",
+        "CDNA 3",
+        "192 GB HBM3, 5.3 TB/s",
+        "H100 competitor, large model serving",
+        (GPUPlannerOption("Add", "MI300X"),),
+    ),
+    GPUCard(
+        "MI325X",
+        "AMD",
+        "CDNA 3",
+        "256 GB HBM3e, 6 TB/s",
+        "Extra capacity for LLM serving",
+        (GPUPlannerOption("Add", "MI325X"),),
+    ),
+    GPUCard(
+        "MI350X / MI355X",
+        "AMD",
+        "CDNA 4",
+        "288 GB HBM3e, 8 TB/s",
+        "Generative AI & HPC, FP4/FP6 support (June 2025)",
+        (
+            GPUPlannerOption("Add MI350X", "MI350X"),
+            GPUPlannerOption("Add MI355X", "MI355X"),
+        ),
+        "Choose the calibrated MI350X or MI355X planner profile.",
+    ),
+    GPUCard(
+        "MI400 series",
+        "AMD",
+        "CDNA 5 (projected)",
+        "432 GB HBM4, ~19.6 TB/s",
+        "Expected H2 2026, 2× perf over MI355X",
+        (GPUPlannerOption("Add Preview", "MI400"),),
+        "Preview profile based on AMD's public MI400-series roadmap disclosures.",
+    ),
+    GPUCard(
+        "Gaudi 3",
+        "Intel",
+        "Gaudi",
+        "8.2 TB rack-scale HBM",
+        "Scalable enterprise/cloud inference, up to 64 accelerators per rack",
+        (GPUPlannerOption("Add", "Gaudi3"),),
+        "Uses Intel's public 128GB/3.7TB/s Gaudi 3 card specs with a provisional BF16/FP8 roofline.",
+    ),
+    GPUCard(
+        "GPU Crescent Island",
+        "Intel",
+        "Xe3P",
+        "160 GB LPDDR5X",
+        "Inference & tokens-as-a-service, air-cooled (announced Oct 2025)",
+        (GPUPlannerOption("Add Preview", "CrescentIsland"),),
+        "Preview proxy profile: Intel has announced memory capacity, but not a full public roofline yet.",
+    ),
+    GPUCard(
+        "Arc Pro B60 / B50",
+        "Intel",
+        "Xe2",
+        "24 GB (B60)",
+        "Edge-cloud/multi-GPU server, up to 8× B60 for 150B param models",
+        (
+            GPUPlannerOption("Add B60", "ArcProB60"),
+            GPUPlannerOption("Add B50", "ArcProB50"),
+        ),
+        "Uses public Intel memory specs; BF16/FP8 planner rooflines are inferred from Intel's published INT8 XMX throughput.",
+    ),
+    GPUCard(
+        "Mac mini M4 Pro",
+        "Apple",
+        "Apple silicon",
+        "up to 64 GB unified memory",
+        "Local inference, eval runners, compact dev/prototyping box",
+        (GPUPlannerOption("Add 64GB", "MAC_MINI_M4_PRO"),),
+        "Planner uses the top-bin 64GB Mac mini M4 Pro profile. Peak bandwidth comes from Apple specs; compute and sustained-bandwidth math are conservative proxies cross-checked against whatcani.run.",
+    ),
+    GPUCard(
+        "Mac Studio M4 Max",
+        "Apple",
+        "Apple silicon",
+        "up to 128 GB unified memory",
+        "Single-box model serving, creative/ML workstation, local team node",
+        (GPUPlannerOption("Add 128GB", "MAC_STUDIO_M4_MAX"),),
+        "Planner uses the 40-core GPU / 128GB Mac Studio M4 Max config. Peak bandwidth comes from Apple specs; planner math uses a lower sustained-bandwidth proxy to match observed M4 Pro to M4 Max scaling on whatcani.run.",
+    ),
+    GPUCard(
+        "Mac Studio M3 Ultra",
+        "Apple",
+        "Apple silicon",
+        "up to 512 GB unified memory",
+        "Largest-memory Apple desktop for local large-model serving and experimentation",
+        (GPUPlannerOption("Add 512GB", "MAC_STUDIO_M3_ULTRA"),),
+        "Planner uses the 80-core GPU / 512GB Mac Studio M3 Ultra top bin. Peak bandwidth comes from Apple specs; planner math is conservatively scaled from whatcani.run's benchmarked 60-core M3 Ultra runs.",
+    ),
+    GPUCard(
+        "Jetson AGX Thor Developer Kit",
+        "Edge / Embedded",
+        "Blackwell",
+        "128 GB LPDDR5X",
+        "Robotics and edge AI in a 40-130 W power envelope",
+        (GPUPlannerOption("Add", "JETSON_AGX_THOR"),),
+        "Kept outside the main NVIDIA accelerator list. Dense BF16/FP8 rooflines are derived from NVIDIA's published sparse FP4 figure.",
+    ),
+]
+
+MODELS: dict[str, Model] = {
+    "l8": Model("l8", "Llama 3.1 8B", "Meta", "#22976B", 8e9, 8e9, False, 32, 32, 8, 128, False),
+    "l70": Model("l70", "Llama 3.1 70B", "Meta", "#2B7A78", 70.6e9, 70.6e9, False, 80, 64, 8, 128, False),
+
+    "ge2": Model("ge2", "Gemma 4 E2B", "Gemma", "#5D8C3C", 2e9, 2e9, False, 26, 16, 8, 128, False),
+    "ge4": Model("ge4", "Gemma 4 E4B", "Gemma", "#6FA84A", 4e9, 4e9, False, 34, 24, 8, 128, False),
+    "g26": Model("g26", "Gemma 4 26B-A4B", "Gemma", "#8AB85C", 26e9, 4e9, True, 48, 32, 8, 128, False),
+    "g31": Model("g31", "Gemma 4 31B", "Gemma", "#A2C96E", 31e9, 31e9, False, 48, 40, 8, 128, False),
+
+    "q08": Model("q08", "Qwen 3.5 0.8B", "Qwen", "#0E8F66", 0.8e9, 0.8e9, False, 24, 16, 4, 64, False),
+    "q2": Model("q2", "Qwen 3.5 2B", "Qwen", "#15986D", 2e9, 2e9, False, 28, 16, 4, 128, False),
+    "q4": Model("q4", "Qwen 3.5 4B", "Qwen", "#1AA174", 4e9, 4e9, False, 32, 24, 4, 128, False),
+    "q9": Model("q9", "Qwen 3.5 9B", "Qwen", "#1D9E75", 9.2e9, 9.2e9, False, 36, 36, 4, 128, False),
+    "q27": Model("q27", "Qwen 3.5 27B", "Qwen", "#3266ad", 27.8e9, 27.8e9, False, 48, 36, 4, 128, False),
+    "q35": Model("q35", "Qwen 3.5 35B-A3B", "Qwen", "#7F77DD", 35e9, 3e9, True, 64, 16, 4, 128, False),
+    "q122": Model("q122", "Qwen 3.5 122B-A10B", "Qwen", "#D85A30", 122e9, 10e9, True, 96, 32, 8, 128, False),
+    "q397": Model("q397", "Qwen 3.5 397B-A17B", "Qwen", "#A6422A", 397e9, 17e9, True, 96, 64, 8, 128, False),
+
+    "glm45a": Model("glm45a", "GLM-4.5-Air 106B-A12B", "GLM", "#2F7E9F", 106e9, 12e9, True, 56, 64, 8, 128, False),
+    "glm45": Model("glm45", "GLM-4.5 355B-A32B", "GLM", "#2B6D8A", 355e9, 32e9, True, 62, 96, 8, 128, False),
+    "glm46": Model("glm46", "GLM-4.6 357B-A32B", "GLM", "#275C75", 357e9, 32e9, True, 62, 96, 8, 128, False),
+    "glm47": Model("glm47", "GLM-4.7 358B-A32B", "GLM", "#214A61", 358e9, 32e9, True, 62, 96, 8, 128, False),
+    "glm47f": Model("glm47f", "GLM-4.7-Flash 31B-A3B", "GLM", "#3F93BA", 31e9, 3e9, True, 48, 32, 8, 128, False),
+    "glm5": Model("glm5", "GLM-5 744B-A40B", "GLM", "#16354A", 744e9, 40e9, True, 72, 128, 8, 128, False),
+    "glm51": Model("glm51", "GLM-5.1 744B-A40B", "GLM", "#0F273A", 744e9, 40e9, True, 72, 128, 8, 128, False),
+
+    "k25": Model(
+        "k25",
+        "Kimi K2.5 1T-A32B",
+        "Kimi",
+        "#5B4FE9",
+        1e12,
+        32e9,
+        True,
+        61,
+        64,
+        1,
+        112,
+        True,
+        512,
+        64,
+        bf16_weight_bytes_per_param=MIXED_NATIVE_BF16_WEIGHT_BPP,
+        fp8_weight_bytes_per_param=MIXED_NATIVE_FP8_WEIGHT_BPP,
+    ),
+
+    "minimax25": Model("minimax25", "MiniMax M2.5 229B-A10B", "MiniMax", "#2C6D9B", 229e9, 10e9, True, 62, 48, 8, 128, False),
+    "minimax27": Model("minimax27", "MiniMax M2.7 229B-A10B", "MiniMax", "#1D5276", 229e9, 10e9, True, 62, 48, 8, 128, False),
+
+    "nem3s": Model("nem3s", "Nemotron 3 Super 120B-A12B", "Nemotron", "#6FA7C9", 120e9, 12e9, True, 88, 32, 2, 128, False, kv_layers=8),
+    "nem3n": Model("nem3n", "Nemotron 3 Nano 30B-A3B", "Nemotron", "#98C5DE", 31.6e9, 3.2e9, True, 52, 32, 2, 128, False, kv_layers=6),
+    "nem3no": Model("nem3no", "Nemotron 3 Nano Omni 30B-A3B", "Nemotron", "#B7D5E8", 30e9, 3e9, True, 52, 32, 2, 128, False, kv_layers=6),
+
+    "ds3": Model(
+        "ds3",
+        "DeepSeek V3 671B-A37B",
+        "DeepSeek",
+        "#A32D2D",
+        671e9,
+        37e9,
+        True,
+        61,
+        128,
+        1,
+        288,
+        True,
+        512,
+        64,
+        bf16_weight_bytes_per_param=MIXED_NATIVE_BF16_WEIGHT_BPP,
+        fp8_weight_bytes_per_param=MIXED_NATIVE_FP8_WEIGHT_BPP,
+    ),
+    "deepseek-v4-pro": Model(
+        "deepseek-v4-pro",
+        "DeepSeek V4 Pro 1.6T-A49B",
+        "DeepSeek",
+        "#7F1D1D",
+        1.6e12,
+        49e9,
+        True,
+        72,
+        128,
+        1,
+        288,
+        True,
+        512,
+        64,
+        bf16_weight_bytes_per_param=MIXED_NATIVE_BF16_WEIGHT_BPP,
+        fp8_weight_bytes_per_param=FP4_FP8_MOE_WEIGHT_BPP,
+    ),
+    "deepseek-v4-flash": Model(
+        "deepseek-v4-flash",
+        "DeepSeek V4 Flash 284B-A13B",
+        "DeepSeek",
+        "#C24132",
+        284e9,
+        13e9,
+        True,
+        48,
+        96,
+        1,
+        256,
+        True,
+        512,
+        64,
+        bf16_weight_bytes_per_param=MIXED_NATIVE_BF16_WEIGHT_BPP,
+        fp8_weight_bytes_per_param=FP4_FP8_MOE_WEIGHT_BPP,
+    ),
+
+    "mi7": Model("mi7", "Mistral 7B", "Mistral", "#e07020", 7e9, 7e9, False, 32, 32, 8, 128, False),
+    "mx87": Model("mx87", "Mixtral 8×7B (45B-A12B)", "Mistral", "#cc6633", 45e9, 12e9, True, 32, 32, 8, 128, False),
+    "cs22": Model("cs22", "Codestral 22B", "Mistral", "#d4882e", 22e9, 22e9, False, 56, 32, 8, 128, False),
+    "ms24": Model("ms24", "Mistral Small 3.1 24B", "Mistral", "#b87530", 24e9, 24e9, False, 40, 32, 8, 128, False),
+    "ms32": Model("ms32", "Mistral Small 3.2 24B", "Mistral", "#C18438", 24e9, 24e9, False, 40, 32, 8, 128, False),
+    # Mistral does not publish a parameter count for Medium 3.1; keep a hidden
+    # legacy entry so older saved states continue to resolve cleanly.
+    "mm31": Model("mm31", "Mistral Medium 3.1 (legacy)", "Mistral", "#AD6A2C", 24e9, 24e9, False, 40, 32, 8, 128, False, hidden=True),
+    # Preview proxy requested as an imagined dense 128B Mistral Medium 3.5 profile.
+    "mistral-medium-3.5-preview": Model("mistral-medium-3.5-preview", "Mistral Medium 3.5 Preview 128B", "Mistral", "#A95F24", 128e9, 128e9, False, 88, 96, 8, 128, False),
+    "ms4": Model("ms4", "Mistral Small 4 119B-A6.5B", "Mistral", "#93511F", 119e9, 6.5e9, True, 64, 64, 8, 128, False),
+    "ml3": Model("ml3", "Mistral Large 3 675B-A41B", "Mistral", "#7A3B18", 675e9, 41e9, True, 96, 128, 8, 128, False),
+    "ml123": Model("ml123", "Mistral Large 2 123B", "Mistral", "#994422", 123e9, 123e9, False, 88, 96, 8, 128, False),
+
+    "n3": Model("n3", "Ministral 3 3B", "Ministral", "#E2A552", 3e9, 3e9, False, 28, 24, 8, 128, False),
+    "n8": Model("n8", "Ministral 3 8B", "Ministral", "#D69343", 8e9, 8e9, False, 32, 32, 8, 128, False),
+    "n14": Model("n14", "Ministral 3 14B", "Ministral", "#CA8136", 14e9, 14e9, False, 40, 32, 8, 128, False),
+
+    "dv24": Model("dv24", "Devstral Small 2 24B", "Devstral", "#B85F59", 24e9, 24e9, False, 40, 32, 8, 128, False),
+    "dv123": Model("dv123", "Devstral 2 123B", "Devstral", "#94423E", 123e9, 123e9, False, 88, 96, 8, 128, False),
+
+    "mimo-v2.5-pro": Model(
+        "mimo-v2.5-pro",
+        "MiMo-V2.5-Pro 1.02T-A42B",
+        "MiMo",
+        "#C026D3",
+        1.02e12,
+        42e9,
+        True,
+        70,
+        48,
+        8,
+        128,
+        False,
+        bf16_weight_bytes_per_param=MIXED_NATIVE_BF16_WEIGHT_BPP,
+        fp8_weight_bytes_per_param=MIXED_NATIVE_FP8_WEIGHT_BPP,
+    ),
+    "mimo-v2.5": Model(
+        "mimo-v2.5",
+        "MiMo-V2.5 310B-A15B",
+        "MiMo",
+        "#E11D48",
+        310e9,
+        15e9,
+        True,
+        48,
+        32,
+        8,
+        128,
+        False,
+        bf16_weight_bytes_per_param=MIXED_NATIVE_BF16_WEIGHT_BPP,
+        fp8_weight_bytes_per_param=MIXED_NATIVE_FP8_WEIGHT_BPP,
+    ),
+
+    "cr13": Model("cr13", "Croissant 1.3B", "Croissant", "#dda050", 1.3e9, 1.3e9, False, 22, 16, 4, 96, False),
+}
+
+# Capability overrides. Vision-enabled and reasoning-first models deviate from the default
+# (tools + ctx_128k). Kept conservative — annotate models with well-documented support.
+_VISION_MODELS = ("ge4", "g26", "g31", "ms24", "ms32", "minimax25", "minimax27", "nem3no", "mimo-v2.5")
+_REASONING_MODELS = (
+    "q35", "q122", "q397",
+    "glm45", "glm45a", "glm46", "glm47", "glm47f", "glm5", "glm51",
+    "k25", "ds3", "deepseek-v4-pro", "deepseek-v4-flash", "ml3",
+    "minimax25", "minimax27",
+    "nem3s", "nem3n", "nem3no",
+    "mimo-v2.5-pro", "mimo-v2.5",
+)
+for _k in _VISION_MODELS:
+    if _k in MODELS:
+        MODELS[_k].extra_capabilities = MODELS[_k].extra_capabilities | {"images"}
+for _k in _REASONING_MODELS:
+    if _k in MODELS:
+        MODELS[_k].extra_capabilities = MODELS[_k].extra_capabilities | {"reasoning"}
+
+# Artificial Analysis Intelligence Index score and Intelligence Index output-token usage
+# (verbosity) in millions. For models with separate reasoning/non-reasoning AA pages, prefer
+# the reasoning page when available. Where AA had no directly usable page for the exact model,
+# we use the closest available family proxy and note it inline.
+AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
+    "l8": (12.0, 5.2),
+    "l70": (12.0, 4.7),
+    "ge2": (12.0, 8.3),
+    "ge4": (15.0, 7.9),
+    "g26": (27.0, 14.0),
+    "g31": (32.0, 7.1),
+    "q08": (11.0, 230.0),
+    "q2": (16.0, 390.0),
+    "q4": (27.0, 240.0),
+    "q9": (32.0, 200.0),
+    "q27": (42.0, 98.0),
+    "q35": (37.0, 100.0),
+    "q122": (42.0, 91.0),
+    "q397": (45.0, 86.0),
+    "glm45a": (23.0, 68.0),
+    "glm45": (26.0, 61.0),
+    "glm46": (33.0, 57.0),
+    "glm47": (42.0, 170.0),
+    "glm47f": (30.0, 64.0),
+    "glm5": (50.0, 110.0),
+    "glm51": (51.0, 110.0),
+    "minimax25": (42.0, 56.0),
+    "minimax27": (50.0, 87.0),
+    "nem3s": (36.0, 110.0),
+    "nem3n": (24.0, 140.0),
+    "nem3no": (26.0, 130.0),  # Omni preview proxy from Nano reasoning until AA publishes a dedicated page.
+    "deepseek-v4-pro": (52.0, 190.0),
+    "deepseek-v4-flash": (47.0, 240.0),
+    "mi7": (7.0, 2.5),
+    "mx87": (8.0, 2.5),    # Proxy verbosity from Mistral 7B; AA exposes score but not token usage.
+    "cs22": (15.0, 4.4),   # Proxy from Devstral Small (Jul '25'); no AA page for Codestral 22B found.
+    "ms24": (14.0, 4.7),
+    "ms32": (15.0, 4.5),
+    "mm31": (21.0, 7.6),
+    "mistral-medium-3.5-preview": (34.0, 8.0),  # Preview proxy; no public AA page.
+    "ms4": (19.0, 3.9),
+    "ml3": (23.0, 5.2),
+    "ml123": (15.0, 2.6),
+    "n3": (11.0, 16.0),
+    "n8": (15.0, 13.0),
+    "n14": (16.0, 11.0),
+    "dv24": (19.0, 8.6),
+    "dv123": (22.0, 7.4),
+    "mimo-v2.5-pro": (54.0, 92.0),
+    "mimo-v2.5": (49.0, 74.0),
+    "cr13": (12.0, 8.3),   # Proxy from Gemma 4 E2B (Non-reasoning); no AA page for Croissant 1.3B found.
+}
+
+for _k, (_score, _verbosity_m) in AA_MODEL_METRICS.items():
+    if _k in MODELS:
+        MODELS[_k].quality = aa_intelligence_to_quality(_score)
+        MODELS[_k].token_efficiency = aa_output_tokens_to_efficiency(_verbosity_m)
+
+
+@dataclass
+class Bucket:
+    length: int
+    label: str
+    color: str
+
+
+INPUT_BUCKETS = [
+    Bucket(256, "256", "#10825c"),
+    Bucket(1024, "1k", "#1D9E75"),
+    Bucket(4096, "4k", "#3266ad"),
+    Bucket(16384, "16k", "#7F77DD"),
+    Bucket(32768, "32k", "#BA7517"),
+    Bucket(65536, "64k", "#D85A30"),
+    Bucket(131072, "128k", "#A32D2D"),
+]
+
+OUTPUT_BUCKETS = [
+    Bucket(32, "32", "#10825c"),
+    Bucket(128, "128", "#1D9E75"),
+    Bucket(512, "512", "#3266ad"),
+    Bucket(2048, "2k", "#7F77DD"),
+    Bucket(4096, "4k", "#BA7517"),
+    Bucket(8192, "8k", "#D85A30"),
+]
+
+BATCH_SIZES = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
+
+DIST_PRESETS = {
+    "Chat": {"in": [10, 30, 35, 15, 7, 2, 1], "out": [15, 30, 35, 15, 4, 1]},
+    "RAG": {"in": [5, 15, 25, 25, 18, 8, 4], "out": [10, 25, 40, 18, 5, 2]},
+    "Long doc": {"in": [2, 5, 10, 15, 25, 25, 18], "out": [5, 15, 30, 30, 15, 5]},
+    "Code": {"in": [8, 25, 30, 22, 10, 4, 1], "out": [10, 20, 35, 25, 8, 2]},
+    "Classify": {"in": [5, 20, 40, 25, 8, 2, 0], "out": [80, 15, 4, 1, 0, 0]},
+}
+
+TASK_PRESETS = {
+    "Classify": {"i": 2048, "o": 32},
+    "Extract": {"i": 4096, "o": 256},
+    "Summarize": {"i": 8192, "o": 512},
+    "Rephrase": {"i": 2048, "o": 2048},
+    "Synth gen": {"i": 512, "o": 4096},
+    "Score": {"i": 4096, "o": 8},
+}
+
+# Cloud model registry with representative public API pricing in $/M tokens.
+# `quality` and `token_efficiency` are calibrated below from Artificial Analysis'
+# Intelligence Index and Intelligence Index output-token usage (verbosity).
+CLOUD_MODELS = {
+    "gpt-5": {
+        "label": "GPT-5",
+        "vendor": "OpenAI",
+        "in_per_m": 1.25,
+        "cached_in_per_m": 0.125,
+        "out_per_m": 10.00,
+        "quality": 0.5,
+        "token_efficiency": 1.0,
+    },
+    "gpt-5-mini": {
+        "label": "GPT-5 mini",
+        "vendor": "OpenAI",
+        "in_per_m": 0.25,
+        "cached_in_per_m": 0.025,
+        "out_per_m": 2.00,
+        "quality": 0.5,
+        "token_efficiency": 1.0,
+    },
+    "gpt-5-nano": {
+        "label": "GPT-5 nano",
+        "vendor": "OpenAI",
+        "in_per_m": 0.05,
+        "cached_in_per_m": 0.005,
+        "out_per_m": 0.40,
+        "quality": 0.5,
+        "token_efficiency": 1.0,
+    },
+    "claude-opus": {
+        "label": "Claude Opus 4",
+        "vendor": "Anthropic",
+        "in_per_m": 15.00,
+        "cached_in_per_m": 1.50,
+        "out_per_m": 75.00,
+        "quality": 0.5,
+        "token_efficiency": 1.0,
+    },
+    "claude-sonnet": {
+        "label": "Claude Sonnet 4",
+        "vendor": "Anthropic",
+        "in_per_m": 3.00,
+        "cached_in_per_m": 0.30,
+        "out_per_m": 15.00,
+        "quality": 0.5,
+        "token_efficiency": 1.0,
+    },
+    "claude-haiku": {
+        "label": "Claude Haiku 4",
+        "vendor": "Anthropic",
+        "in_per_m": 0.80,
+        "cached_in_per_m": 0.08,
+        "out_per_m": 4.00,
+        "quality": 0.5,
+        "token_efficiency": 1.0,
+    },
+    "gemini-pro": {
+        "label": "Gemini 2.5 Pro",
+        "vendor": "Google",
+        "in_per_m": 1.25,
+        "cached_in_per_m": 0.31,
+        "out_per_m": 10.00,
+        "quality": 0.5,
+        "token_efficiency": 1.0,
+    },
+    "gemini-flash": {
+        "label": "Gemini 2.5 Flash",
+        "vendor": "Google",
+        "in_per_m": 0.30,
+        "cached_in_per_m": 0.075,
+        "out_per_m": 2.50,
+        "quality": 0.5,
+        "token_efficiency": 1.0,
+    },
+    "gemini-flash-lite": {
+        "label": "Gemini 2.5 Flash Lite",
+        "vendor": "Google",
+        "in_per_m": 0.10,
+        "cached_in_per_m": 0.025,
+        "out_per_m": 0.40,
+        "quality": 0.5,
+        "token_efficiency": 1.0,
+    },
+    "mistral-medium": {
+        "label": "Mistral Medium",
+        "vendor": "Mistral",
+        "in_per_m": 0.40,
+        "cached_in_per_m": 0.10,
+        "out_per_m": 2.00,
+        "quality": 0.5,
+        "token_efficiency": 1.0,
+    },
+    "mistral-large": {
+        "label": "Mistral Large",
+        "vendor": "Mistral",
+        "in_per_m": 2.00,
+        "cached_in_per_m": 0.50,
+        "out_per_m": 6.00,
+        "quality": 0.5,
+        "token_efficiency": 1.0,
+    },
+    "mistral-large-2": {
+        "label": "Mistral Large 2",
+        "vendor": "Mistral",
+        "in_per_m": 2.00,
+        "cached_in_per_m": 0.50,
+        "out_per_m": 6.00,
+        "quality": 0.5,
+        "token_efficiency": 1.0,
+    },
+    "codestral-2501": {
+        "label": "Codestral 2501",
+        "vendor": "Mistral",
+        "in_per_m": 0.20,
+        "cached_in_per_m": 0.05,
+        "out_per_m": 0.60,
+        "quality": 0.5,
+        "token_efficiency": 1.0,
+    },
+    "deepseek-v3": {
+        "label": "DeepSeek V3",
+        "vendor": "DeepSeek",
+        "in_per_m": 0.27,
+        "cached_in_per_m": 0.07,
+        "out_per_m": 1.10,
+        "quality": 0.5,
+        "token_efficiency": 1.0,
+    },
+}
+
+AA_CLOUD_METRICS: dict[str, tuple[float, float]] = {
+    "gpt-5": (45.0, 76.0),
+    "gpt-5-mini": (41.0, 69.0),
+    "gpt-5-nano": (27.0, 110.0),
+    "claude-opus": (50.0, 72.0),         # Proxy from Claude Opus 4.5 (Reasoning).
+    "claude-sonnet": (39.0, 55.0),       # Claude 4 Sonnet (Reasoning).
+    "claude-haiku": (37.0, 87.0),        # Proxy from Claude 4.5 Haiku (Reasoning).
+    "gemini-pro": (35.0, 55.0),
+    "gemini-flash": (21.0, 17.0),
+    "gemini-flash-lite": (13.0, 36.0),
+    "mistral-medium": (21.0, 7.6),       # Mistral Medium 3.1.
+    "mistral-large": (13.0, 2.6),        # Proxy from Mistral Large 2 (Jul '24), verbosity from Nov '24 refresh.
+    "mistral-large-2": (15.0, 2.6),
+    "codestral-2501": (15.0, 4.4),       # Proxy from Devstral Small (Jul '25'); no AA page for Codestral 2501 found.
+    "deepseek-v3": (16.0, 2.6),
+}
+
+for _k, (_score, _verbosity_m) in AA_CLOUD_METRICS.items():
+    if _k in CLOUD_MODELS:
+        CLOUD_MODELS[_k]["quality"] = aa_intelligence_to_quality(_score)
+        CLOUD_MODELS[_k]["token_efficiency"] = aa_output_tokens_to_efficiency(_verbosity_m)
+
+# Vertex availability matrix: GCP regions where each cloud-model family is
+# served today. Models not on Vertex Europe (e.g. OpenAI via Azure, DeepSeek)
+# have an empty tuple and no grid-intensity estimate. Regions are enriched
+# onto CLOUD_MODELS at the bottom of the file, after the carbon-intensity
+# tables and helpers are defined.
+_GEMINI_PRO_ZONES = (
+    "europe-west1", "europe-west4", "europe-west8", "europe-west9",
+    "europe-central2", "europe-north1", "europe-southwest1",
+)
+_GEMINI_FLASH_ZONES = _GEMINI_PRO_ZONES + ("europe-west2", "europe-west3")
+_CLAUDE_ZONES = ("europe-west1",)
+_MISTRAL_ZONES = ("europe-west4",)
+
+CLOUD_MODEL_ZONES: dict[str, tuple[str, ...]] = {
+    "gpt-5": (),
+    "gpt-5-mini": (),
+    "gpt-5-nano": (),
+    "claude-opus": _CLAUDE_ZONES,
+    "claude-sonnet": _CLAUDE_ZONES,
+    "claude-haiku": _CLAUDE_ZONES,
+    "gemini-pro": _GEMINI_PRO_ZONES,
+    "gemini-flash": _GEMINI_FLASH_ZONES,
+    "gemini-flash-lite": _GEMINI_PRO_ZONES,
+    "mistral-medium": _MISTRAL_ZONES,
+    "mistral-large": _MISTRAL_ZONES,
+    "mistral-large-2": _MISTRAL_ZONES,
+    "codestral-2501": _MISTRAL_ZONES,
+    "deepseek-v3": (),
+}
+
+# Steepness of the quality/difficulty sigmoid used by success_rate(). k=10 gives a
+# ~0.1-quality-edge → ~73% success and a 0.2 edge → ~88%. Tune if calibration demands.
+SUCCESS_RATE_SIGMOID_K = 10.0
+
+
+def success_rate(quality: float, difficulty: float, k: float = SUCCESS_RATE_SIGMOID_K) -> float:
+    """Probability that a model of given `quality` succeeds on a task of given `difficulty`.
+
+    Continuous replacement for the old discrete tier-distance success curve:
+    `sigmoid(k · (quality − difficulty))`. Quality ≫ difficulty → ~1.0; matched → 0.5;
+    quality ≪ difficulty → ~0.0.
+    """
+    x = max(min(k * (quality - difficulty), 50.0), -50.0)
+    return 1.0 / (1.0 + math.exp(-x))
+
+
+def required_quality(difficulty: float, min_success_rate: float, k: float = SUCCESS_RATE_SIGMOID_K) -> float:
+    """Inverse of success_rate(): minimum model quality that clears `min_success_rate`
+    at the given `difficulty`. Returns a value on the same [0, 1] quality axis the model
+    catalog uses (AA Intelligence Index calibrated into 0.30..0.95)."""
+    slo = min(max(float(min_success_rate), 1e-4), 1 - 1e-4)
+    logit = math.log(slo / (1.0 - slo))
+    return min(max(float(difficulty) + logit / k, 0.0), 1.0)
+
+
+# Corporate cloud catalog presets. The cloud isn't an open marketplace — corp procurement
+# decides which models flow through their gateway. Today's reality (Gemini-only, no
+# Anthropic/OpenAI) is the "current" preset; "advocated" models the realistic ask
+# (Claude on Vertex Europe). Anything not in the active preset is unavailable as a
+# spillover destination, so demand needing a tier nobody on the list can serve gets
+# destroyed (not leaked).
+CORPO_CLOUD_PRESETS = {
+    "current": {
+        "label": "Current corpo gateway (Gemini + Mistral)",
+        "models": (
+            "gemini-flash-lite",
+            "gemini-flash",
+            "gemini-pro",
+            "codestral-2501",
+            "mistral-medium",
+            "mistral-large",
+            "mistral-large-2",
+        ),
+    },
+    "advocated": {
+        "label": "Advocated · + Anthropic on Vertex EU",
+        "models": (
+            "gemini-flash-lite",
+            "gemini-flash",
+            "gemini-pro",
+            "codestral-2501",
+            "mistral-medium",
+            "mistral-large",
+            "mistral-large-2",
+            "claude-haiku",
+            "claude-sonnet",
+            "claude-opus",
+        ),
+    },
+}
+CORPO_CLOUD_DEFAULT = "current"
+
+
+def corpo_cloud_models(name: str) -> tuple[str, ...]:
+    preset = CORPO_CLOUD_PRESETS.get(name) or CORPO_CLOUD_PRESETS[CORPO_CLOUD_DEFAULT]
+    return preset["models"]
+
+
+# Opinionated project presets so the demo is one click from a realistic story.
+# tokens_day is the total project workload per day; wtp_per_m is the ceiling price (cost/M tokens)
+# above which this project refuses to buy (flees to cloud if it's cheaper, else shelves the work).
+# requires lists hard capability gates (project rejects models that don't supply them).
+# difficulty ∈ [0,1] is the project's task-difficulty axis — paired with each candidate model's
+# quality by success_rate() to get a per-(project, model) success probability. min_success_rate
+# is the SLO floor: candidates whose success_rate falls below it are rejected.
+# latent_jobs_day = additional demand that is *not economically viable today* but unlocks
+# when the cheapest model that could serve this project drops at or below unlock_price_per_m.
+# Hard threshold: either the whole pool is in play or none of it is. The pool models
+# "archive backfills" and "bulk analyses" that only make sense at a low-enough $/M.
+PROJECT_PRESETS = [
+    {"key": "classify",   "name": "Mass classification",  "difficulty": 0.10, "tokens_day": 3.0e9, "wtp_per_m": 0.25, "requires": (),                    "min_success_rate": 0.80, "batch_eligible": True, "latent_jobs_day": 8.0e9, "unlock_price_per_m": 0.05, "in_pre": "Classify", "out_pre": "Classify"},
+    {"key": "summarize",  "name": "Doc summarization",    "difficulty": 0.25, "tokens_day": 1.5e9, "wtp_per_m": 0.90, "requires": ("ctx_128k",),         "min_success_rate": 0.85, "batch_eligible": True, "latent_jobs_day": 3.0e9, "unlock_price_per_m": 0.20, "in_pre": "Long doc", "out_pre": "Long doc"},
+    {"key": "chatbot",    "name": "Customer chatbot",     "difficulty": 0.30, "tokens_day": 2.0e9, "wtp_per_m": 1.20, "requires": ("tools",),            "min_success_rate": 0.95, "in_pre": "Chat",     "out_pre": "Chat"},
+    {"key": "coding",     "name": "Coding assistant",     "difficulty": 0.55, "tokens_day": 1.2e9, "wtp_per_m": 4.00, "requires": ("tools", "ctx_128k"), "min_success_rate": 0.85, "in_pre": "Code",     "out_pre": "Code"},
+    {"key": "evals",      "name": "Batch evaluations",    "difficulty": 0.45, "tokens_day": 800e6, "wtp_per_m": 2.00, "requires": (),                    "min_success_rate": 0.90, "batch_eligible": True, "latent_jobs_day": 2.0e9, "unlock_price_per_m": 0.50, "in_pre": "RAG",      "out_pre": "Classify"},
+    {"key": "longctx",    "name": "Long-ctx analytics",   "difficulty": 0.70, "tokens_day": 400e6, "wtp_per_m": 8.00, "requires": ("ctx_128k",),         "min_success_rate": 0.90, "latent_jobs_day": 1.0e9, "unlock_price_per_m": 3.00, "in_pre": "Long doc", "out_pre": "Long doc"},
+    {"key": "research",   "name": "Deep research agent",  "difficulty": 0.90, "tokens_day": 150e6, "wtp_per_m": 20.00,"requires": ("tools", "reasoning"),"min_success_rate": 0.95, "latent_jobs_day": 500e6, "unlock_price_per_m": 5.00, "in_pre": "RAG",      "out_pre": "Long doc"},
+]
+
+DAY_SHAPES = {
+    "flat": {
+        "label": "Flat 24/7",
+        "weights": [1.0] * 24,
+        "note": "Even demand across the whole day.",
+    },
+    "workday": {
+        "label": "Enterprise workday",
+        "weights": [
+            0.30, 0.24, 0.20, 0.18, 0.18, 0.22, 0.35, 0.55,
+            0.82, 1.00, 1.10, 1.16, 1.20, 1.18, 1.10, 1.00,
+            0.92, 0.82, 0.68, 0.54, 0.44, 0.38, 0.34, 0.32,
+        ],
+        "note": "Daytime-heavy office demand with a mild evening shoulder.",
+    },
+    "consumer": {
+        "label": "Consumer evening",
+        "weights": [
+            0.32, 0.28, 0.24, 0.22, 0.20, 0.22, 0.30, 0.42,
+            0.58, 0.70, 0.78, 0.84, 0.88, 0.92, 0.98, 1.04,
+            1.10, 1.18, 1.28, 1.36, 1.40, 1.24, 0.92, 0.54,
+        ],
+        "note": "Lower daytime demand with a strong evening consumer peak.",
+    },
+    "globalsaas": {
+        "label": "Follow the sun",
+        "weights": [
+            0.55, 0.52, 0.50, 0.48, 0.50, 0.56, 0.64, 0.74,
+            0.86, 0.96, 1.02, 1.08, 1.12, 1.16, 1.18, 1.16,
+            1.12, 1.08, 1.00, 0.90, 0.82, 0.74, 0.68, 0.60,
+        ],
+        "note": "Broader global SaaS demand with fewer sharp regional peaks.",
+    },
+    "nightbatch": {
+        "label": "Night batch",
+        "weights": [
+            1.28, 1.34, 1.38, 1.40, 1.34, 1.18, 0.92, 0.68,
+            0.48, 0.38, 0.34, 0.32, 0.32, 0.34, 0.38, 0.42,
+            0.50, 0.62, 0.78, 0.92, 1.00, 1.08, 1.18, 1.24,
+        ],
+        "note": "Off-peak-heavy traffic that leans into discounted overnight processing.",
+    },
+}
+
+
+# Hour index 0 = local midnight.
+# Values are grams CO2-equivalent per kWh delivered.
+CARBON_INTENSITY_HOURLY: dict[str, list[float]] = {
+    "BE": [290, 280, 270, 265, 270, 290, 320, 340, 330, 310, 290, 270, 260, 260, 270, 290, 320, 350, 380, 400, 390, 360, 330, 310],
+    "UK": [230, 220, 210, 205, 210, 230, 260, 280, 270, 250, 230, 220, 210, 210, 220, 240, 260, 290, 320, 340, 330, 300, 270, 250],
+    "DE": [420, 410, 400, 395, 400, 420, 450, 480, 470, 450, 430, 410, 400, 395, 405, 430, 460, 500, 540, 560, 550, 520, 480, 450],
+    "NL": [410, 400, 390, 380, 385, 410, 440, 470, 460, 440, 420, 400, 390, 385, 395, 420, 450, 490, 530, 550, 540, 510, 470, 440],
+    "CH": [120, 115, 110, 110, 115, 120, 130, 135, 130, 125, 120, 115, 110, 110, 115, 120, 130, 140, 150, 155, 150, 140, 130, 125],
+    "IT": [360, 350, 340, 330, 335, 360, 400, 420, 410, 380, 360, 340, 330, 330, 340, 360, 390, 430, 470, 490, 480, 450, 420, 390],
+    "FR": [60, 55, 55, 55, 55, 60, 65, 70, 65, 60, 55, 50, 50, 50, 50, 55, 60, 70, 75, 80, 80, 75, 70, 65],
+    "FI": [140, 135, 130, 130, 135, 140, 150, 155, 150, 145, 140, 135, 130, 130, 135, 140, 150, 160, 170, 180, 175, 165, 155, 150],
+    "PL": [650, 640, 630, 625, 630, 650, 700, 730, 720, 700, 680, 660, 650, 645, 655, 680, 720, 760, 800, 820, 810, 780, 740, 700],
+    "ES": [250, 240, 230, 220, 230, 260, 300, 320, 290, 240, 200, 180, 150, 160, 170, 200, 260, 320, 380, 400, 380, 350, 310, 280],
+}
+
+COUNTRIES = {
+    "BE": "Belgium",
+    "UK": "United Kingdom",
+    "DE": "Germany",
+    "NL": "Netherlands",
+    "CH": "Switzerland",
+    "IT": "Italy",
+    "FR": "France",
+    "FI": "Finland",
+    "PL": "Poland",
+    "ES": "Spain",
+}
+DEFAULT_COUNTRY = "FR"
+
+# GCP region → country code. Only the European Vertex regions from the
+# cloud-model availability matrix are mapped; add more as they come into scope.
+GCP_ZONE_COUNTRY: dict[str, str] = {
+    "europe-west1": "BE",       # St. Ghislain
+    "europe-west2": "UK",       # London
+    "europe-west3": "DE",       # Frankfurt
+    "europe-west4": "NL",       # Eemshaven
+    "europe-west8": "IT",       # Milan
+    "europe-west9": "FR",       # Paris
+    "europe-central2": "PL",    # Warsaw
+    "europe-north1": "FI",      # Hamina
+    "europe-southwest1": "ES",  # Madrid
+}
+
+
+def carbon_intensity(country: str, hour: int) -> float:
+    """Grams CO2-equivalent per kWh for the given country at the given local hour (0-23)."""
+    series = CARBON_INTENSITY_HOURLY.get(country) or CARBON_INTENSITY_HOURLY[DEFAULT_COUNTRY]
+    return series[hour % 24]
+
+
+def carbon_intensity_avg(country: str, hour_weights: list[float] | None = None) -> float:
+    """Demand-weighted daily average gCO2/kWh for a country. Unweighted if weights is None."""
+    series = CARBON_INTENSITY_HOURLY.get(country) or CARBON_INTENSITY_HOURLY[DEFAULT_COUNTRY]
+    if not hour_weights:
+        return sum(series) / len(series)
+    total_w = sum(hour_weights) or 1.0
+    return sum(series[h] * hour_weights[h] for h in range(24)) / total_w
+
+
+def cloud_model_grid_intensity(zones: tuple[str, ...], hour_weights: list[float] | None = None) -> float:
+    """Unweighted (or demand-weighted) gCO2/kWh averaged across the zones a cloud model is served from.
+
+    Zones we can't map to a country are ignored; returns 0.0 when none resolve."""
+    countries = [GCP_ZONE_COUNTRY[z] for z in zones if z in GCP_ZONE_COUNTRY]
+    if not countries:
+        return 0.0
+    return sum(carbon_intensity_avg(c, hour_weights) for c in countries) / len(countries)
+
+
+# Enrich CLOUD_MODELS once the carbon-intensity tables are in scope.
+for _k, _zones in CLOUD_MODEL_ZONES.items():
+    if _k not in CLOUD_MODELS:
+        continue
+    CLOUD_MODELS[_k]["gcp_zones"] = _zones
+    CLOUD_MODELS[_k]["regions"] = tuple(
+        GCP_ZONE_COUNTRY[z] for z in _zones if z in GCP_ZONE_COUNTRY
+    )
+    CLOUD_MODELS[_k]["grid_gco2_per_kwh"] = cloud_model_grid_intensity(_zones)
+
+
+def models_by_category() -> dict[str, list[Model]]:
+    cats: dict[str, list[Model]] = {}
+    for m in MODELS.values():
+        if m.hidden:
+            continue
+        cats.setdefault(m.cat, []).append(m)
+    return cats
+
+
+def gpus_by_vendor() -> dict[str, list[GPU]]:
+    cats: dict[str, list[GPU]] = {}
+    for g in GPUS.values():
+        cats.setdefault(g.vendor_label, []).append(g)
+    return cats
+
+
+def gpu_cards_by_vendor() -> dict[str, list[GPUCard]]:
+    cats: dict[str, list[GPUCard]] = {}
+    for card in GPU_CARDS:
+        cats.setdefault(card.vendor, []).append(card)
+    return cats

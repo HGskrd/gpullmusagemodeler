@@ -1,0 +1,15 @@
+<button id="compareBtn"
+        hx-post="/compare/duplicate"
+        hx-target="#main-content"
+        style="font-size:10px;"
+        class="{{ 'on' if B else '' }}">
+  ⊞ {{ 'Duplicate A → B' if B else 'Duplicate To Compare' }}
+</button>
+{% if B %}
+<button id="closeCompareBtn"
+        hx-post="/compare/close"
+        hx-target="#main-content"
+        style="font-size:10px;">
+  ✕ Close Compare
+</button>
+{% endif %}

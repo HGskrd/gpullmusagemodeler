@@ -1,0 +1,63 @@
+{# Memory utilization bar #}
+{% set active = state.models|selectattr('gpu_count', 'gt', 0)|list %}
+{% if active|length > 0 or state.gpus|length > 0 %}
+<div style="display:flex;gap:2px;margin-top:5px;">
+  {% set ns = namespace(gi=0) %}
+  {% set mem_phase = 'prefill' if state.mode == 'data' else 'decode' %}
+  {% for am in active %}
+    {% set m = MODELS[am.model_key] %}
+    {% set gp = state.find_gpu(am.gpu_uid) %}
+    {% if gp %}
+      {% set g = GPUS[gp.gpu_type] %}
+      {% set phase_tp = am.prefill_tp if mem_phase == 'prefill' else am.tp %}
+      {% set phase_pp = am.prefill_pp if mem_phase == 'prefill' else am.pp %}
+      {% set phase_dp = am.prefill_dp if mem_phase == 'prefill' else am.dp %}
+      {% set stage_frac = ((m.layers + phase_pp - 1) // phase_pp) / m.layers %}
+      {% set w = m.weight_bytes(am.prec) %}
+      {% set non_kv = state.profiled_non_kv_gb * 1e9 %}
+      {% for r in range(phase_dp) %}
+        {% for p in range(phase_pp) %}
+          {% for t in range(phase_tp) %}
+            {% set weight_per_gpu = w * stage_frac / phase_tp %}
+            {% set kv_reserved = [0, (g.mem * state.mu - weight_per_gpu - non_kv)]|max %}
+            {% set kv_usable = kv_reserved * (1 - state.kv_slack) %}
+            {% set wp = (weight_per_gpu / g.mem) * 100 %}
+            {% set np = (non_kv / g.mem) * 100 %}
+            {% set kp = (kv_reserved / g.mem) * 100 %}
+            {% set hp = (1 - state.mu) * 100 %}
+          <div style="flex:1;min-width:0;" title="{{ m.name }} ({{ 'P' if mem_phase == 'prefill' else 'D' }} {{ strategy_label(phase_tp, phase_pp, phase_dp) }}): requested {{ (g.mem * state.mu / 1e9)|round(1) }}GB, weights {{ (weight_per_gpu / 1e9)|round(1) }}GB, profiled non-KV {{ (non_kv / 1e9)|round(1) }}GB, KV reserved {{ (kv_reserved / 1e9)|round(1) }}GB, usable KV {{ (kv_usable / 1e9)|round(1) }}GB">
+              <div style="font-size:7px;color:var(--fg2);text-align:center;line-height:1;">G{{ ns.gi }}</div>
+              <div style="height:7px;border-radius:2px;overflow:hidden;display:flex;border:1px solid var(--b0);">
+                <div style="width:{{ wp }}%;background:{{ m.color }};"></div>
+                <div style="width:{{ np }}%;background:var(--amber);"></div>
+                <div style="width:{{ kp }}%;background:{{ m.color }}33;"></div>
+                <div style="width:{{ hp }}%;background:var(--bg2);"></div>
+              </div>
+            </div>
+            {% set ns.gi = ns.gi + 1 %}
+          {% endfor %}
+        {% endfor %}
+      {% endfor %}
+    {% endif %}
+  {% endfor %}
+  {% for gp in state.gpus %}
+    {% set used = state.used_gpu_for_pool(gp.uid) %}
+    {% for i in range(gp.count - used) %}
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:7px;color:var(--fg2);text-align:center;line-height:1;">G{{ ns.gi }}</div>
+        <div style="height:7px;border-radius:2px;border:1px solid var(--b0);background:var(--bg2);"></div>
+      </div>
+      {% set ns.gi = ns.gi + 1 %}
+    {% endfor %}
+  {% endfor %}
+</div>
+{% if ns.gi > 0 %}
+<div class="T" style="margin-top:2px;display:flex;gap:8px;">
+  <span><span style="display:inline-block;width:8px;height:5px;border-radius:1px;background:var(--fg1);vertical-align:middle;"></span> weights</span>
+  <span><span style="display:inline-block;width:8px;height:5px;border-radius:1px;background:var(--amber);vertical-align:middle;"></span> profiled non-KV</span>
+  <span><span style="display:inline-block;width:8px;height:5px;border-radius:1px;background:var(--fg1);opacity:.3;vertical-align:middle;"></span> KV reserved</span>
+  <span>{{ 'Prefill' if mem_phase == 'prefill' else 'Decode' }} layout</span>
+  <span><span style="display:inline-block;width:8px;height:5px;border-radius:1px;background:var(--bg2);border:1px solid var(--b0);vertical-align:middle;"></span> outside cap</span>
+</div>
+{% endif %}
+{% endif %}
