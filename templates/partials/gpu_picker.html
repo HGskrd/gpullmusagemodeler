@@ -7,31 +7,17 @@
             style="min-width:24px;">{{ n }}</button>
     {% endfor %}
   </div>
-  <div class="T" style="margin-top:6px;line-height:1.4;">
-    Every card now maps to at least one planner profile. Notes call out when a profile is a preview or a proxy rather than a fully published roofline.
-  </div>
 </div>
 {% for vendor, cards in gpu_cards_by_vendor.items() %}
   <div class="cat">{{ vendor }}</div>
   {% for card in cards %}
-  <div class="item gpu-card {{ 'planner-ready' if card.planner_options else 'reference-only' }}">
-    <div class="gpu-card-head">
-      <div class="gpu-card-title">{{ card.name }}</div>
-      <span class="gpu-card-chip">{{ card.architecture }}</span>
+    {% set opt = card.planner_options[0] if card.planner_options else none %}
+    <div class="item{% if not opt %} reference-only{% endif %}"
+         {% if opt %}onclick="addGpuFromPicker('{{ panel }}', '{{ opt.gpu_key }}')"
+         {% else %}style="cursor:default;opacity:0.5;"{% endif %}
+         title="{{ card.use_case }}{% if card.note %} · {{ card.note }}{% endif %}">
+      <span>{{ card.name }}</span>
+      <span class="T">{{ card.vram }} · {{ card.architecture }}</span>
     </div>
-    <div class="T gpu-card-meta">{{ card.vram }} · {{ card.use_case }}{% if card.note %} · {{ card.note }}{% endif %}</div>
-    <div class="gpu-card-actions">
-      {% if card.planner_options %}
-        {% for option in card.planner_options %}
-        <button class="acc sm" type="button"
-                onclick="event.stopPropagation(); addGpuFromPicker('{{ panel }}', '{{ option.gpu_key }}')">
-          {{ option.label }}
-        </button>
-        {% endfor %}
-      {% else %}
-      <span class="T gpu-card-note">Reference only</span>
-      {% endif %}
-    </div>
-  </div>
   {% endfor %}
 {% endfor %}

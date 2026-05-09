@@ -18,7 +18,7 @@
   </div>
 
   <div class="T" style="margin-bottom:3px;">
-    {{ "%.1f"|format(m.weight_gb(am.prec)) }} GB weights{% if info.mixed_weight_precision %} · ~{{ "%.2f"|format(info.weight_bpp) }} B/param avg{% endif %}{{ ' · MLA KV' if m.is_mla else '' }}
+    {{ "%.1f"|format(m.weight_gb(am.prec)) }} GB weights{% if info.mixed_weight_precision %} · ~{{ "%.2f"|format(info.weight_bpp) }} B/param avg{% endif %}{{ ' · MLA KV' if m.is_mla else '' }}{% if m.attention_label %} · {{ m.attention_label }}{% endif %}
   </div>
   {% for alert in info.precision_alerts %}
   <div class="warn">⚠ {{ alert }}</div>
@@ -157,7 +157,7 @@
 
     {% if info.decode_fits %}
     <div class="T" title="Decode requested {{ "%.1f"|format(info.decode_mem.requested / 1e9) }} GB · weights {{ "%.1f"|format(info.decode_mem.weights / 1e9) }} GB · profiled non-KV {{ "%.1f"|format(info.decode_mem.profiled_non_kv / 1e9) }} GB · KV reserved {{ "%.1f"|format(info.decode_mem.kv_reserved / 1e9) }} GB">
-      D {{ info.decode_kv_gb }} GB effective KV · ~{{ info.decode_max_slots }} slots{{ ' (MLA compressed)' if m.is_mla else '' }}
+      D {{ info.decode_kv_gb }} GB effective KV · ~{{ info.decode_max_slots }} slots{% if m.is_mla %} (MLA compressed){% elif m.attention_query_heads %} (CCA compressed){% endif %}
     </div>
     {% else %}
     <div style="font-size:10px;color:var(--red);">Decode does not fit within the requested memory cap.</div>

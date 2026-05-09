@@ -66,6 +66,17 @@ button.acc:hover { filter: brightness(1.1); }
 button.ghost { background: transparent; border-color: transparent; color: var(--fg1); }
 button.ghost:hover { background: var(--bg1); }
 button.sm { font-size: 9px; padding: 2px 5px; }
+.button-like {
+  font-family: var(--sans); font-size: 10px; font-weight: 500;
+  background: var(--bg2); border: 1px solid var(--b1); border-radius: var(--r);
+  padding: 3px 8px; color: var(--fg0); cursor: pointer;
+  transition: all .08s; user-select: none; white-space: nowrap;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.button-like:hover { background: var(--bg3); }
+.button-like.ghost { background: transparent; border-color: transparent; color: var(--fg1); }
+.button-like.ghost:hover { background: var(--bg1); }
+.button-like.sm { font-size: 9px; padding: 2px 5px; }
 
 select {
   font-family: var(--mono); font-size: 10px;
@@ -532,22 +543,36 @@ input[type="range"]::-webkit-slider-thumb {
 .project-card .pc-row input[type="range"] { width: 100%; }
 .project-card .pc-row .val {
   font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--fg0);
-  white-space: nowrap;
-  display: inline-flex; align-items: center; gap: 2px;
+  display: inline-flex; align-items: center; justify-content: flex-end; gap: 2px;
+  flex-wrap: wrap; max-width: 145px; text-align: right;
 }
-.project-card .pc-row .val-input {
+.project-card .pc-row .val .T { overflow-wrap: anywhere; }
+.project-card .val-input {
   font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--fg0);
   background: transparent; border: 1px solid transparent;
   border-radius: 3px; padding: 1px 3px; width: 54px; text-align: right;
   transition: border-color .1s, background .1s;
 }
-.project-card .pc-row .val-input:hover  { border-color: var(--b1); background: var(--bg1); }
-.project-card .pc-row .val-input:focus  { border-color: var(--acc); background: var(--bg0); outline: none; }
+.project-card .scale-val-input { width: 72px; }
+.project-card .val-input:hover  { border-color: var(--b1); background: var(--bg1); }
+.project-card .val-input:focus  { border-color: var(--acc); background: var(--bg0); outline: none; }
 .project-card .pc-caps {
   display: flex; flex-wrap: wrap; gap: 3px 4px; align-items: center;
   margin-top: 4px; font-size: 10px;
 }
 .project-card .pc-caps .T { margin-right: 2px; }
+
+/* Scale slider layout — full-width row above value summary */
+.scale-field {
+  display: grid;
+  gap: 5px;
+  margin-top: 6px;
+}
+.scale-field-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
 
 /* Read-only per-use-case fate row in the results panel */
 .pr-fate-head {

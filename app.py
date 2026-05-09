@@ -1,5 +1,6 @@
 """Flask application for vLLM Multi-Model Planner."""
 
+import json
 import math
 import os
 import uuid
@@ -22,6 +23,7 @@ from data import (
     PROJECT_PRESETS,
     MODEL_CAPABILITIES,
     CAPABILITY_LABELS,
+    SCALE_MODELS,
     COUNTRIES,
     CARBON_INTENSITY_HOURLY,
     PRECISIONS,
@@ -52,6 +54,7 @@ from state import (
     add_gpu,
     add_model,
     add_project,
+    add_use_case_def,
     change_gpu_qty,
     clear_compare_state,
     create_default_state,
@@ -60,11 +63,20 @@ from state import (
     get_model_info,
     get_model_infos,
     get_state,
+    get_use_case_defs,
     remove_gpu,
     remove_model,
     remove_project,
+    remove_use_case_def,
     retune_models,
     normalize_plot_mode,
+    replace_project_set,
+    replace_use_case_defs,
+    serialize_project_set,
+    serialize_use_case_defs,
+    project_scale_config,
+    format_scale_value,
+    scale_decimals,
     set_dist_preset,
     set_dist_value,
     set_gpu_cost,
@@ -77,7 +89,11 @@ from state import (
     set_project_capability,
     set_project_dist_preset,
     set_project_field,
+    set_project_kind,
     set_project_name,
+    set_project_scale_value,
+    set_use_case_def_capability,
+    set_use_case_def_field,
     set_projection_choice,
     set_projection_pct,
     set_projection_toggle,
@@ -121,6 +137,170 @@ VISITOR_COOKIE = "planner_vid"
 TAB_PARAM = "tab_id"
 ADMIN_SESSION_KEY = "planner_admin_ok"
 SNAPSHOT_STORE = SnapshotStore(BASE_DIR / "instance" / "planner_snapshots.json")
+
+
+USE_CASE_DETAILS = {
+    "classify": {
+        "summary": "High-volume, low-latency categorization, routing, tagging, and extraction work where the answer is usually a compact label or short structured record.",
+        "examples": (
+            "Ticket triage, document labels, compliance flags, PII detection, support intent routing.",
+            "Offline backfills where a large archive becomes worth processing only if token cost falls far enough.",
+        ),
+        "why": (
+            "Difficulty is low because correctness usually depends on pattern recognition and schema adherence, not deep reasoning.",
+            "Short input and output shapes keep decode pressure low; the economic constraint is usually price per million tokens.",
+            "Batch eligibility reflects the fact that most classification queues can be shifted away from peak hours.",
+        ),
+        "routing": (
+            "Small and mid-sized models should win when their quality clears the SLO, because token price matters more than frontier reasoning.",
+            "Large latent demand makes this a good probe for whether cheaper internal serving creates new work instead of just replacing cloud spend.",
+        ),
+    },
+    "summarize": {
+        "summary": "Long-document compression where users need faithful summaries, extracted takeaways, or briefings from sizeable source material.",
+        "examples": (
+            "Contracts, research papers, meeting transcripts, policy documents, incident reports.",
+            "Periodic knowledge-base digestion or archive summarization jobs.",
+        ),
+        "why": (
+            "The long-document input preset stresses prefill and KV capacity more than a normal chat workload.",
+            "The long output preset assumes the answer is not just a label; the model must produce a useful narrative artifact.",
+            "The long-context requirement prevents routing to models that cannot safely ingest the source material.",
+        ),
+        "routing": (
+            "Models with strong long-context behavior and acceptable token efficiency should beat tiny models that summarize cheaply but unreliably.",
+            "Batch eligibility means capacity planning can often use night-batching levers without hurting user experience.",
+        ),
+    },
+    "chatbot": {
+        "summary": "Interactive assistant traffic for customer or employee support, with tool calls and a strict quality floor.",
+        "examples": (
+            "Customer-service bot, IT helpdesk agent, HR policy assistant, product support copilot.",
+            "Short-turn interactive sessions where the answer must be good enough on the first try.",
+        ),
+        "why": (
+            "The strict SLO models a user-facing workflow where bad answers create escalation cost.",
+            "Tool use is required because real support flows often need retrieval, ticket lookup, account actions, or workflow APIs.",
+            "The chat-shaped distribution keeps this closer to regular interactive prompt and response lengths.",
+        ),
+        "routing": (
+            "Capacity should prioritize low latency and reliable quality over the absolute cheapest token path.",
+            "Because it is not batch eligible, this preset competes for daytime peak capacity.",
+        ),
+    },
+    "email_corrector": {
+        "summary": "High-frequency writing assistance for short business messages, where scale is usually driven by headcount and message volume.",
+        "examples": (
+            "Email correction, tone adjustment, short reply drafting, grammar fixes, translation polish.",
+            "Employee productivity copilots embedded in mail or chat tools.",
+        ),
+        "why": (
+            "Difficulty is modest: the model mostly rewrites or corrects rather than solving deep tasks.",
+            "Chat-shaped input/output keeps the workload interactive and short-turn.",
+            "Scale should be set from staff count, adoption rate, and messages per employee rather than inherited from the preset.",
+        ),
+        "routing": (
+            "Smaller models should clear this workload when the SLO is reasonable, making price and latency central.",
+            "Because demand follows people rather than documents, large organizations can make this small-looking kind dominate volume.",
+        ),
+    },
+    "coding": {
+        "summary": "Developer-assistant traffic for code explanation, edits, generation, and repository-aware workflows.",
+        "examples": (
+            "IDE assistant, code review helper, test generation, bug diagnosis, migration support.",
+            "Longer prompts that include files, logs, stack traces, or design constraints.",
+        ),
+        "why": (
+            "Higher difficulty reflects the need for multi-step reasoning, syntax precision, and domain context.",
+            "Tool and long-context gates represent repository search, file inspection, and large prompt windows.",
+            "The code-shaped input and output distributions produce more decode work than short chat or classification tasks.",
+        ),
+        "routing": (
+            "Quality failures are expensive, so cheap models may be filtered even when they look attractive on raw throughput.",
+            "Token efficiency matters because coding models can produce long intermediate reasoning or verbose patches.",
+        ),
+    },
+    "meeting_notes": {
+        "summary": "Transcript-to-summary workflows for meetings, calls, and interviews that can usually tolerate delayed processing.",
+        "examples": (
+            "Meeting minutes, action-item extraction, call summaries, interview digests.",
+            "Team-wide transcription backfills or daily note generation.",
+        ),
+        "why": (
+            "Long-document input captures transcript ingestion; long-document output captures useful summaries.",
+            "The long-context gate prevents routing to models that cannot safely hold the source material.",
+            "Batch eligibility reflects the fact that most summaries can be delivered minutes later or overnight.",
+        ),
+        "routing": (
+            "This kind often benefits from night batching because immediacy is less important than cost.",
+            "Scale comes from recorded hours and transcript length, not from the task definition itself.",
+        ),
+    },
+    "evals": {
+        "summary": "Offline evaluation, grading, judging, and scoring workloads where many prompts are processed in batches.",
+        "examples": (
+            "Model eval suites, regression checks, judge-model scoring, safety review queues, benchmark runs.",
+            "RAG-style inputs that end in short verdicts, scores, labels, or pass/fail judgments.",
+        ),
+        "why": (
+            "Moderate difficulty and a high SLO model judge workloads where consistency matters more than creative generation.",
+            "The RAG input plus classification output shape captures long evidence with compact decisions.",
+            "Batch eligibility is central: evals can usually wait for cheaper off-peak GPU capacity.",
+        ),
+        "routing": (
+            "This preset should expose whether the cluster has spare batch capacity after interactive demand is served.",
+            "Latent demand models eval coverage that teams skip until per-token cost is low enough.",
+        ),
+    },
+    "inbox_archive": {
+        "summary": "Large personal or organizational inbox archives turned into searchable, summarized, or queryable knowledge bases.",
+        "examples": (
+            "A decade of executive email, team inbox backfills, legal or discovery-oriented mail analysis.",
+            "One-time corpus digestion followed by much smaller incremental updates.",
+        ),
+        "why": (
+            "The scale driver is corpus size: mailboxes, retained years, attachments, and cleanup policy.",
+            "RAG-style input with long-form output reflects retrieval-backed synthesis over many messages.",
+            "Large latent demand models the work that organizations postpone until unit cost drops.",
+        ),
+        "routing": (
+            "The preset stresses batch economics more than interactive latency.",
+            "It should be added at a scale that reflects the corpus, not the number of daily users.",
+        ),
+    },
+    "longctx": {
+        "summary": "Analytical workflows over very large context windows, where the prompt itself is the expensive object.",
+        "examples": (
+            "Log and trace analysis, legal discovery, financial filings, multi-document comparison, technical due diligence.",
+            "Large source packs where retrieval is not enough and the model must reason across the full context.",
+        ),
+        "why": (
+            "High difficulty and long-context gating force routing toward models that can both ingest and reason over large inputs.",
+            "Long input and output shapes stress memory, prefill, and sustained decode capacity.",
+            "The smaller base demand reflects a high-value workflow that is costly enough to stay constrained.",
+        ),
+        "routing": (
+            "KV capacity can dominate here; a model that is cheap per token but memory-starved may still be the wrong fit.",
+            "Latent demand represents analyses that become practical only when internal cost drops below the unlock threshold.",
+        ),
+    },
+    "research": {
+        "summary": "High-value agentic research where the model gathers information, reasons through tradeoffs, and produces a substantial answer.",
+        "examples": (
+            "Market research, technical investigation, strategy briefs, due diligence, multi-source synthesis.",
+            "Agent loops that combine tools, retrieval, reasoning, and long-form synthesis.",
+        ),
+        "why": (
+            "The highest difficulty and SLO reserve this workload for models with strong reasoning behavior.",
+            "Tool and reasoning requirements encode the fact that this is an agent workflow, not plain autocomplete.",
+            "RAG input plus long-document output models substantial source context and a detailed final deliverable.",
+        ),
+        "routing": (
+            "Low volume but high WTP means this can justify expensive frontier or large open-weight models.",
+            "If no deployed model clears the SLO, demand should leak to cloud rather than be counted as served.",
+        ),
+    },
+}
 
 
 def _new_id() -> str:
@@ -198,6 +378,7 @@ def _template_context() -> dict:
         "PROJECT_PRESETS": PROJECT_PRESETS,
         "MODEL_CAPABILITIES": MODEL_CAPABILITIES,
         "CAPABILITY_LABELS": CAPABILITY_LABELS,
+        "SCALE_MODELS": SCALE_MODELS,
         "COUNTRIES": COUNTRIES,
         "VISIBLE_PLOT_MODES": VISIBLE_PLOT_MODES,
         "INPUT_BUCKETS": INPUT_BUCKETS,
@@ -220,6 +401,9 @@ def _template_context() -> dict:
         "strategy_label": strategy_label,
         "required_quality": required_quality,
         "success_rate": success_rate,
+        "project_scale_config": project_scale_config,
+        "format_scale_value": format_scale_value,
+        "scale_decimals": scale_decimals,
         "math": math,
     }
 
@@ -271,6 +455,125 @@ def index():
 @app.route("/explainer")
 def explainer():
     return render_template("explainer.html")
+
+
+@app.route("/use-cases")
+def use_cases():
+    s = get_state(_scope_id())
+    return render_template(
+        "use_cases.html",
+        state=s,
+        USE_CASE_DEFS=get_use_case_defs(s),
+        use_case_details=USE_CASE_DETAILS,
+        **_template_context(),
+    )
+
+
+def _use_case_library_response(reason: str | None = None):
+    s = get_state(_scope_id())
+    if reason:
+        _record_snapshot(reason, s, get_compare_state(_scope_id()), path="/use-cases")
+    return render_template(
+        "partials/use_case_library.html",
+        state=s,
+        USE_CASE_DEFS=get_use_case_defs(s),
+        use_case_details=USE_CASE_DETAILS,
+        **_template_context(),
+    )
+
+
+@app.route("/use-cases/library")
+def use_cases_library():
+    return _use_case_library_response()
+
+
+@app.route("/use-cases/definition/add", methods=["POST"])
+def use_case_definition_add():
+    try:
+        s = get_state(_scope_id())
+        add_use_case_def(s)
+        return _use_case_library_response("use_case_def_add")
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/use-cases/definition/remove", methods=["POST"])
+def use_case_definition_remove():
+    try:
+        s = get_state(_scope_id())
+        remove_use_case_def(s, request.form.get("key", ""))
+        return _use_case_library_response("use_case_def_remove")
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/use-cases/definition/set", methods=["POST"])
+def use_case_definition_set():
+    try:
+        s = get_state(_scope_id())
+        key = request.form.get("key", "")
+        field_name = request.form.get("field", "")
+        raw_value = request.form.get("value", "")
+        if field_name == "capability":
+            set_use_case_def_capability(s, key, request.form.get("cap", ""), raw_value in ("on", "true", "1"))
+        elif field_name == "batch_eligible":
+            set_use_case_def_field(s, key, "batch_eligible", raw_value in ("on", "true", "1"))
+        elif field_name == "tokens_day_m":
+            set_use_case_def_field(s, key, "tokens_day", float(raw_value or 0.0) * 1e6)
+        elif field_name == "latent_jobs_day_m":
+            set_use_case_def_field(s, key, "latent_jobs_day", float(raw_value or 0.0) * 1e6)
+        elif field_name == "wtp_per_m_cents":
+            set_use_case_def_field(s, key, "wtp_per_m", float(raw_value or 0.0) / 100.0)
+        elif field_name == "unlock_price_per_m_cents":
+            set_use_case_def_field(s, key, "unlock_price_per_m", float(raw_value or 0.0) / 100.0)
+        elif field_name == "min_success_rate_pct":
+            set_use_case_def_field(s, key, "min_success_rate", float(raw_value or 0.0) / 100.0)
+        elif field_name == "difficulty_elo":
+            set_use_case_def_field(s, key, "difficulty", max(0.0, min(1.0, float(raw_value or 0.0) / 3000.0)))
+        elif field_name == "scale_value":
+            set_use_case_def_field(s, key, "scale_value", float(raw_value or 0.0))
+        elif field_name == "scale_token_multiplier":
+            set_use_case_def_field(s, key, "scale_token_multiplier", float(raw_value or 0.0))
+        elif field_name in {"scale_max", "scale_step"}:
+            set_use_case_def_field(s, key, field_name, float(raw_value or 0.0))
+        elif field_name in {"name", "scale_hint", "scale_model", "scale_label", "scale_unit", "scale_formula", "in_pre", "out_pre"}:
+            set_use_case_def_field(s, key, field_name, raw_value)
+        elif field_name in {"tokens_day", "wtp_per_m", "difficulty", "min_success_rate", "latent_jobs_day", "unlock_price_per_m"}:
+            set_use_case_def_field(s, key, field_name, float(raw_value or 0.0))
+        return _use_case_library_response("use_case_def_set")
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/use-cases/export")
+def use_case_definition_export():
+    try:
+        s = get_state(_scope_id())
+        body = json.dumps(serialize_use_case_defs(s), indent=2, sort_keys=True) + "\n"
+        resp = make_response(body)
+        resp.headers["Content-Type"] = "application/json; charset=utf-8"
+        resp.headers["Content-Disposition"] = 'attachment; filename="use-case-library.json"'
+        return resp
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/use-cases/import", methods=["POST"])
+def use_case_definition_import():
+    try:
+        s = get_state(_scope_id())
+        raw = request.form.get("json", "")
+        if not raw.strip():
+            return jsonify({"error": "Choose a use-case JSON file first."}), 400
+        replace_use_case_defs(s, json.loads(raw))
+        retune_models(s, preserve_existing=False)
+        return _use_case_library_response("use_case_def_import")
+    except json.JSONDecodeError as e:
+        return jsonify({"error": f"Invalid JSON: {e.msg}"}), 400
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/session/sync")
@@ -639,13 +942,19 @@ def project_set():
         uid = int(request.form.get("uid", "0"))
         field_name = request.form.get("field", "")
         raw_value = request.form.get("value", "")
-        if field_name == "name":
+        if field_name == "kind":
+            set_project_kind(s, uid, raw_value)
+            retune_models(s, preserve_existing=False)
+        elif field_name == "name":
             set_project_name(s, uid, raw_value)
         elif field_name == "batch_eligible":
             set_project_batch_eligible(s, uid, raw_value in ("on", "true", "1"))
         elif field_name == "tokens_day_m":
             # slider gives millions of tokens/day; persist in tokens/day
             set_project_field(s, uid, "tokens_day", float(raw_value or 0.0) * 1e6)
+            retune_models(s, preserve_existing=False)
+        elif field_name == "scale_value":
+            set_project_scale_value(s, uid, float(raw_value or 0.0))
             retune_models(s, preserve_existing=False)
         elif field_name == "wtp_per_m_cents":
             # slider gives cents per M tokens; persist as $/M tokens
@@ -681,6 +990,43 @@ def project_set():
             if field_name == "tokens_day":
                 retune_models(s, preserve_existing=False)
         return _tracked_htmx_response("project_set", s)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/project/export")
+def project_export():
+    try:
+        s = _request_state()
+        if s is None:
+            return jsonify({"error": "No state found"}), 404
+        payload = serialize_project_set(s)
+        body = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+        resp = make_response(body)
+        resp.headers["Content-Type"] = "application/json; charset=utf-8"
+        resp.headers["Content-Disposition"] = 'attachment; filename="use-cases.json"'
+        return resp
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/project/import", methods=["POST"])
+def project_import():
+    try:
+        s = _request_state()
+        if s is None:
+            return _htmx_response()
+        raw = request.form.get("json", "")
+        if not raw.strip():
+            return jsonify({"error": "Choose a use-case JSON file first."}), 400
+        payload = json.loads(raw)
+        replace_project_set(s, payload)
+        retune_models(s, preserve_existing=False)
+        return _tracked_htmx_response("project_import", s)
+    except json.JSONDecodeError as e:
+        return jsonify({"error": f"Invalid JSON: {e.msg}"}), 400
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -789,7 +1135,9 @@ def picker_model():
 
 @app.route("/picker/project")
 def picker_project():
-    return render_template("partials/project_picker.html", panel=request.args.get("panel", "A"), PROJECT_PRESETS=PROJECT_PRESETS)
+    panel = request.args.get("panel", "A")
+    s = _state(panel) or get_state(_scope_id())
+    return render_template("partials/project_picker.html", panel=panel, PROJECT_PRESETS=get_use_case_defs(s))
 
 
 @app.route("/admin", methods=["GET"])

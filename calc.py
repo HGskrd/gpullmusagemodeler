@@ -149,6 +149,85 @@ def kv_bytes_per_token(m: Model, prec: str) -> float:
     return kv_layers * 2 * m.kv_heads * m.head_dim * bpe
 
 
+def _split_attention_layers(total_layers: int, local_layers: int) -> tuple[int, int]:
+    local = min(max(local_layers, 0), max(total_layers, 0))
+    return max(total_layers - local, 0), local
+
+
+def _local_context_tokens(m: Model, seq_len: float) -> float:
+    if m.local_attention_window <= 0:
+        return max(seq_len, 0.0)
+    return min(max(seq_len, 0.0), float(m.local_attention_window))
+
+
+def _kv_bytes_per_layer(m: Model, prec: str) -> float:
+    bpe = kv_cache_bytes_per_elem(prec)
+    if m.is_mla:
+        return (m.mla_kv_dim + m.mla_rope_dim) * 2 * bpe
+    return 2 * m.kv_heads * m.head_dim * bpe
+
+
+def linear_attention_state_bytes(m: Model, prec: str) -> float:
+    layers = m.linear_attention_layer_count
+    if layers <= 0:
+        return 0.0
+
+    bpe = kv_cache_bytes_per_elem(prec)
+    heads = m.linear_attention_head_count
+    head_dim = m.linear_attention_head_size
+    k_heads = m.linear_attention_k_head_count
+    k_head_dim = m.linear_attention_k_head_size
+    conv_len = m.linear_attention_kernel_size - 1
+
+    recurrent_elems = heads * head_dim * head_dim
+    conv_elems = conv_len * ((heads * head_dim) + (2 * k_heads * k_head_dim))
+    return layers * (recurrent_elems + conv_elems) * bpe
+
+
+def kv_cache_bytes_for_sequence(m: Model, seq_len: float, prec: str) -> float:
+    seq = max(float(seq_len), 0.0)
+    full_layers, local_layers = _split_attention_layers(m.kv_layer_count, m.local_attention_layers)
+    effective_tokens = full_layers * seq + local_layers * _local_context_tokens(m, seq)
+    return effective_tokens * _kv_bytes_per_layer(m, prec)
+
+
+def per_replica_kv_cache_bytes(m: Model, seq_len: float, prec: str, pp: int, tp: int) -> float:
+    pp = max(pp, 1)
+    token_cache = kv_cache_bytes_for_sequence(m, seq_len, prec) / (pp * kv_shards(m, tp))
+    linear_state = linear_attention_state_bytes(m, prec) / (pp * max(tp, 1))
+    return token_cache + linear_state
+
+
+def _linear_attention_work(m: Model, seq_len: float) -> float:
+    layers = m.linear_attention_layer_count
+    if layers <= 0:
+        return 0.0
+    heads = m.linear_attention_head_count
+    head_dim = m.linear_attention_head_size
+    return layers * heads * head_dim * head_dim * max(seq_len, 0.0)
+
+
+def _decode_attention_work(m: Model, pr: int, avg_seq: float, pp: int) -> float:
+    full_layers, local_layers = _split_attention_layers(m.attention_layer_count, m.local_attention_layers)
+    full_width = m.attention_query_head_count * m.head_dim
+    local_width = m.local_attention_head_count * m.head_dim
+    full_work = full_layers * full_width * max(avg_seq, 0.0)
+    local_work = local_layers * local_width * _local_context_tokens(m, avg_seq)
+    linear_work = _linear_attention_work(m, 1.0)
+    return 2 * pr * (full_work + local_work + linear_work) / max(pp, 1)
+
+
+def _prefill_attention_work(m: Model, pr: int, seq_len: int, pp: int) -> float:
+    seq = max(float(seq_len), 0.0)
+    full_layers, local_layers = _split_attention_layers(m.attention_layer_count, m.local_attention_layers)
+    full_width = m.attention_query_head_count * m.head_dim
+    local_width = m.local_attention_head_count * m.head_dim
+    full_work = full_layers * full_width * seq * seq
+    local_work = local_layers * local_width * seq * _local_context_tokens(m, seq)
+    linear_work = _linear_attention_work(m, seq)
+    return 2 * pr * (full_work + local_work + linear_work) / max(pp, 1)
+
+
 def gpu_supports_mxfp4(g: GPU) -> bool:
     return g.fp4 is not None and g.key in MXFP4_GPU_KEYS
 
@@ -254,7 +333,7 @@ def tp_supported(m: Model, tp: int) -> bool:
         return False
     # MLA sharding constraints are model/runtime-specific. Be conservative until
     # we model them explicitly instead of allowing any TP because kv_heads == 1.
-    if m.is_mla:
+    if m.is_mla and not m.mla_tp_supported:
         return tp == 1
     kv_heads = max(1, m.kv_heads)
     if tp <= kv_heads:
@@ -459,12 +538,12 @@ def _decode_step_time(
 ) -> float:
     aw = _active_weight_bytes(m, prec)
     wt = (aw / (tp * pp)) / (g.effective_bw * eff.bw_eff)
-    kv_read_bytes = pr * avg_seq * (kv_bytes_per_token(m, prec) / (pp * kv_shards(m, tp)))
+    kv_read_bytes = pr * per_replica_kv_cache_bytes(m, avg_seq, prec, pp, tp)
     kv_time = kv_read_bytes / (g.effective_bw * eff.bw_eff)
     bt = wt + kv_time
 
     wf = 2 * m.active_params * pr / pp
-    af = pr * (m.layers / pp) * m.num_heads * avg_seq * m.head_dim * 2
+    af = _decode_attention_work(m, pr, avg_seq, pp)
     ct = (wf + af) / (gpu_flops(g, prec) * tp * eff.comp_eff)
 
     comm = communication_breakdown(m, tp, pp, pr, avg_seq, g, eff)
@@ -493,7 +572,7 @@ def _compute_decode_core(
 
     pr = math.ceil(bs / dp)
     avg_seq = avg_in + avg_out / 2.0
-    avg_kv = avg_seq * mem.kv_per_token
+    avg_kv = per_replica_kv_cache_bytes(m, avg_seq, prec, pp, tp)
     max_slots = int(mem.kv_budget / avg_kv) if avg_kv > 0 else 0
     if eff.sched_budget > 0:
         max_slots = min(max_slots, eff.sched_budget)
@@ -579,12 +658,13 @@ def compute_prefill(
         return PrefillResult(tps=0, service_time=0.0, rps=math.inf, max_batch=UNBOUNDED_BATCH)
 
     pr = math.ceil(bs / dp)
-    max_per_replica = int(mem.kv_budget / (seq_len * mem.kv_per_token)) if mem.kv_per_token > 0 else 0
+    seq_kv = per_replica_kv_cache_bytes(m, seq_len, prec, pp, tp)
+    max_per_replica = int(mem.kv_budget / seq_kv) if seq_kv > 0 else 0
     if pr > max_per_replica:
         return None
 
     ffn = 2 * m.active_params * pr * seq_len / pp
-    att = 2 * (m.layers / pp) * m.num_heads * m.head_dim * pr * seq_len * seq_len
+    att = _prefill_attention_work(m, pr, seq_len, pp)
     tf = ffn + att
     ct = tf / (gpu_flops(g, prec) * tp * eff.comp_eff)
 

@@ -1,239 +1,47 @@
-{# Single use-case (project) configuration card.
-   Sliders POST on release (change); the adjacent text input mirrors the slider live
-   via JS (data-live-target) and lets the user type an exact value. #}
+{# Calculator use-case card: selected kind + organization-specific scale only. #}
+{% set scale_cfg = project_scale_config(state, proj) %}
 {% set q_floor = required_quality(proj.difficulty, proj.min_success_rate) %}
-{% set in_preset = DIST_PRESETS[proj.in_pre] %}
-{% set out_preset = DIST_PRESETS[proj.out_pre] %}
-{% set diff_elo = (proj.difficulty * 3000)|round|int %}
-{% set slo_pct = (proj.min_success_rate * 100)|round|int %}
-{% set demand_m = (proj.tokens_day / 1e6)|round|int %}
-{% set wtp_disp = "%.2f"|format(proj.wtp_per_m) %}
-{% set latent_m = (proj.latent_jobs_day / 1e6)|round|int %}
-{% set unlock_disp = "%.2f"|format(proj.unlock_price_per_m) %}
-<div class="card project-card" style="position:relative;">
+<div class="card project-card compact-project-card" style="position:relative;">
   <button class="ghost sm" style="position:absolute;top:3px;right:3px;color:var(--red);padding:1px 4px;"
           hx-post="/project/remove" hx-target="#main-content"
           hx-vals='{"panel":"{{ panel }}","uid":"{{ proj.uid }}"}'>✕</button>
 
-  <div style="margin-bottom:4px;padding-right:18px;">
-    <input type="text" class="pr-name" style="width:100%;font-size:11px;font-weight:600;"
-           value="{{ proj.name }}"
-           name="value"
-           hx-post="/project/set"
-           hx-target="#main-content"
-           hx-trigger="change, keyup[key=='Enter']"
-           hx-vals='{"panel":"{{ panel }}","uid":"{{ proj.uid }}","field":"name"}' />
+  <div style="padding-right:18px;">
+    <div style="font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ proj.name }}</div>
+    <div class="T">
+      ELO {{ (proj.difficulty * 3000)|round|int }}
+      · SLO {{ (proj.min_success_rate * 100)|round|int }}%
+      · {{ proj.in_pre }}/{{ proj.out_pre }}
+      · needs q≥{{ "%.2f"|format(q_floor) }}
+    </div>
   </div>
 
-  <div class="pc-row" title="Task hardness on a 0–3000 ELO scale. Paired with each model's benchmark-anchored quality via success_rate(quality, difficulty) to score eligibility. Higher = needs a smarter model.">
-    <span class="T">Difficulty</span>
-    <input type="range" min="0" max="3000" step="10"
-           name="value"
-           value="{{ diff_elo }}"
-           hx-post="/project/set"
-           hx-target="#main-content"
-           hx-trigger="change"
-           hx-vals='{"panel":"{{ panel }}","uid":"{{ proj.uid }}","field":"difficulty_elo"}'
-           data-live-target="#proj-diff-val-{{ proj.uid }}-{{ panel }}" />
-    <span class="val">
-      <input type="text" class="val-input" inputmode="numeric"
-             id="proj-diff-val-{{ proj.uid }}-{{ panel }}"
-             value="{{ diff_elo }}"
-             name="value"
-             hx-post="/project/set"
-             hx-target="#main-content"
-             hx-trigger="change, keyup[key=='Enter']"
-             hx-vals='{"panel":"{{ panel }}","uid":"{{ proj.uid }}","field":"difficulty_elo"}' />
-      <span class="T">ELO</span>
-    </span>
-  </div>
-
-  <div class="pc-row" title="Success-rate floor this use case requires. Candidate models whose success_rate(quality, difficulty) falls below this are rejected — the cheap-and-dumb route doesn't count as served if it blows the SLO.">
-    <span class="T">Quality SLO</span>
-    <input type="range" min="50" max="100" step="5"
-           name="value"
-           value="{{ slo_pct }}"
-           hx-post="/project/set"
-           hx-target="#main-content"
-           hx-trigger="change"
-           hx-vals='{"panel":"{{ panel }}","uid":"{{ proj.uid }}","field":"min_success_rate_pct"}'
-           data-live-target="#proj-slo-val-{{ proj.uid }}-{{ panel }}" />
-    <span class="val">
-      <input type="text" class="val-input" inputmode="numeric"
-             id="proj-slo-val-{{ proj.uid }}-{{ panel }}"
-             value="{{ slo_pct }}"
-             name="value"
-             hx-post="/project/set"
-             hx-target="#main-content"
-             hx-trigger="change, keyup[key=='Enter']"
-             hx-vals='{"panel":"{{ panel }}","uid":"{{ proj.uid }}","field":"min_success_rate_pct"}' />
-      <span class="T">%</span>
-    </span>
-  </div>
-
-  <div class="T tip" style="margin:2px 0 4px;font-size:10px;"
-       title="Derived from difficulty + SLO: the minimum model-quality score (AA Intelligence Index, calibrated to 0.30..0.95) that clears this use case's SLO. Compare against the quality number on each model card — anything below this bar gets rejected at routing time.">
-    Needs model quality ≥ <span class="M">{{ "%.2f"|format(q_floor) }}</span>
-  </div>
-
-  <div class="pc-row" title="Daily token volume this use case brings. Drives capacity math and — blended with every other use case's Input shape / Output shape — the aggregate prefill/decode length distribution the planner uses.">
-    <span class="T">Demand</span>
-    <input type="range" min="0" max="5000" step="10"
-           name="value"
-           value="{{ demand_m }}"
-           hx-post="/project/set"
-           hx-target="#main-content"
-           hx-trigger="change"
-           hx-vals='{"panel":"{{ panel }}","uid":"{{ proj.uid }}","field":"tokens_day_m"}'
-           data-live-target="#proj-demand-val-{{ proj.uid }}-{{ panel }}" />
-    <span class="val">
-      <input type="text" class="val-input" inputmode="numeric"
-             id="proj-demand-val-{{ proj.uid }}-{{ panel }}"
-             value="{{ demand_m }}"
-             name="value"
-             hx-post="/project/set"
-             hx-target="#main-content"
-             hx-trigger="change, keyup[key=='Enter']"
-             hx-vals='{"panel":"{{ panel }}","uid":"{{ proj.uid }}","field":"tokens_day_m"}' />
-      <span class="T">M/d</span>
-    </span>
-  </div>
-
-  <div class="pc-row" title="Willingness-to-pay ceiling, $/M tokens. If the cheapest compatible on-prem $/M exceeds this, the use case flees to cloud; if cloud also exceeds it, the work is destroyed. Remember: a verbose model costs more per unit of delivered value — the effective $/M is divided by token_efficiency.">
-    <span class="T">WTP ceiling</span>
-    <input type="range" min="0" max="2500" step="5"
-           name="value"
-           value="{{ (proj.wtp_per_m * 100)|round|int }}"
-           hx-post="/project/set"
-           hx-target="#main-content"
-           hx-trigger="change"
-           hx-vals='{"panel":"{{ panel }}","uid":"{{ proj.uid }}","field":"wtp_per_m_cents"}'
-           data-live-target="#proj-wtp-val-{{ proj.uid }}-{{ panel }}"
-           data-live-scale="0.01"
-           data-live-decimals="2" />
-    <span class="val" style="gap:1px;">
-      <span class="T">$</span>
-      <input type="text" class="val-input" inputmode="decimal"
-             id="proj-wtp-val-{{ proj.uid }}-{{ panel }}"
-             value="{{ wtp_disp }}"
-             name="value"
-             hx-post="/project/set"
-             hx-target="#main-content"
-             hx-trigger="change, keyup[key=='Enter']"
-             hx-vals='{"panel":"{{ panel }}","uid":"{{ proj.uid }}","field":"wtp_per_m"}' />
-      <span class="T">/M</span>
-    </span>
-  </div>
-
-  <div class="pc-row" title="Shape of prompts this use case tends to produce. Picks from the same presets that used to live in the standalone Input/Output distribution cards — now per use case. Models downstream see a demand-weighted blend across all use cases.">
-    <span class="T">Input shape</span>
-    <select name="value" class="sm"
-            style="flex:1;min-width:0;font-size:10px;padding:1px 4px;"
-            hx-post="/project/set"
-            hx-target="#main-content"
-            hx-trigger="change"
-            hx-vals='{"panel":"{{ panel }}","uid":"{{ proj.uid }}","field":"in_pre"}'>
-      {% for pk in DIST_PRESETS.keys() %}
-      <option value="{{ pk }}" {{ 'selected' if proj.in_pre == pk else '' }}>{{ pk }}</option>
-      {% endfor %}
-    </select>
-    <span class="val T" title="Mean prompt length implied by this input preset.">μ {{ avg_dist(in_preset['in'], INPUT_BUCKETS)|fmt_num }}</span>
-  </div>
-
-  <div class="pc-row" title="Shape of generations this use case expects. Long-output use cases (thinking, summarization) saturate decode bandwidth differently than short-output ones (classify, score).">
-    <span class="T">Output shape</span>
-    <select name="value" class="sm"
-            style="flex:1;min-width:0;font-size:10px;padding:1px 4px;"
-            hx-post="/project/set"
-            hx-target="#main-content"
-            hx-trigger="change"
-            hx-vals='{"panel":"{{ panel }}","uid":"{{ proj.uid }}","field":"out_pre"}'>
-      {% for pk in DIST_PRESETS.keys() %}
-      <option value="{{ pk }}" {{ 'selected' if proj.out_pre == pk else '' }}>{{ pk }}</option>
-      {% endfor %}
-    </select>
-    <span class="val T" title="Mean output length implied by this output preset.">μ {{ avg_dist(out_preset['out'], OUTPUT_BUCKETS)|fmt_num }}</span>
-  </div>
-
-  <div class="pc-caps" title="Hard capability gates. A model must supply ALL ticked capabilities to be eligible for this use case — this is the gate that cuts before quality/SLO scoring.">
-    <span class="T">Needs:</span>
-    {% for cap in MODEL_CAPABILITIES %}
-    <label class="cap-chip {{ 'on' if cap in proj.requires else '' }}"
-           title="{{ CAPABILITY_LABELS[cap] }} requirement for this use case."
-           style="display:inline-flex;align-items:center;gap:3px;padding:1px 6px;border:1px solid var(--b1);border-radius:10px;cursor:pointer;font-size:10px;{% if cap in proj.requires %}background:color-mix(in srgb, var(--acc) 18%, var(--bg0));border-color:var(--acc);color:var(--fg0);{% endif %}">
-      <input type="checkbox" name="value" style="margin:0;"
-             {{ "checked" if cap in proj.requires else "" }}
-             hx-post="/project/set"
-             hx-target="#main-content"
-             hx-trigger="change"
-             hx-vals='{"panel":"{{ panel }}","uid":"{{ proj.uid }}","field":"capability","cap":"{{ cap }}"}' />
-      {{ CAPABILITY_LABELS[cap] }}
-    </label>
-    {% endfor %}
-  </div>
-
-  <label class="pc-batch" style="display:flex;align-items:center;gap:4px;margin-top:4px;font-size:10px;"
-         title="If on, this use case can shift off-peak under the night-batching lever in the projection panel — lets demand move from peak hours into the overnight valley in exchange for a discount.">
-    <input type="checkbox" name="value"
-           {{ "checked" if proj.batch_eligible else "" }}
-           hx-post="/project/set"
-           hx-target="#main-content"
-           hx-trigger="change"
-           hx-vals='{"panel":"{{ panel }}","uid":"{{ proj.uid }}","field":"batch_eligible"}' />
-    <span class="T">Batch-eligible (shift off-peak)</span>
-  </label>
-
-  <details style="margin-top:4px;">
-    <summary class="T" style="cursor:pointer;user-select:none;font-size:10px;"
-             title="Latent demand: tokens that aren't in today's budget but would materialize if the on-prem floor dropped below the unlock price. Models the 'if it's cheap enough we'll do the backfill' pattern.">Latent demand</summary>
-    <div class="pc-row" style="margin-top:3px;"
-         title="Size of the hidden pool that only materializes once on-prem $/M drops to the unlock threshold.">
-      <span class="T">Pool</span>
-      <input type="range" min="0" max="20000" step="50"
-             name="value"
-             value="{{ latent_m }}"
-             hx-post="/project/set"
-             hx-target="#main-content"
-             hx-trigger="change"
-             hx-vals='{"panel":"{{ panel }}","uid":"{{ proj.uid }}","field":"latent_jobs_day_m"}'
-             data-live-target="#proj-latent-val-{{ proj.uid }}-{{ panel }}" />
-      <span class="val">
-        <input type="text" class="val-input" inputmode="numeric"
-               id="proj-latent-val-{{ proj.uid }}-{{ panel }}"
-               value="{{ latent_m }}"
+  <div class="scale-field" title="{{ scale_cfg.formula }}. Use-case dynamics are edited on the /use-cases page.">
+    <div class="scale-field-header">
+      <span class="T" style="font-weight:500;">Scale</span>
+      <div style="display:inline-flex;align-items:center;gap:5px;">
+        <input type="text" class="val-input scale-val-input" inputmode="decimal"
+               id="proj-demand-val-{{ proj.uid }}-{{ panel }}"
+               value="{{ scale_cfg.display_value }}"
                name="value"
                hx-post="/project/set"
                hx-target="#main-content"
                hx-trigger="change, keyup[key=='Enter']"
-               hx-vals='{"panel":"{{ panel }}","uid":"{{ proj.uid }}","field":"latent_jobs_day_m"}' />
-        <span class="T">M/d</span>
-      </span>
+               hx-vals='{"panel":"{{ panel }}","uid":"{{ proj.uid }}","field":"scale_value"}' />
+        <span class="T">{{ scale_cfg.unit }}</span>
+      </div>
     </div>
-    <div class="pc-row"
-         title="When the cheapest viable on-prem candidate's $/M falls at or below this, the latent pool joins the routing pass — all-or-nothing, no partial activation.">
-      <span class="T">Unlock at</span>
-      <input type="range" min="0" max="2000" step="5"
-             name="value"
-             value="{{ (proj.unlock_price_per_m * 100)|round|int }}"
-             hx-post="/project/set"
-             hx-target="#main-content"
-             hx-trigger="change"
-             hx-vals='{"panel":"{{ panel }}","uid":"{{ proj.uid }}","field":"unlock_price_per_m_cents"}'
-             data-live-target="#proj-unlock-val-{{ proj.uid }}-{{ panel }}"
-             data-live-scale="0.01"
-             data-live-decimals="2" />
-      <span class="val" style="gap:1px;">
-        <span class="T">$</span>
-        <input type="text" class="val-input" inputmode="decimal"
-               id="proj-unlock-val-{{ proj.uid }}-{{ panel }}"
-               value="{{ unlock_disp }}"
-               name="value"
-               hx-post="/project/set"
-               hx-target="#main-content"
-               hx-trigger="change, keyup[key=='Enter']"
-               hx-vals='{"panel":"{{ panel }}","uid":"{{ proj.uid }}","field":"unlock_price_per_m"}' />
-        <span class="T">/M</span>
-      </span>
-    </div>
-  </details>
+    <input type="range" min="{{ scale_cfg.min }}" max="{{ scale_cfg.max }}" step="{{ scale_cfg.step }}"
+           name="value"
+           value="{{ scale_cfg.value }}"
+           hx-post="/project/set"
+           hx-target="#main-content"
+           hx-trigger="change"
+           hx-vals='{"panel":"{{ panel }}","uid":"{{ proj.uid }}","field":"scale_value"}'
+           data-live-target="#proj-demand-val-{{ proj.uid }}-{{ panel }}"
+           data-live-decimals="{{ scale_cfg.decimals }}" />
+  </div>
+  <div class="T" style="margin-top:1px;">
+    {{ scale_cfg.model_label }} scale · {{ proj.tokens_day|fmt_num }} tokens/day equivalent
+  </div>
 </div>

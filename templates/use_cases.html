@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>vLLM planner - use cases</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<script src="https://unpkg.com/htmx.org@2.0.4"></script>
+<style>
+  body.docs-body { max-width: 1120px; padding: 18px; }
+  .docs-hdr {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 10px; flex-wrap: wrap; margin-bottom: 10px;
+  }
+  .docs-hdr h1 { font-size: 16px; }
+  .docs-hdr .sub { font-size: 10px; color: var(--fg2); }
+  .docs-tabs { display: flex; gap: 6px; align-items: center; }
+  .docs-tabs a {
+    font-family: var(--sans); font-size: 10px; font-weight: 500;
+    background: var(--bg2); border: 1px solid var(--b1); border-radius: var(--r);
+    padding: 4px 10px; color: var(--fg0); text-decoration: none;
+    transition: background .08s;
+  }
+  .docs-tabs a:hover { background: var(--bg3); }
+  .docs-tabs a.on { background: var(--fg0); color: var(--bg0); border-color: var(--fg0); }
+  .toc {
+    display: flex; flex-wrap: wrap; gap: 4px 10px;
+    padding: 8px 10px; background: var(--bg1); border: 1px solid var(--b0);
+    border-radius: var(--r); margin-bottom: 10px; font-size: 11px;
+  }
+  .toc a { color: var(--acc); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  .docs-section { margin-bottom: 14px; }
+  .docs-section h2 {
+    font-size: 13px; font-weight: 600; text-transform: none;
+    letter-spacing: 0; color: var(--fg0); margin-bottom: 6px;
+    font-family: var(--mono); padding-top: 4px;
+  }
+  .docs-section h3 {
+    font-size: 11px; font-weight: 600; margin: 8px 0 4px;
+    color: var(--fg0);
+  }
+  .docs-section p { font-size: 12px; color: var(--fg0); margin: 4px 0; }
+  .docs-section p.note { color: var(--fg1); font-size: 11px; }
+  .docs-section ul {
+    font-size: 12px; color: var(--fg0);
+    margin: 4px 0 4px 18px; padding: 0;
+  }
+  .docs-section li { margin: 2px 0; }
+  .catalog { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .catalog th, .catalog td {
+    padding: 5px 6px; border-bottom: 1px solid var(--b0);
+    text-align: left; vertical-align: top;
+  }
+  .catalog th {
+    font-family: var(--mono); font-size: 10px; color: var(--fg2);
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .catalog td.num { font-family: var(--mono); white-space: nowrap; color: var(--fg1); }
+  .catalog tr:last-child td { border-bottom: none; }
+  .def-card { position: relative; display: grid; gap: 4px; }
+  .def-card .pc-row {
+    display: grid; grid-template-columns: 78px 1fr auto;
+    align-items: center; gap: 6px;
+  }
+  .def-card .pc-row .val {
+    font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--fg0);
+    display: inline-flex; align-items: center; justify-content: flex-end; gap: 2px;
+    flex-wrap: wrap; max-width: 170px; text-align: right;
+  }
+  .def-card .pc-row .val .T { overflow-wrap: anywhere; }
+  .def-card .pc-row .val-input {
+    font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--fg0);
+    background: transparent; border: 1px solid transparent; border-radius: 3px;
+    padding: 1px 3px; width: 76px; text-align: right;
+  }
+  .def-card .pc-row .val-input:hover,
+  .def-card .pc-row .val-input:focus { border-color: var(--acc); background: var(--bg0); outline: none; }
+  .def-row { display: grid; grid-template-columns: 78px 1fr; align-items: center; gap: 6px; }
+  .def-text {
+    font-family: var(--sans); font-size: 10px; color: var(--fg0);
+    background: var(--bg0); border: 1px solid var(--b1); border-radius: 4px;
+    padding: 3px 5px; width: 100%;
+  }
+  .def-name { flex: 1 1 180px; min-width: 180px; font-size: 12px !important; }
+  .usecase-head {
+    display: flex; justify-content: space-between; gap: 8px;
+    align-items: baseline; flex-wrap: wrap;
+  }
+  .usecase-key {
+    font-family: var(--mono); font-size: 10px; color: var(--fg2);
+    border: 1px solid var(--b0); border-radius: 999px;
+    padding: 1px 7px; background: var(--bg0);
+  }
+  .metric-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+    gap: 6px; margin: 8px 0;
+  }
+  .metric { border-top: 1px solid var(--b0); padding-top: 5px; }
+  .metric .label {
+    font-size: 9px; color: var(--fg2); text-transform: uppercase;
+    letter-spacing: 0.04em; font-family: var(--mono);
+  }
+  .metric .value { font-size: 13px; color: var(--fg0); font-family: var(--mono); margin-top: 1px; }
+  .chip-row, .pc-caps { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; align-items:center; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 3px;
+    font-size: 10px; color: var(--fg1); border: 1px solid var(--b1);
+    border-radius: 999px; padding: 1px 7px; background: var(--bg0);
+  }
+  .chip.on { color: var(--fg0); border-color: var(--acc); background: color-mix(in srgb, var(--acc) 12%, var(--bg0)); }
+  .shape-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 10px; margin-top: 6px;
+  }
+  .shape h3 { margin-top: 0; }
+  .dist-bar {
+    display: flex; width: 100%; height: 14px; border-radius: 4px;
+    overflow: hidden; border: 1px solid var(--b1); background: var(--bg2);
+    margin: 4px 0;
+  }
+  .dist-bar span { min-width: 1px; }
+  .dist-labels {
+    display: flex; flex-wrap: wrap; gap: 3px 8px;
+    font-family: var(--mono); font-size: 9px; color: var(--fg2);
+  }
+  .two-col { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+  .muted { color: var(--fg2); }
+  @media(max-width:700px) {
+    body.docs-body { padding: 12px; }
+    .docs-tabs { width: 100%; }
+    .catalog { display: block; overflow-x: auto; white-space: nowrap; }
+    .def-card .pc-row { grid-template-columns: 72px 1fr auto; }
+  }
+</style>
+</head>
+<body class="docs-body">
+
+{% macro fmt_tokens(n) -%}
+  {%- if n >= 1000000000 -%}{{ "%.1f"|format(n / 1000000000) }}B
+  {%- elif n >= 1000000 -%}{{ "%.0f"|format(n / 1000000) }}M
+  {%- elif n >= 1000 -%}{{ "%.0f"|format(n / 1000) }}k
+  {%- else -%}{{ "%.0f"|format(n) }}
+  {%- endif -%}
+{%- endmacro %}
+
+<div id="toast" class="toast" hidden></div>
+
+<div class="docs-hdr">
+  <div>
+    <h1>vLLM multi-model planner &middot; use cases</h1>
+    <div class="sub">Edit reusable use-case kinds here; set organization scale in the calculator.</div>
+  </div>
+  <nav class="docs-tabs">
+    <a href="{{ url_for('index') }}">&larr; Calculator</a>
+    <a href="{{ url_for('explainer') }}">User guide</a>
+    <a href="{{ url_for('use_cases') }}" class="on">Use cases</a>
+  </nav>
+</div>
+
+<section class="docs-section panel">
+  <h2>Definition Versus Scale</h2>
+  <p>
+    A use-case kind defines workload dynamics: difficulty, SLO, price ceiling, capability gates,
+    batchability, latent-demand economics, and token shape. The calculator keeps only the selected
+    kind plus the organization's daily scale, so the same kind can be used at very different volumes.
+  </p>
+</section>
+
+<div id="useCaseLibrary">
+  {% include "partials/use_case_library.html" %}
+</div>
+
+<script>
+const TAB_STORAGE_KEY = 'planner_tab_id';
+
+function currentTabId() {
+  try { return window.sessionStorage.getItem(TAB_STORAGE_KEY) || 'default'; }
+  catch { return 'default'; }
+}
+
+function requestHeaders(extra = {}) {
+  return { 'X-Tab-ID': currentTabId(), ...extra };
+}
+
+function showToast(message) {
+  const toast = document.getElementById('toast');
+  if (!toast || !message) return;
+  toast.textContent = message;
+  toast.hidden = false;
+  clearTimeout(showToast._timer);
+  showToast._timer = setTimeout(() => { toast.hidden = true; }, 3200);
+}
+
+function formatLiveValue(slider, raw) {
+  const scale = Number(slider.dataset.liveScale || 1);
+  const decimals = Number(slider.dataset.liveDecimals || 0);
+  return (raw * scale).toFixed(decimals);
+}
+
+function bindLiveSliders(root) {
+  (root || document).querySelectorAll('input[type="range"][data-live-target]').forEach(slider => {
+    if (slider._liveBound) return;
+    slider._liveBound = true;
+    slider.addEventListener('input', () => {
+      const target = document.querySelector(slider.dataset.liveTarget);
+      if (!target) return;
+      const text = formatLiveValue(slider, Number(slider.value));
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') target.value = text;
+      else target.textContent = text;
+    });
+  });
+}
+
+function postLibrary(url, body) {
+  return fetch(url, {
+    method: 'POST',
+    headers: requestHeaders({
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'HX-Request': 'true',
+    }),
+    body: body || '',
+  }).then(async r => {
+    const text = await r.text();
+    if (r.ok) return text;
+    let message = text || `Request failed (${r.status})`;
+    try {
+      const data = JSON.parse(text);
+      if (data && data.error) message = data.error;
+    } catch {}
+    throw new Error(message);
+  });
+}
+
+function replaceLibrary(html) {
+  const target = document.getElementById('useCaseLibrary');
+  if (!target) return;
+  target.innerHTML = html;
+  if (window.htmx) htmx.process(target);
+  bindLiveSliders(target);
+}
+
+function exportUseCaseLibrary() {
+  fetch('/use-cases/export', { headers: requestHeaders() })
+    .then(async r => {
+      if (r.ok) return r.blob();
+      let message = await r.text();
+      try {
+        const data = JSON.parse(message);
+        if (data && data.error) message = data.error;
+      } catch {}
+      throw new Error(message || `Export failed (${r.status})`);
+    })
+    .then(blob => {
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = 'use-case-library.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objectUrl);
+    })
+    .catch(err => showToast(err.message));
+}
+
+function importUseCaseLibrary(input) {
+  const file = input && input.files && input.files[0];
+  if (!file) return;
+  file.text()
+    .then(text => postLibrary('/use-cases/import', new URLSearchParams({ json: text }).toString()))
+    .then(replaceLibrary)
+    .catch(err => showToast(err.message))
+    .finally(() => { input.value = ''; });
+}
+
+document.body.addEventListener('htmx:configRequest', e => {
+  e.detail.headers['X-Tab-ID'] = currentTabId();
+});
+
+document.body.addEventListener('htmx:afterSwap', e => {
+  bindLiveSliders(e.detail.target || document);
+});
+
+document.body.addEventListener('htmx:responseError', e => {
+  let message = `Request failed (${e.detail.xhr.status})`;
+  try {
+    const data = JSON.parse(e.detail.xhr.responseText);
+    if (data && data.error) message = data.error;
+  } catch {}
+  showToast(message);
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+  bindLiveSliders(document);
+  fetch('/use-cases/library', { headers: requestHeaders({ 'HX-Request': 'true' }) })
+    .then(r => r.text())
+    .then(replaceLibrary)
+    .catch(console.error);
+});
+</script>
+</body>
+</html>

@@ -18,6 +18,11 @@
     <p class="T">Roofline throughput estimates · continuous batching · profiled non-KV anchored KV capacity</p>
   </div>
   <div class="flex" style="gap:6px;">
+    <a href="{{ url_for('use_cases') }}"
+       style="font-family:var(--sans);font-size:10px;font-weight:500;background:var(--bg2);border:1px solid var(--b1);border-radius:var(--r);padding:3px 8px;color:var(--fg0);text-decoration:none;white-space:nowrap;"
+       title="Detailed explanation of the built-in use-case presets">
+      Use cases
+    </a>
     <a href="{{ url_for('explainer') }}"
        style="font-family:var(--sans);font-size:10px;font-weight:500;background:var(--bg2);border:1px solid var(--b1);border-radius:var(--r);padding:3px 8px;color:var(--fg0);text-decoration:none;white-space:nowrap;"
        title="What this calculator does and how to use it">
@@ -737,6 +742,47 @@ function addGpuFromPicker(panel, gpuType) {
       document.body.dispatchEvent(new Event('refreshChart'));
     })
     .catch(err => showToast(err.message));
+}
+
+function exportUseCases(panel) {
+  const url = withTabUrl(`/project/export?panel=${encodeURIComponent(panel)}`);
+  fetch(url, { headers: requestHeaders() })
+    .then(async r => {
+      if (r.ok) return r.blob();
+      let message = await r.text();
+      try {
+        const data = JSON.parse(message);
+        if (data && data.error) message = data.error;
+      } catch {}
+      throw new Error(message || `Export failed (${r.status})`);
+    })
+    .then(blob => {
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = `use-cases-${panel.toLowerCase()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objectUrl);
+    })
+    .catch(err => showToast(err.message));
+}
+
+function importUseCases(panel, input) {
+  const file = input && input.files && input.files[0];
+  if (!file) return;
+  file.text()
+    .then(text => {
+      const body = new URLSearchParams({ panel, json: text }).toString();
+      return postPartial('/project/import', body);
+    })
+    .then(html => {
+      replaceHtml(document.getElementById('main-content'), html);
+      document.body.dispatchEvent(new Event('refreshChart'));
+    })
+    .catch(err => showToast(err.message))
+    .finally(() => { input.value = ''; });
 }
 
 /* GPU count selector in picker */

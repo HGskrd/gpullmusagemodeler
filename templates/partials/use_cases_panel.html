@@ -2,8 +2,15 @@
 <div class="panel">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;">
     <h2 style="margin:0;">Use cases</h2>
-    <div class="picker-wrap">
-      <button class="acc sm" data-picker="project" onclick="togglePicker(this, '/picker/project?panel={{ panel }}')">+ Add use case</button>
+    <div class="flex" style="gap:6px;">
+      <a href="{{ url_for('use_cases') }}"
+         style="font-family:var(--sans);font-size:9px;font-weight:500;background:var(--bg2);border:1px solid var(--b1);border-radius:var(--r);padding:2px 5px;color:var(--fg0);text-decoration:none;white-space:nowrap;"
+         title="Edit use-case definitions">
+        Edit definitions
+      </a>
+      <div class="picker-wrap">
+        <button class="acc sm" data-picker="project" onclick="togglePicker(this, '/picker/project?panel={{ panel }}')">+ Add use case</button>
+      </div>
     </div>
   </div>
   {% if state.projects %}

@@ -164,6 +164,7 @@ class Model:
     is_mla: bool
     mla_kv_dim: int = 0
     mla_rope_dim: int = 0
+    mla_tp_supported: bool = False
     kv_layers: int = 0
     bf16_weight_bytes_per_param: float = 2.0
     fp8_weight_bytes_per_param: float = 1.0
@@ -175,6 +176,19 @@ class Model:
     # tokens on Artificial Analysis' Intelligence Index, >1 = uses fewer tokens, <1 = verbose.
     quality: float = 0.5
     token_efficiency: float = 1.0
+    hidden_dim: int = 0
+    attention_layers: int = 0
+    local_attention_layers: int = 0
+    local_attention_window: int = 0
+    local_attention_heads: int = 0
+    linear_attention_layers: int = 0
+    linear_attention_heads: int = 0
+    linear_attention_head_dim: int = 0
+    linear_attention_k_heads: int = 0
+    linear_attention_k_head_dim: int = 0
+    linear_attention_conv_kernel: int = 0
+    attention_query_heads: int = 0
+    attention_label: str = ""
 
     @property
     def capabilities(self) -> frozenset[str]:
@@ -182,19 +196,63 @@ class Model:
 
     @property
     def size_label(self) -> str:
-        tp_b = self.total_params / 1e9
-        ap_b = self.active_params / 1e9
+        def fmt_b(params: float) -> str:
+            b = params / 1e9
+            if b < 1:
+                return f"{b:.2f}".rstrip("0").rstrip(".")
+            if b < 10:
+                return f"{b:.1f}".rstrip("0").rstrip(".")
+            return f"{b:.0f}"
+
+        tp_b = fmt_b(self.total_params)
+        ap_b = fmt_b(self.active_params)
         if self.is_moe:
-            return f"{tp_b:.0f}B-A{ap_b:.0f}B"
-        return f"{tp_b:.0f}B"
+            return f"{tp_b}B-A{ap_b}B"
+        return f"{tp_b}B"
 
     @property
     def hidden_size(self) -> int:
-        return self.num_heads * self.head_dim
+        return self.hidden_dim or self.num_heads * self.head_dim
+
+    @property
+    def attention_layer_count(self) -> int:
+        return self.attention_layers or self.layers
 
     @property
     def kv_layer_count(self) -> int:
-        return self.kv_layers or self.layers
+        return self.kv_layers or self.attention_layer_count
+
+    @property
+    def local_attention_head_count(self) -> int:
+        return self.local_attention_heads or self.attention_query_head_count
+
+    @property
+    def attention_query_head_count(self) -> int:
+        return self.attention_query_heads or self.num_heads
+
+    @property
+    def linear_attention_layer_count(self) -> int:
+        return max(self.linear_attention_layers, 0)
+
+    @property
+    def linear_attention_head_count(self) -> int:
+        return self.linear_attention_heads or self.num_heads
+
+    @property
+    def linear_attention_head_size(self) -> int:
+        return self.linear_attention_head_dim or self.head_dim
+
+    @property
+    def linear_attention_k_head_count(self) -> int:
+        return self.linear_attention_k_heads or self.linear_attention_head_count
+
+    @property
+    def linear_attention_k_head_size(self) -> int:
+        return self.linear_attention_k_head_dim or self.linear_attention_head_size
+
+    @property
+    def linear_attention_kernel_size(self) -> int:
+        return max(self.linear_attention_conv_kernel, 1)
 
     def weight_bytes_per_param(self, prec: str) -> float:
         prec = normalize_precision(prec)
@@ -310,6 +368,34 @@ for _k, _w in GPU_TDP_WATTS.items():
         GPUS[_k].tdp_watts = float(_w)
 
 GPU_CARDS: list[GPUCard] = [
+    # ── NVIDIA: flagship Blackwell → Hopper → Ampere datacenter → Ada → professional → desktop ──
+    GPUCard(
+        "GB200 (Grace + Blackwell)",
+        "NVIDIA",
+        "Blackwell",
+        "paired GPU config",
+        "AI supercomputing, large-model training",
+        (GPUPlannerOption("Add", "GB200"),),
+        "Modeled per Blackwell GPU inside the GB200 Grace Blackwell Superchip and 72-GPU NVLink domain.",
+    ),
+    GPUCard(
+        "B300 / Blackwell Ultra",
+        "NVIDIA",
+        "Blackwell Ultra",
+        "up to 288 GB HBM3e",
+        "Cutting-edge AI/HPC, limited early-access",
+        (GPUPlannerOption("Add", "B300"),),
+        "Uses the published HGX B300 dense roofline with the 288GB-per-GPU Blackwell Ultra memory profile.",
+    ),
+    GPUCard(
+        "B200",
+        "NVIDIA",
+        "Blackwell",
+        "180 GB HBM3e",
+        "AI training/inference, scaling beyond Hopper",
+        (GPUPlannerOption("Add", "B200"),),
+        "Uses the published HGX B200 dense roofline and 180GB HBM3e profile.",
+    ),
     GPUCard(
         "H200 SXM/PCIe",
         "NVIDIA",
@@ -329,16 +415,22 @@ GPU_CARDS: list[GPUCard] = [
         "Planner uses the calibrated H100 80 GB SXM profile.",
     ),
     GPUCard(
-        "A100 40/80 GB",
+        "A100 80GB SXM",
         "NVIDIA",
         "Ampere",
-        "40 or 80 GB HBM2e",
+        "80 GB HBM2e",
         "Training, inference, ML workloads (still widely available)",
-        (
-            GPUPlannerOption("Add 80GB SXM", "A100"),
-            GPUPlannerOption("Add 40GB PCIe", "A100_40"),
-        ),
-        "Includes separate 80GB SXM and 40GB PCIe planner profiles.",
+        (GPUPlannerOption("Add", "A100"),),
+        "Calibrated A100 80 GB SXM planner profile.",
+    ),
+    GPUCard(
+        "A100 40GB PCIe",
+        "NVIDIA",
+        "Ampere",
+        "40 GB HBM2e",
+        "Lower-cost Ampere option, PCIe slot-in",
+        (GPUPlannerOption("Add", "A100_40"),),
+        "Calibrated A100 40 GB PCIe planner profile.",
     ),
     GPUCard(
         "L40S",
@@ -368,42 +460,6 @@ GPU_CARDS: list[GPUCard] = [
         "Planner uses the NVIDIA Server Edition memory and tensor figures; modeled as an 8-GPU PCIe server topology.",
     ),
     GPUCard(
-        "DGX Spark",
-        "NVIDIA",
-        "Grace Blackwell",
-        "128 GB LPDDR5x unified memory",
-        "Desktop AI supercomputer for local prototyping, inference, and fine-tuning",
-        (GPUPlannerOption("Add", "DGX_SPARK"),),
-        "Planner uses the GB10 128GB/273GB/s profile. Dense BF16/FP8 rooflines are derived from NVIDIA's published sparse FP4 figure.",
-    ),
-    GPUCard(
-        "GB200 (Grace + Blackwell)",
-        "NVIDIA",
-        "Blackwell",
-        "paired GPU config",
-        "AI supercomputing, large-model training",
-        (GPUPlannerOption("Add", "GB200"),),
-        "Modeled per Blackwell GPU inside the GB200 Grace Blackwell Superchip and 72-GPU NVLink domain.",
-    ),
-    GPUCard(
-        "B200",
-        "NVIDIA",
-        "Blackwell",
-        "180 GB HBM3e",
-        "AI training/inference, scaling beyond Hopper",
-        (GPUPlannerOption("Add", "B200"),),
-        "Uses the published HGX B200 dense roofline and 180GB HBM3e profile.",
-    ),
-    GPUCard(
-        "B300 / Blackwell Ultra",
-        "NVIDIA",
-        "Blackwell Ultra",
-        "up to 288 GB HBM3e",
-        "Cutting-edge AI/HPC, limited early-access",
-        (GPUPlannerOption("Add", "B300"),),
-        "Uses the published HGX B300 dense roofline with the 288GB-per-GPU Blackwell Ultra memory profile.",
-    ),
-    GPUCard(
         "RTX A6000",
         "NVIDIA",
         "Ampere",
@@ -421,21 +477,41 @@ GPU_CARDS: list[GPUCard] = [
         (GPUPlannerOption("Add", "A4000"),),
     ),
     GPUCard(
-        "MI250X",
+        "DGX Spark",
+        "NVIDIA",
+        "Grace Blackwell",
+        "128 GB LPDDR5x unified memory",
+        "Desktop AI supercomputer for local prototyping, inference, and fine-tuning",
+        (GPUPlannerOption("Add", "DGX_SPARK"),),
+        "Planner uses the GB10 128GB/273GB/s profile. Dense BF16/FP8 rooflines are derived from NVIDIA's published sparse FP4 figure.",
+    ),
+    # ── AMD: newest generation first ────────────────────────────────────────
+    GPUCard(
+        "MI400 series",
         "AMD",
-        "CDNA 2",
-        "64 GB HBM2e",
-        "General-purpose HPC and AI inference",
-        (GPUPlannerOption("Add", "MI250X"),),
-        "Planner models the full MI250X accelerator at 128GB; the 64GB figure commonly refers to one GCD.",
+        "CDNA 5 (projected)",
+        "432 GB HBM4, ~19.6 TB/s",
+        "Expected H2 2026, 2× perf over MI355X",
+        (GPUPlannerOption("Add Preview", "MI400"),),
+        "Preview profile based on AMD's public MI400-series roadmap disclosures.",
     ),
     GPUCard(
-        "MI300X",
+        "MI355X",
         "AMD",
-        "CDNA 3",
-        "192 GB HBM3, 5.3 TB/s",
-        "H100 competitor, large model serving",
-        (GPUPlannerOption("Add", "MI300X"),),
+        "CDNA 4",
+        "288 GB HBM3e, 8 TB/s",
+        "Higher FP8/FP4 throughput variant of MI350X",
+        (GPUPlannerOption("Add", "MI355X"),),
+        "Calibrated MI355X planner profile.",
+    ),
+    GPUCard(
+        "MI350X",
+        "AMD",
+        "CDNA 4",
+        "288 GB HBM3e, 8 TB/s",
+        "Generative AI & HPC, FP4/FP6 support (June 2025)",
+        (GPUPlannerOption("Add", "MI350X"),),
+        "Calibrated MI350X planner profile.",
     ),
     GPUCard(
         "MI325X",
@@ -446,26 +522,23 @@ GPU_CARDS: list[GPUCard] = [
         (GPUPlannerOption("Add", "MI325X"),),
     ),
     GPUCard(
-        "MI350X / MI355X",
+        "MI300X",
         "AMD",
-        "CDNA 4",
-        "288 GB HBM3e, 8 TB/s",
-        "Generative AI & HPC, FP4/FP6 support (June 2025)",
-        (
-            GPUPlannerOption("Add MI350X", "MI350X"),
-            GPUPlannerOption("Add MI355X", "MI355X"),
-        ),
-        "Choose the calibrated MI350X or MI355X planner profile.",
+        "CDNA 3",
+        "192 GB HBM3, 5.3 TB/s",
+        "H100 competitor, large model serving",
+        (GPUPlannerOption("Add", "MI300X"),),
     ),
     GPUCard(
-        "MI400 series",
+        "MI250X",
         "AMD",
-        "CDNA 5 (projected)",
-        "432 GB HBM4, ~19.6 TB/s",
-        "Expected H2 2026, 2× perf over MI355X",
-        (GPUPlannerOption("Add Preview", "MI400"),),
-        "Preview profile based on AMD's public MI400-series roadmap disclosures.",
+        "CDNA 2",
+        "64 GB HBM2e",
+        "General-purpose HPC and AI inference",
+        (GPUPlannerOption("Add", "MI250X"),),
+        "Planner models the full MI250X accelerator at 128GB; the 64GB figure commonly refers to one GCD.",
     ),
+    # ── Intel ────────────────────────────────────────────────────────────────
     GPUCard(
         "Gaudi 3",
         "Intel",
@@ -485,25 +558,32 @@ GPU_CARDS: list[GPUCard] = [
         "Preview proxy profile: Intel has announced memory capacity, but not a full public roofline yet.",
     ),
     GPUCard(
-        "Arc Pro B60 / B50",
+        "Arc Pro B60",
         "Intel",
         "Xe2",
-        "24 GB (B60)",
-        "Edge-cloud/multi-GPU server, up to 8× B60 for 150B param models",
-        (
-            GPUPlannerOption("Add B60", "ArcProB60"),
-            GPUPlannerOption("Add B50", "ArcProB50"),
-        ),
+        "24 GB",
+        "Edge-cloud/multi-GPU server, up to 8× for 150B param models",
+        (GPUPlannerOption("Add", "ArcProB60"),),
         "Uses public Intel memory specs; BF16/FP8 planner rooflines are inferred from Intel's published INT8 XMX throughput.",
     ),
     GPUCard(
-        "Mac mini M4 Pro",
+        "Arc Pro B50",
+        "Intel",
+        "Xe2",
+        "16 GB",
+        "Lighter edge inference option",
+        (GPUPlannerOption("Add", "ArcProB50"),),
+        "Uses public Intel memory specs; BF16/FP8 planner rooflines are inferred from Intel's published INT8 XMX throughput.",
+    ),
+    # ── Apple: most memory first ─────────────────────────────────────────────
+    GPUCard(
+        "Mac Studio M3 Ultra",
         "Apple",
         "Apple silicon",
-        "up to 64 GB unified memory",
-        "Local inference, eval runners, compact dev/prototyping box",
-        (GPUPlannerOption("Add 64GB", "MAC_MINI_M4_PRO"),),
-        "Planner uses the top-bin 64GB Mac mini M4 Pro profile. Peak bandwidth comes from Apple specs; compute and sustained-bandwidth math are conservative proxies cross-checked against whatcani.run.",
+        "up to 512 GB unified memory",
+        "Largest-memory Apple desktop for local large-model serving and experimentation",
+        (GPUPlannerOption("Add 512GB", "MAC_STUDIO_M3_ULTRA"),),
+        "Planner uses the 80-core GPU / 512GB Mac Studio M3 Ultra top bin. Peak bandwidth comes from Apple specs; planner math is conservatively scaled from whatcani.run's benchmarked 60-core M3 Ultra runs.",
     ),
     GPUCard(
         "Mac Studio M4 Max",
@@ -515,14 +595,15 @@ GPU_CARDS: list[GPUCard] = [
         "Planner uses the 40-core GPU / 128GB Mac Studio M4 Max config. Peak bandwidth comes from Apple specs; planner math uses a lower sustained-bandwidth proxy to match observed M4 Pro to M4 Max scaling on whatcani.run.",
     ),
     GPUCard(
-        "Mac Studio M3 Ultra",
+        "Mac mini M4 Pro",
         "Apple",
         "Apple silicon",
-        "up to 512 GB unified memory",
-        "Largest-memory Apple desktop for local large-model serving and experimentation",
-        (GPUPlannerOption("Add 512GB", "MAC_STUDIO_M3_ULTRA"),),
-        "Planner uses the 80-core GPU / 512GB Mac Studio M3 Ultra top bin. Peak bandwidth comes from Apple specs; planner math is conservatively scaled from whatcani.run's benchmarked 60-core M3 Ultra runs.",
+        "up to 64 GB unified memory",
+        "Local inference, eval runners, compact dev/prototyping box",
+        (GPUPlannerOption("Add 64GB", "MAC_MINI_M4_PRO"),),
+        "Planner uses the top-bin 64GB Mac mini M4 Pro profile. Peak bandwidth comes from Apple specs; compute and sustained-bandwidth math are conservative proxies cross-checked against whatcani.run.",
     ),
+    # ── Edge / Embedded ──────────────────────────────────────────────────────
     GPUCard(
         "Jetson AGX Thor Developer Kit",
         "Edge / Embedded",
@@ -577,6 +658,33 @@ MODELS: dict[str, Model] = {
         64,
         bf16_weight_bytes_per_param=MIXED_NATIVE_BF16_WEIGHT_BPP,
         fp8_weight_bytes_per_param=MIXED_NATIVE_FP8_WEIGHT_BPP,
+    ),
+    "kimi-linear-48b": Model(
+        "kimi-linear-48b",
+        "Kimi Linear 48B-A3B",
+        "Kimi",
+        "#4F46E5",
+        48e9,
+        3e9,
+        True,
+        27,
+        32,
+        32,
+        72,
+        True,
+        512,
+        64,
+        mla_tp_supported=True,
+        kv_layers=7,
+        hidden_dim=2304,
+        attention_layers=7,
+        linear_attention_layers=20,
+        linear_attention_heads=32,
+        linear_attention_head_dim=128,
+        linear_attention_k_heads=32,
+        linear_attention_k_head_dim=128,
+        linear_attention_conv_kernel=4,
+        attention_label="20 KDA + 7 MLA",
     ),
 
     "minimax25": Model("minimax25", "MiniMax M2.5 229B-A10B", "MiniMax", "#2C6D9B", 229e9, 10e9, True, 62, 48, 8, 128, False),
@@ -649,8 +757,7 @@ MODELS: dict[str, Model] = {
     # Mistral does not publish a parameter count for Medium 3.1; keep a hidden
     # legacy entry so older saved states continue to resolve cleanly.
     "mm31": Model("mm31", "Mistral Medium 3.1 (legacy)", "Mistral", "#AD6A2C", 24e9, 24e9, False, 40, 32, 8, 128, False, hidden=True),
-    # Preview proxy requested as an imagined dense 128B Mistral Medium 3.5 profile.
-    "mistral-medium-3.5-preview": Model("mistral-medium-3.5-preview", "Mistral Medium 3.5 Preview 128B", "Mistral", "#A95F24", 128e9, 128e9, False, 88, 96, 8, 128, False),
+    "mistral-medium-3.5-preview": Model("mistral-medium-3.5-preview", "Mistral Medium 3.5 128B", "Mistral", "#A95F24", 128e9, 128e9, False, 88, 96, 8, 128, False),
     "ms4": Model("ms4", "Mistral Small 4 119B-A6.5B", "Mistral", "#93511F", 119e9, 6.5e9, True, 64, 64, 8, 128, False),
     "ml3": Model("ml3", "Mistral Large 3 675B-A41B", "Mistral", "#7A3B18", 675e9, 41e9, True, 96, 128, 8, 128, False),
     "ml123": Model("ml123", "Mistral Large 2 123B", "Mistral", "#994422", 123e9, 123e9, False, 88, 96, 8, 128, False),
@@ -661,6 +768,53 @@ MODELS: dict[str, Model] = {
 
     "dv24": Model("dv24", "Devstral Small 2 24B", "Devstral", "#B85F59", 24e9, 24e9, False, 40, 32, 8, 128, False),
     "dv123": Model("dv123", "Devstral 2 123B", "Devstral", "#94423E", 123e9, 123e9, False, 88, 96, 8, 128, False),
+
+    # ZAYA1-base/reasoning-base config: 16 physical heads, CCA attention in 8-query-head
+    # latent space, 2 KV heads, and 40 attention-bearing layers.
+    "zaya1-8b": Model(
+        "zaya1-8b",
+        "ZAYA1-8B 8.3B-A0.76B",
+        "Zyphra",
+        "#5B7CFA",
+        8.3e9,
+        0.76e9,
+        True,
+        40,
+        16,
+        2,
+        128,
+        False,
+        kv_layers=40,
+        hidden_dim=2048,
+        attention_layers=40,
+        attention_query_heads=8,
+        attention_label="CCA/CCGQA 2x Q, 8x KV",
+    ),
+    # Retained only so older saved states can resolve. Zyphra's public ZAYA catalog currently
+    # exposes the 8.3B/760M model; no public 74B architecture/config is available to model.
+    "zaya1-74b-preview": Model(
+        "zaya1-74b-preview",
+        "ZAYA1-74B Preview (legacy proxy)",
+        "Zyphra",
+        "#7553C8",
+        74e9,
+        4e9,
+        True,
+        120,
+        16,
+        2,
+        128,
+        False,
+        kv_layers=60,
+        hidden_dim=4096,
+        attention_layers=60,
+        local_attention_layers=30,
+        local_attention_window=4096,
+        hidden=True,
+        attention_label="Legacy proxy",
+    ),
+
+    "laguna-xs2": Model("laguna-xs2", "Laguna XS.2 33B-A3B", "Poolside", "#0891B2", 33e9, 3e9, True, 40, 48, 8, 128, False, hidden_dim=2048, local_attention_layers=30, local_attention_window=512, local_attention_heads=64, attention_label="10 global + 30 SWA 512"),
 
     "mimo-v2.5-pro": Model(
         "mimo-v2.5-pro",
@@ -700,13 +854,15 @@ MODELS: dict[str, Model] = {
 
 # Capability overrides. Vision-enabled and reasoning-first models deviate from the default
 # (tools + ctx_128k). Kept conservative — annotate models with well-documented support.
-_VISION_MODELS = ("ge4", "g26", "g31", "ms24", "ms32", "minimax25", "minimax27", "nem3no", "mimo-v2.5")
+_VISION_MODELS = ("ge4", "g26", "g31", "ms24", "ms32", "mistral-medium-3.5-preview", "minimax25", "minimax27", "nem3no", "mimo-v2.5")
 _REASONING_MODELS = (
     "q35", "q122", "q397",
     "glm45", "glm45a", "glm46", "glm47", "glm47f", "glm5", "glm51",
-    "k25", "ds3", "deepseek-v4-pro", "deepseek-v4-flash", "ml3",
+    "k25", "ds3", "deepseek-v4-pro", "deepseek-v4-flash",
+    "mistral-medium-3.5-preview", "ml3",
     "minimax25", "minimax27",
     "nem3s", "nem3n", "nem3no",
+    "zaya1-8b", "zaya1-74b-preview", "laguna-xs2",
     "mimo-v2.5-pro", "mimo-v2.5",
 )
 for _k in _VISION_MODELS:
@@ -742,6 +898,7 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "glm47f": (30.0, 64.0),
     "glm5": (50.0, 110.0),
     "glm51": (51.0, 110.0),
+    "kimi-linear-48b": (37.0, 100.0),  # Proxy from Qwen 3.5 35B-A3B until AA publishes Kimi Linear.
     "minimax25": (42.0, 56.0),
     "minimax27": (50.0, 87.0),
     "nem3s": (36.0, 110.0),
@@ -755,7 +912,7 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "ms24": (14.0, 4.7),
     "ms32": (15.0, 4.5),
     "mm31": (21.0, 7.6),
-    "mistral-medium-3.5-preview": (34.0, 8.0),  # Preview proxy; no public AA page.
+    "mistral-medium-3.5-preview": (39.0, 90.0),
     "ms4": (19.0, 3.9),
     "ml3": (23.0, 5.2),
     "ml123": (15.0, 2.6),
@@ -764,6 +921,9 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "n14": (16.0, 11.0),
     "dv24": (19.0, 8.6),
     "dv123": (22.0, 7.4),
+    "zaya1-8b": (24.0, 140.0),       # Proxy from Nemotron 3 Nano reasoning until AA publishes ZAYA1-8B.
+    "zaya1-74b-preview": (37.0, 100.0),  # Preview is pre-RL; proxy from Qwen 3.5 35B-A3B until AA publishes it.
+    "laguna-xs2": (37.0, 100.0),     # Proxy from Qwen 3.5 35B-A3B; no AA page for Laguna XS.2 found.
     "mimo-v2.5-pro": (54.0, 92.0),
     "mimo-v2.5": (49.0, 74.0),
     "cr13": (12.0, 8.3),   # Proxy from Gemma 4 E2B (Non-reasoning); no AA page for Croissant 1.3B found.
@@ -906,11 +1066,11 @@ CLOUD_MODELS = {
         "token_efficiency": 1.0,
     },
     "mistral-medium": {
-        "label": "Mistral Medium",
+        "label": "Mistral Medium 3.5",
         "vendor": "Mistral",
-        "in_per_m": 0.40,
-        "cached_in_per_m": 0.10,
-        "out_per_m": 2.00,
+        "in_per_m": 1.50,
+        "cached_in_per_m": 0.15,
+        "out_per_m": 7.50,
         "quality": 0.5,
         "token_efficiency": 1.0,
     },
@@ -962,7 +1122,7 @@ AA_CLOUD_METRICS: dict[str, tuple[float, float]] = {
     "gemini-pro": (35.0, 55.0),
     "gemini-flash": (21.0, 17.0),
     "gemini-flash-lite": (13.0, 36.0),
-    "mistral-medium": (21.0, 7.6),       # Mistral Medium 3.1.
+    "mistral-medium": (39.0, 90.0),      # Mistral Medium 3.5.
     "mistral-large": (13.0, 2.6),        # Proxy from Mistral Large 2 (Jul '24), verbosity from Nov '24 refresh.
     "mistral-large-2": (15.0, 2.6),
     "codestral-2501": (15.0, 4.4),       # Proxy from Devstral Small (Jul '25'); no AA page for Codestral 2501 found.
@@ -1072,25 +1232,36 @@ def corpo_cloud_models(name: str) -> tuple[str, ...]:
     return preset["models"]
 
 
-# Opinionated project presets so the demo is one click from a realistic story.
-# tokens_day is the total project workload per day; wtp_per_m is the ceiling price (cost/M tokens)
-# above which this project refuses to buy (flees to cloud if it's cheaper, else shelves the work).
-# requires lists hard capability gates (project rejects models that don't supply them).
-# difficulty ∈ [0,1] is the project's task-difficulty axis — paired with each candidate model's
-# quality by success_rate() to get a per-(project, model) success probability. min_success_rate
-# is the SLO floor: candidates whose success_rate falls below it are rejected.
-# latent_jobs_day = additional demand that is *not economically viable today* but unlocks
-# when the cheapest model that could serve this project drops at or below unlock_price_per_m.
-# Hard threshold: either the whole pool is in play or none of it is. The pool models
-# "archive backfills" and "bulk analyses" that only make sense at a low-enough $/M.
+# Opinionated use-case definitions so the demo is one click from a realistic story.
+# These define workload dynamics: difficulty, SLO, price ceiling, capability gates,
+# batchability, token shape, and latent-demand unlock economics. tokens_day and
+# latent_jobs_day are only starting scales for a newly-added instance; switching a
+# selected use case to another kind preserves the organization's scale.
+#
+# wtp_per_m is the ceiling price ($/M tokens) above which this use case refuses to buy
+# (flees to cloud if it's cheaper, else shelves the work). requires lists hard capability
+# gates. difficulty ∈ [0,1] is paired with each candidate model's quality by success_rate().
+# min_success_rate is the SLO floor. latent_jobs_day is additional demand that is not
+# economically viable today but unlocks when the cheapest model reaches unlock_price_per_m.
+SCALE_MODELS = {
+    "linear": "Linear",
+    "quadratic": "Quadratic",
+    "network": "Network/graph",
+    "corpus": "Corpus/backfill",
+    "custom": "Custom formula",
+}
+
 PROJECT_PRESETS = [
-    {"key": "classify",   "name": "Mass classification",  "difficulty": 0.10, "tokens_day": 3.0e9, "wtp_per_m": 0.25, "requires": (),                    "min_success_rate": 0.80, "batch_eligible": True, "latent_jobs_day": 8.0e9, "unlock_price_per_m": 0.05, "in_pre": "Classify", "out_pre": "Classify"},
-    {"key": "summarize",  "name": "Doc summarization",    "difficulty": 0.25, "tokens_day": 1.5e9, "wtp_per_m": 0.90, "requires": ("ctx_128k",),         "min_success_rate": 0.85, "batch_eligible": True, "latent_jobs_day": 3.0e9, "unlock_price_per_m": 0.20, "in_pre": "Long doc", "out_pre": "Long doc"},
-    {"key": "chatbot",    "name": "Customer chatbot",     "difficulty": 0.30, "tokens_day": 2.0e9, "wtp_per_m": 1.20, "requires": ("tools",),            "min_success_rate": 0.95, "in_pre": "Chat",     "out_pre": "Chat"},
-    {"key": "coding",     "name": "Coding assistant",     "difficulty": 0.55, "tokens_day": 1.2e9, "wtp_per_m": 4.00, "requires": ("tools", "ctx_128k"), "min_success_rate": 0.85, "in_pre": "Code",     "out_pre": "Code"},
-    {"key": "evals",      "name": "Batch evaluations",    "difficulty": 0.45, "tokens_day": 800e6, "wtp_per_m": 2.00, "requires": (),                    "min_success_rate": 0.90, "batch_eligible": True, "latent_jobs_day": 2.0e9, "unlock_price_per_m": 0.50, "in_pre": "RAG",      "out_pre": "Classify"},
-    {"key": "longctx",    "name": "Long-ctx analytics",   "difficulty": 0.70, "tokens_day": 400e6, "wtp_per_m": 8.00, "requires": ("ctx_128k",),         "min_success_rate": 0.90, "latent_jobs_day": 1.0e9, "unlock_price_per_m": 3.00, "in_pre": "Long doc", "out_pre": "Long doc"},
-    {"key": "research",   "name": "Deep research agent",  "difficulty": 0.90, "tokens_day": 150e6, "wtp_per_m": 20.00,"requires": ("tools", "reasoning"),"min_success_rate": 0.95, "latent_jobs_day": 500e6, "unlock_price_per_m": 5.00, "in_pre": "RAG",      "out_pre": "Long doc"},
+    {"key": "classify",       "name": "Mass classification",        "difficulty": 0.10, "tokens_day": 3.0e9, "scale_value": 5_000_000, "scale_kind": {"model": "linear", "label": "Records processed", "unit": "records/day", "token_multiplier": 600, "min": 0, "max": 10_000_000, "step": 10_000, "formula": "records/day x average tokens per record"}, "wtp_per_m": 0.25, "requires": (),                    "min_success_rate": 0.80, "batch_eligible": True, "latent_jobs_day": 8.0e9, "unlock_price_per_m": 0.05, "in_pre": "Classify", "out_pre": "Classify", "scale_hint": "Records/day x tokens per record; mostly batchable queues."},
+    {"key": "summarize",      "name": "Doc summarization",          "difficulty": 0.25, "tokens_day": 1.5e9, "scale_value": 60_000, "scale_kind": {"model": "linear", "label": "Documents summarized", "unit": "documents/day", "token_multiplier": 25_000, "min": 0, "max": 250_000, "step": 100, "formula": "documents/day x average document+summary tokens"}, "wtp_per_m": 0.90, "requires": ("ctx_128k",),         "min_success_rate": 0.85, "batch_eligible": True, "latent_jobs_day": 3.0e9, "unlock_price_per_m": 0.20, "in_pre": "Long doc", "out_pre": "Long doc", "scale_hint": "Documents/day x document length; periodic backfills can dominate."},
+    {"key": "chatbot",        "name": "Customer chatbot",           "difficulty": 0.30, "tokens_day": 2.0e9, "scale_value": 80_000, "scale_kind": {"model": "linear", "label": "Support tickets", "unit": "tickets/day", "token_multiplier": 25_000, "min": 0, "max": 250_000, "step": 100, "formula": "tickets/day x turns x tokens per turn"}, "wtp_per_m": 1.20, "requires": ("tools",),            "min_success_rate": 0.95, "in_pre": "Chat",     "out_pre": "Chat",     "scale_hint": "Users or tickets/day x turns x tokens per turn; interactive peak matters."},
+    {"key": "email_corrector","name": "Email correction copilot",   "difficulty": 0.18, "tokens_day": 250e6, "scale_value": 5_000, "scale_kind": {"model": "linear", "label": "Enabled headcount", "unit": "employees", "token_multiplier": 50_000, "min": 0, "max": 25_000, "step": 10, "formula": "employees x messages/day x correction tokens"}, "wtp_per_m": 0.65, "requires": (),                    "min_success_rate": 0.90, "in_pre": "Chat",     "out_pre": "Chat",     "scale_hint": "Headcount x messages/day x correction tokens; roughly linear with staff."},
+    {"key": "coding",         "name": "Coding assistant",           "difficulty": 0.55, "tokens_day": 1.2e9, "scale_value": 8_000, "scale_kind": {"model": "linear", "label": "Developer seats", "unit": "developers", "token_multiplier": 150_000, "min": 0, "max": 25_000, "step": 10, "formula": "developer seats x active days x code context"}, "wtp_per_m": 4.00, "requires": ("tools", "ctx_128k"), "min_success_rate": 0.85, "in_pre": "Code",     "out_pre": "Code",     "scale_hint": "Developer seats x active days x code context; bursty during migrations."},
+    {"key": "meeting_notes",  "name": "Meeting notes assistant",    "difficulty": 0.35, "tokens_day": 600e6, "scale_value": 6_000, "scale_kind": {"model": "linear", "label": "Recorded meeting time", "unit": "meeting hours/day", "token_multiplier": 100_000, "min": 0, "max": 20_000, "step": 10, "formula": "meeting hours/day x transcript+summary tokens"}, "wtp_per_m": 1.50, "requires": ("ctx_128k",),         "min_success_rate": 0.88, "batch_eligible": True, "latent_jobs_day": 1.0e9, "unlock_price_per_m": 0.35, "in_pre": "Long doc", "out_pre": "Long doc", "scale_hint": "Meeting hours/day x transcript length; can be delayed after calls."},
+    {"key": "evals",          "name": "Batch evaluations",          "difficulty": 0.45, "tokens_day": 800e6, "scale_value": 400_000, "scale_kind": {"model": "linear", "label": "Evaluation prompts", "unit": "eval prompts/day", "token_multiplier": 2_000, "min": 0, "max": 2_000_000, "step": 1_000, "formula": "eval prompts/day x average prompt+judgment tokens"}, "wtp_per_m": 2.00, "requires": (),                    "min_success_rate": 0.90, "batch_eligible": True, "latent_jobs_day": 2.0e9, "unlock_price_per_m": 0.50, "in_pre": "RAG",      "out_pre": "Classify", "scale_hint": "Runs/day x eval set size; off-peak capacity is usually acceptable."},
+    {"key": "inbox_archive",  "name": "Decade inbox knowledge base","difficulty": 0.50, "tokens_day": 120e6, "scale_value": 50, "scale_kind": {"model": "corpus", "label": "Indexed mailboxes", "unit": "mailboxes indexed", "token_multiplier": 2_400_000, "min": 0, "max": 5_000, "step": 10, "formula": "mailboxes x retained years x messages, dailyized as batch load"}, "wtp_per_m": 1.75, "requires": ("ctx_128k",),         "min_success_rate": 0.86, "batch_eligible": True, "latent_jobs_day": 12.0e9, "unlock_price_per_m": 0.30, "in_pre": "RAG",      "out_pre": "Long doc", "scale_hint": "Mailboxes x retained years x messages; one-time corpus scale dominates."},
+    {"key": "longctx",        "name": "Long-ctx analytics",         "difficulty": 0.70, "tokens_day": 400e6, "scale_value": 200, "scale_kind": {"model": "linear", "label": "Large analyses", "unit": "analyses/day", "token_multiplier": 2_000_000, "min": 0, "max": 1_000, "step": 1, "formula": "analyses/day x full-source-pack length"}, "wtp_per_m": 8.00, "requires": ("ctx_128k",),         "min_success_rate": 0.90, "latent_jobs_day": 1.0e9, "unlock_price_per_m": 3.00, "in_pre": "Long doc", "out_pre": "Long doc", "scale_hint": "Analyses/day x full-source-pack length; limited volume, large prompts."},
+    {"key": "research",       "name": "Deep research agent",        "difficulty": 0.90, "tokens_day": 150e6, "scale_value": 300, "scale_kind": {"model": "custom", "label": "Research jobs", "unit": "investigations/day", "token_multiplier": 500_000, "min": 0, "max": 1_000, "step": 1, "formula": "analysts x investigations/day x agent depth"}, "wtp_per_m": 20.00,"requires": ("tools", "reasoning"),"min_success_rate": 0.95, "latent_jobs_day": 500e6, "unlock_price_per_m": 5.00, "in_pre": "RAG",      "out_pre": "Long doc", "scale_hint": "Analysts x investigations/day x agent depth; low volume, high value."},
 ]
 
 DAY_SHAPES = {

@@ -81,6 +81,7 @@
   <nav class="docs-tabs">
     <a href="{{ url_for('index') }}">← Calculator</a>
     <a href="{{ url_for('explainer') }}" class="on">User guide</a>
+    <a href="{{ url_for('use_cases') }}">Use cases</a>
   </nav>
 </div>
 
@@ -439,11 +440,17 @@
     <dd>vLLM's scheduler: decode slots are refilled request-by-request rather than in fixed
       micro-batches, keeping the GPU busy across uneven request lengths.</dd>
     <dt>KV cache</dt>
-    <dd>Per-token attention state that must live in accelerator memory for the duration of a request. KV per
-      token depends on model dimensions and precision.</dd>
+    <dd>Attention state that must live in accelerator memory for the duration of a request. Full attention
+      stores per-token KV; linear-attention layers store fixed recurrent state per live sequence.</dd>
     <dt>MLA</dt>
     <dd>Multi-head Latent Attention (DeepSeek-style): compresses the KV cache, so decode
       concurrency is far higher than vanilla attention for the same memory budget.</dd>
+    <dt>CCA</dt>
+    <dd>Compressed Convolutional Attention (ZAYA-style): runs attention in a compressed query/KV
+      latent space, reducing prefill attention work and KV cache footprint.</dd>
+    <dt>KDA</dt>
+    <dd>Kimi Delta Attention: linear attention with fixed recurrent and short-conv state, so only the
+      periodic MLA layers grow with context length.</dd>
     <dt>MoE</dt>
     <dd>Mixture-of-Experts. Total params are large but only a subset activates per token.
       Throughput uses <em>active</em> params for compute, plus an imbalance multiplier for the

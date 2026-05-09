@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import copy
 import math
+import re
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 from data import (
     GPUS,
@@ -20,6 +21,7 @@ from data import (
     CORPO_CLOUD_PRESETS,
     CORPO_CLOUD_DEFAULT,
     MODEL_CAPABILITIES,
+    SCALE_MODELS,
     PRECISIONS,
     PRECISION_LABELS,
     normalize_precision,
@@ -35,6 +37,7 @@ from calc import (
     effective_prefill_length,
     gpu_supports_mxfp4,
     gpu_supports_nvfp4,
+    per_replica_kv_cache_bytes,
     strategy_label,
     valid_strategies,
 )
@@ -55,6 +58,7 @@ PROJECT_FIELD_BOUNDS = {
     "unlock_price_per_m":  (0.0, 200.0),
 }
 ALLOWED_CAPABILITIES = frozenset(MODEL_CAPABILITIES)
+ALLOWED_PROJECT_KINDS = frozenset(p["key"] for p in PROJECT_PRESETS) | {"custom"}
 VISIBLE_PLOT_MODES = (
     ("userpareto", "User Pareto"),
     ("processingpareto", "Processing Pareto"),
@@ -64,6 +68,16 @@ ALLOWED_PLOT_MODES = frozenset(mode for mode, _ in VISIBLE_PLOT_MODES)
 DEFAULT_DAY_SHAPE = "workday"
 ALLOWED_DAY_SHAPES = frozenset(DAY_SHAPES)
 ALLOWED_CORPO_CLOUDS = frozenset(CORPO_CLOUD_PRESETS)
+DEFAULT_SCALE_KIND = {
+    "model": "linear",
+    "label": "Token demand",
+    "unit": "M tokens/day",
+    "token_multiplier": 1e6,
+    "min": 0.0,
+    "max": 5000.0,
+    "step": 10.0,
+    "formula": "millions of tokens/day",
+}
 PROJECTION_PCT_BOUNDS = {
     # Average share of peak capacity that internal users actually book. Max day-shape hour
     # can run this above 100% → thrash/stall zone (see calc._stall_curve).
@@ -126,6 +140,11 @@ class Project:
     difficulty: float         # ∈ [0,1]; paired with model.quality via success_rate()
     tokens_day: float         # total daily token demand
     wtp_per_m: float          # willingness-to-pay, $/M tokens
+    scale_value: Optional[float] = None  # organization-specific scale in the use-case's native unit
+    scale_kind: dict[str, Any] = field(default_factory=dict)
+    # Built-in use-case definition this instance follows. "custom" means the card owns
+    # its definition directly. Scale remains on the instance either way.
+    kind_key: str = "custom"
     batch_eligible: bool = False  # if True, batch-shiftable off-peak (works with night batching)
     # Hard capability gates: a model must supply ALL listed capabilities to be eligible.
     requires: frozenset[str] = frozenset()
@@ -142,9 +161,17 @@ class Project:
     out_pre: str = "Chat"
 
     def __post_init__(self):
+        if not self.kind_key:
+            self.kind_key = "custom"
         if not isinstance(self.requires, frozenset):
             self.requires = frozenset(c for c in (self.requires or ()) if c in ALLOWED_CAPABILITIES)
         self.difficulty = min(max(float(self.difficulty), 0.0), 1.0)
+        self.scale_kind = _normalize_scale_kind({"scale_kind": getattr(self, "scale_kind", {})})
+        if getattr(self, "scale_value", None) is None:
+            self.scale_value = tokens_to_scale_value(float(self.tokens_day), self.scale_kind)
+        else:
+            self.scale_value = max(0.0, float(self.scale_value))
+            self.tokens_day = scale_value_to_tokens(self.scale_value, self.scale_kind)
         if self.in_pre not in DIST_PRESETS:
             self.in_pre = "Chat"
         if self.out_pre not in DIST_PRESETS:
@@ -222,6 +249,7 @@ class PlannerState:
     gpus: list[GpuPool] = field(default_factory=list)
     models: list[ModelAssignment] = field(default_factory=list)
     projects: list[Project] = field(default_factory=list)
+    use_case_defs: list[dict[str, Any]] = field(default_factory=lambda: copy.deepcopy(PROJECT_PRESETS))
     in_dist: list[int] = field(default_factory=lambda: list(DIST_PRESETS["Chat"]["in"]))
     out_dist: list[int] = field(default_factory=lambda: list(DIST_PRESETS["Chat"]["out"]))
     in_pre: str = "Chat"
@@ -538,16 +566,271 @@ def _find_preset(key: str) -> Optional[dict]:
     return next((p for p in PROJECT_PRESETS if p["key"] == key), None)
 
 
+def _slugify_key(value: str, fallback: str = "use_case") -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", (value or "").strip().lower()).strip("_")
+    return slug or fallback
+
+
+def _unique_use_case_key(state: PlannerState, base: str) -> str:
+    existing = {str(d.get("key", "")) for d in get_use_case_defs(state)}
+    key = _slugify_key(base)
+    if key not in existing:
+        return key
+    i = 2
+    while f"{key}_{i}" in existing:
+        i += 1
+    return f"{key}_{i}"
+
+
+def _payload_optional_float(source: dict, key: str) -> Optional[float]:
+    try:
+        value = source.get(key)
+    except AttributeError:
+        return None
+    if value in (None, ""):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) else None
+
+
+def _positive_payload_float(source: dict, key: str, default: float) -> float:
+    value = _payload_optional_float(source, key)
+    if value is None or value <= 0.0:
+        return float(default)
+    return float(value)
+
+
+def _normalize_scale_kind(raw: dict[str, Any] | None) -> dict[str, Any]:
+    raw = raw if isinstance(raw, dict) else {}
+    nested = raw.get("scale_kind") if isinstance(raw.get("scale_kind"), dict) else {}
+    source = {**nested}
+    for flat_key, nested_key in (
+        ("scale_model", "model"),
+        ("scale_label", "label"),
+        ("scale_unit", "unit"),
+        ("scale_formula", "formula"),
+        ("scale_token_multiplier", "token_multiplier"),
+        ("tokens_per_scale_unit", "token_multiplier"),
+        ("scale_min", "min"),
+        ("scale_max", "max"),
+        ("scale_step", "step"),
+    ):
+        if flat_key in raw and nested_key not in source:
+            source[nested_key] = raw[flat_key]
+
+    model = str(source.get("model") or DEFAULT_SCALE_KIND["model"]).strip()
+    if model not in SCALE_MODELS:
+        model = "custom"
+    unit = str(source.get("unit") or DEFAULT_SCALE_KIND["unit"]).strip()[:48] or DEFAULT_SCALE_KIND["unit"]
+    label = str(source.get("label") or "Scale").strip()[:48] or "Scale"
+    formula = str(source.get("formula") or raw.get("scale_hint") or DEFAULT_SCALE_KIND["formula"]).strip()[:180]
+    token_multiplier = _positive_payload_float(source, "token_multiplier", DEFAULT_SCALE_KIND["token_multiplier"])
+    min_value = _payload_optional_float(source, "min")
+    max_value = _payload_optional_float(source, "max")
+    step = _positive_payload_float(source, "step", DEFAULT_SCALE_KIND["step"])
+    if min_value is None:
+        min_value = float(DEFAULT_SCALE_KIND["min"])
+    if max_value is None or max_value <= min_value:
+        max_value = max(float(DEFAULT_SCALE_KIND["max"]), min_value + step)
+    return {
+        "model": model,
+        "label": label,
+        "unit": unit,
+        "token_multiplier": token_multiplier,
+        "min": float(min_value),
+        "max": float(max_value),
+        "step": float(step),
+        "formula": formula,
+    }
+
+
+def scale_value_to_tokens(scale_value: float, scale_kind: dict[str, Any] | None) -> float:
+    kind = _normalize_scale_kind({"scale_kind": scale_kind or {}})
+    value = max(0.0, float(scale_value or 0.0))
+    factor = max(float(kind["token_multiplier"]), 0.0)
+    if kind["model"] == "quadratic":
+        return value * value * factor
+    return value * factor
+
+
+def tokens_to_scale_value(tokens_day: float, scale_kind: dict[str, Any] | None) -> float:
+    kind = _normalize_scale_kind({"scale_kind": scale_kind or {}})
+    tokens = max(0.0, float(tokens_day or 0.0))
+    factor = max(float(kind["token_multiplier"]), 1e-9)
+    if kind["model"] == "quadratic":
+        return math.sqrt(tokens / factor)
+    return tokens / factor
+
+
+def scale_decimals(scale_kind: dict[str, Any] | None) -> int:
+    step = _normalize_scale_kind({"scale_kind": scale_kind or {}})["step"]
+    if step >= 1:
+        return 0
+    text = f"{step:.6f}".rstrip("0")
+    return max(0, len(text.partition(".")[2]))
+
+
+def format_scale_value(value: float, scale_kind: dict[str, Any] | None = None) -> str:
+    decimals = scale_decimals(scale_kind)
+    return f"{float(value):.{decimals}f}"
+
+
+def project_scale_config(state: PlannerState, proj: Project) -> dict[str, Any]:
+    preset = _find_use_case_def(state, getattr(proj, "kind_key", "custom"))
+    kind = preset.get("scale_kind") if preset else getattr(proj, "scale_kind", {})
+    kind = _normalize_scale_kind({"scale_kind": kind})
+    value = getattr(proj, "scale_value", None)
+    if value is None:
+        value = tokens_to_scale_value(getattr(proj, "tokens_day", 0.0), kind)
+    max_value = max(float(kind["max"]), float(value or 0.0))
+    return {
+        **kind,
+        "value": float(value or 0.0),
+        "display_value": format_scale_value(float(value or 0.0), kind),
+        "decimals": scale_decimals(kind),
+        "max": max_value,
+        "model_label": SCALE_MODELS.get(kind["model"], SCALE_MODELS["custom"]),
+    }
+
+
+def _bounded_def_value(field_name: str, value: float) -> float:
+    return _bounded_project_value(field_name, value)
+
+
+def _coerce_requires(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        values = (value,)
+    else:
+        values = value or ()
+    return tuple(c for c in values if c in ALLOWED_CAPABILITIES)
+
+
+def _normalize_use_case_def(raw: dict[str, Any], fallback_key: str | None = None) -> dict[str, Any]:
+    base_key = str(raw.get("key") or fallback_key or raw.get("name") or "use_case")
+    name = str(raw.get("name") or base_key.replace("_", " ").title()).strip()[:80] or "Use case"
+    in_pre = str(raw.get("in_pre", "Chat"))
+    out_pre = str(raw.get("out_pre", "Chat"))
+    preset_fallback = _find_preset(_slugify_key(base_key))
+    has_scale_metadata = "scale_kind" in raw or any(
+        key in raw
+        for key in ("scale_model", "scale_label", "scale_unit", "scale_formula", "scale_token_multiplier")
+    )
+    scale_source = raw if has_scale_metadata or preset_fallback is None else preset_fallback
+    scale_kind = _normalize_scale_kind(scale_source)
+    raw_tokens_day = _bounded_def_value("tokens_day", _payload_float(raw, "tokens_day", 500e6))
+    scale_payload = raw.get("scale") if isinstance(raw.get("scale"), dict) else {}
+    scale_value = _payload_optional_float(raw, "scale_value")
+    if scale_value is None:
+        scale_value = _payload_optional_float(scale_payload, "value")
+    if scale_value is None:
+        scale_value = tokens_to_scale_value(raw_tokens_day, scale_kind)
+    scale_kind["max"] = max(float(scale_kind["max"]), float(scale_value))
+    return {
+        "key": _slugify_key(base_key),
+        "name": name,
+        "difficulty": _bounded_def_value("difficulty", _payload_float(raw, "difficulty", 0.3)),
+        "tokens_day": _bounded_def_value("tokens_day", scale_value_to_tokens(scale_value, scale_kind)),
+        "scale_value": max(0.0, float(scale_value)),
+        "scale_kind": scale_kind,
+        "wtp_per_m": _bounded_def_value("wtp_per_m", _payload_float(raw, "wtp_per_m", 1.0)),
+        "requires": _coerce_requires(raw.get("requires", ())),
+        "min_success_rate": _bounded_def_value("min_success_rate", _payload_float(raw, "min_success_rate", 0.85)),
+        "batch_eligible": bool(raw.get("batch_eligible", False)),
+        "latent_jobs_day": _bounded_def_value("latent_jobs_day", _payload_float(raw, "latent_jobs_day", 0.0)),
+        "unlock_price_per_m": _bounded_def_value("unlock_price_per_m", _payload_float(raw, "unlock_price_per_m", 0.0)),
+        "in_pre": in_pre if in_pre in DIST_PRESETS else "Chat",
+        "out_pre": out_pre if out_pre in DIST_PRESETS else "Chat",
+        "scale_hint": str(raw.get("scale_hint", "")).strip()[:240],
+    }
+
+
+def normalize_use_case_defs(state: PlannerState):
+    raw_defs = getattr(state, "use_case_defs", None)
+    if not isinstance(raw_defs, list) or not raw_defs:
+        raw_defs = copy.deepcopy(PROJECT_PRESETS)
+
+    normalized = []
+    seen = set()
+    for idx, raw in enumerate(raw_defs):
+        if not isinstance(raw, dict):
+            continue
+        item = _normalize_use_case_def(raw, fallback_key=f"use_case_{idx + 1}")
+        base_key = item["key"]
+        if base_key in seen:
+            i = 2
+            while f"{base_key}_{i}" in seen:
+                i += 1
+            item["key"] = f"{base_key}_{i}"
+        seen.add(item["key"])
+        normalized.append(item)
+
+    state.use_case_defs = normalized or copy.deepcopy(PROJECT_PRESETS)
+
+
+def get_use_case_defs(state: PlannerState) -> list[dict[str, Any]]:
+    normalize_use_case_defs(state)
+    return state.use_case_defs
+
+
+def _find_use_case_def(state: PlannerState, key: str) -> Optional[dict[str, Any]]:
+    return next((d for d in get_use_case_defs(state) if d["key"] == key), None)
+
+
+def _default_project_name(name: str) -> bool:
+    clean = (name or "").strip()
+    return clean in {"", "New project", "New use case"} or any(clean == p["name"] for p in PROJECT_PRESETS)
+
+
+def _apply_preset_definition(proj: Project, preset: dict, preserve_scale: bool = True):
+    old_kind = getattr(proj, "kind_key", "custom")
+    tokens_day = proj.tokens_day
+    scale_value = getattr(proj, "scale_value", None)
+    latent_jobs_day = proj.latent_jobs_day
+    scale_kind = _normalize_scale_kind(preset)
+
+    proj.kind_key = str(preset["key"])
+    proj.name = str(preset["name"])
+    proj.difficulty = float(preset["difficulty"])
+    proj.wtp_per_m = float(preset["wtp_per_m"])
+    proj.scale_kind = copy.deepcopy(scale_kind)
+    proj.batch_eligible = bool(preset.get("batch_eligible", False))
+    proj.requires = frozenset(preset.get("requires", ()))
+    proj.min_success_rate = float(preset.get("min_success_rate", 0.85))
+    proj.unlock_price_per_m = float(preset.get("unlock_price_per_m", 0.0))
+    proj.in_pre = str(preset.get("in_pre", "Chat"))
+    proj.out_pre = str(preset.get("out_pre", "Chat"))
+    if preserve_scale:
+        if old_kind == preset["key"] and scale_value is not None:
+            proj.scale_value = max(0.0, float(scale_value))
+        else:
+            proj.scale_value = tokens_to_scale_value(tokens_day, scale_kind)
+        proj.tokens_day = scale_value_to_tokens(proj.scale_value, scale_kind)
+        proj.latent_jobs_day = latent_jobs_day
+    else:
+        proj.scale_value = float(preset.get("scale_value", tokens_to_scale_value(preset.get("tokens_day", tokens_day), scale_kind)))
+        proj.tokens_day = scale_value_to_tokens(proj.scale_value, scale_kind)
+        proj.latent_jobs_day = float(preset.get("latent_jobs_day", latent_jobs_day))
+    proj.__post_init__()
+
+
 def _add_project_from_preset(state: PlannerState, preset_key: str) -> Optional[Project]:
-    preset = _find_preset(preset_key)
+    preset = _find_use_case_def(state, preset_key)
     if preset is None:
         return None
+    scale_kind = _normalize_scale_kind(preset)
+    scale_value = float(preset.get("scale_value", tokens_to_scale_value(preset.get("tokens_day", 500e6), scale_kind)))
     proj = Project(
         uid=_next_uid(),
         name=preset["name"],
         difficulty=float(preset["difficulty"]),
-        tokens_day=float(preset["tokens_day"]),
+        tokens_day=scale_value_to_tokens(scale_value, scale_kind),
         wtp_per_m=float(preset["wtp_per_m"]),
+        scale_value=scale_value,
+        scale_kind=copy.deepcopy(scale_kind),
+        kind_key=str(preset["key"]),
         batch_eligible=bool(preset.get("batch_eligible", False)),
         requires=frozenset(preset.get("requires", ())),
         min_success_rate=float(preset.get("min_success_rate", 0.85)),
@@ -567,12 +850,16 @@ def add_project(state: PlannerState, preset_key: Optional[str] = None) -> Projec
         if proj is not None:
             return proj
     # Fallback blank project
+    scale_kind = copy.deepcopy(DEFAULT_SCALE_KIND)
     proj = Project(
         uid=_next_uid(),
-        name="New project",
+        name="New use case",
         difficulty=0.3,
         tokens_day=500e6,
         wtp_per_m=1.0,
+        scale_value=tokens_to_scale_value(500e6, scale_kind),
+        scale_kind=scale_kind,
+        kind_key="custom",
         batch_eligible=False,
         requires=frozenset(),
         min_success_rate=0.85,
@@ -584,6 +871,20 @@ def add_project(state: PlannerState, preset_key: Optional[str] = None) -> Projec
     state.projects.append(proj)
     _sync_aggregate_distribution(state)
     return proj
+
+
+def set_project_kind(state: PlannerState, project_uid: int, kind_key: str):
+    proj = state.find_project(project_uid)
+    if proj is None:
+        return
+    if kind_key == "custom":
+        proj.kind_key = "custom"
+        return
+    preset = _find_use_case_def(state, kind_key)
+    if preset is None:
+        return
+    _apply_preset_definition(proj, preset, preserve_scale=True)
+    _sync_aggregate_distribution(state)
 
 
 def remove_project(state: PlannerState, project_uid: int):
@@ -601,7 +902,22 @@ def set_project_field(state: PlannerState, project_uid: int, field_name: str, va
     lo, hi = bounds
     setattr(proj, field_name, min(max(float(value), lo), hi))
     if field_name == "tokens_day":
+        proj.scale_value = tokens_to_scale_value(proj.tokens_day, getattr(proj, "scale_kind", {}))
         _sync_aggregate_distribution(state)
+
+
+def set_project_scale_value(state: PlannerState, project_uid: int, value: float):
+    proj = state.find_project(project_uid)
+    if proj is None:
+        return
+    scale_kind = project_scale_config(state, proj)
+    proj.scale_kind = {
+        k: scale_kind[k]
+        for k in ("model", "label", "unit", "token_multiplier", "min", "max", "step", "formula")
+    }
+    proj.scale_value = max(0.0, float(value or 0.0))
+    proj.tokens_day = _bounded_project_value("tokens_day", scale_value_to_tokens(proj.scale_value, proj.scale_kind))
+    _sync_aggregate_distribution(state)
 
 
 def set_project_dist_preset(state: PlannerState, project_uid: int, kind: str, preset_key: str):
@@ -667,6 +983,364 @@ def set_project_capability(state: PlannerState, project_uid: int, capability: st
         proj.requires = proj.requires | {capability}
     else:
         proj.requires = proj.requires - {capability}
+
+
+def _sync_projects_from_use_case_defs(state: PlannerState):
+    for proj in state.projects:
+        if getattr(proj, "kind_key", "custom") == "custom":
+            continue
+        preset = _find_use_case_def(state, proj.kind_key)
+        if preset is None:
+            proj.kind_key = "custom"
+            continue
+        _apply_preset_definition(proj, preset, preserve_scale=True)
+    _sync_aggregate_distribution(state)
+
+
+def serialize_use_case_defs(state: PlannerState) -> dict:
+    return {
+        "type": "gpullm-use-case-library",
+        "version": 1,
+        "use_cases": copy.deepcopy(get_use_case_defs(state)),
+    }
+
+
+def replace_use_case_defs(state: PlannerState, payload: Any) -> int:
+    if isinstance(payload, list):
+        items = payload
+    elif isinstance(payload, dict):
+        items = payload.get("use_cases")
+    else:
+        items = None
+    if not isinstance(items, list):
+        raise ValueError("Use-case JSON must contain a use_cases array.")
+
+    normalized = []
+    seen = set()
+    for idx, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise ValueError("Each use case must be a JSON object.")
+        raw = dict(item.get("definition", item)) if isinstance(item.get("definition"), dict) else dict(item)
+        # Accept the earlier selected-instance export shape by folding scale into seed values.
+        scale = item.get("scale") if isinstance(item.get("scale"), dict) else {}
+        if "tokens_day" not in raw and "tokens_day" in scale:
+            raw["tokens_day"] = scale["tokens_day"]
+        if "scale_value" not in raw and "value" in scale:
+            raw["scale_value"] = scale["value"]
+        if "latent_jobs_day" not in raw and "latent_jobs_day" in scale:
+            raw["latent_jobs_day"] = scale["latent_jobs_day"]
+        raw["key"] = item.get("kind_key") or item.get("key") or raw.get("key") or item.get("name") or f"use_case_{idx + 1}"
+        raw["name"] = item.get("name") or raw.get("name") or raw["key"]
+        normalized_item = _normalize_use_case_def(raw, fallback_key=f"use_case_{idx + 1}")
+        base_key = normalized_item["key"]
+        if base_key in seen:
+            i = 2
+            while f"{base_key}_{i}" in seen:
+                i += 1
+            normalized_item["key"] = f"{base_key}_{i}"
+        seen.add(normalized_item["key"])
+        normalized.append(normalized_item)
+
+    state.use_case_defs = normalized
+    _sync_projects_from_use_case_defs(state)
+    return len(normalized)
+
+
+def add_use_case_def(state: PlannerState) -> dict[str, Any]:
+    key = _unique_use_case_key(state, "new_use_case")
+    item = _normalize_use_case_def({
+        "key": key,
+        "name": "New use case",
+        "difficulty": 0.3,
+        "tokens_day": 500e6,
+        "scale_value": 500,
+        "scale_kind": copy.deepcopy(DEFAULT_SCALE_KIND),
+        "wtp_per_m": 1.0,
+        "requires": (),
+        "min_success_rate": 0.85,
+        "batch_eligible": False,
+        "latent_jobs_day": 0.0,
+        "unlock_price_per_m": 0.0,
+        "in_pre": "Chat",
+        "out_pre": "Chat",
+        "scale_hint": "Set this from the organization's real usage driver.",
+    })
+    state.use_case_defs.append(item)
+    return item
+
+
+def remove_use_case_def(state: PlannerState, key: str):
+    get_use_case_defs(state)
+    state.use_case_defs = [d for d in state.use_case_defs if d["key"] != key]
+    for proj in state.projects:
+        if getattr(proj, "kind_key", "custom") == key:
+            proj.kind_key = "custom"
+
+
+def _set_use_case_scale_kind_field(item: dict[str, Any], field_name: str, value: Any):
+    scale_kind = _normalize_scale_kind(item)
+    if field_name == "scale_model":
+        model = str(value or "").strip()
+        scale_kind["model"] = model if model in SCALE_MODELS else "custom"
+    elif field_name == "scale_label":
+        scale_kind["label"] = str(value or "").strip()[:48] or scale_kind["label"]
+    elif field_name == "scale_unit":
+        scale_kind["unit"] = str(value or "").strip()[:48] or scale_kind["unit"]
+    elif field_name == "scale_formula":
+        scale_kind["formula"] = str(value or "").strip()[:180] or scale_kind["formula"]
+    elif field_name == "scale_token_multiplier":
+        scale_kind["token_multiplier"] = max(1e-9, float(value or scale_kind["token_multiplier"]))
+    elif field_name == "scale_max":
+        scale_kind["max"] = max(float(value or scale_kind["max"]), float(scale_kind["min"]) + float(scale_kind["step"]))
+    elif field_name == "scale_step":
+        scale_kind["step"] = max(1e-9, float(value or scale_kind["step"]))
+    else:
+        return
+    item["scale_kind"] = scale_kind
+    item["tokens_day"] = _bounded_def_value(
+        "tokens_day",
+        scale_value_to_tokens(float(item.get("scale_value", 0.0)), scale_kind),
+    )
+
+
+def set_use_case_def_field(state: PlannerState, key: str, field_name: str, value: Any):
+    item = _find_use_case_def(state, key)
+    if item is None:
+        return
+
+    if field_name == "name":
+        item["name"] = (str(value or "").strip()[:80] or item["name"])
+    elif field_name == "scale_hint":
+        item["scale_hint"] = str(value or "").strip()[:240]
+    elif field_name == "scale_value":
+        item["scale_value"] = max(0.0, float(value or 0.0))
+        item["tokens_day"] = _bounded_def_value("tokens_day", scale_value_to_tokens(item["scale_value"], item.get("scale_kind", {})))
+    elif field_name in {"scale_model", "scale_label", "scale_unit", "scale_formula", "scale_token_multiplier", "scale_max", "scale_step"}:
+        _set_use_case_scale_kind_field(item, field_name, value)
+    elif field_name == "batch_eligible":
+        item["batch_eligible"] = bool(value)
+    elif field_name in PROJECT_FIELD_BOUNDS:
+        item[field_name] = _bounded_def_value(field_name, float(value or 0.0))
+        if field_name == "tokens_day":
+            item["scale_value"] = tokens_to_scale_value(item["tokens_day"], item.get("scale_kind", {}))
+    elif field_name == "in_pre" and value in DIST_PRESETS:
+        item["in_pre"] = str(value)
+    elif field_name == "out_pre" and value in DIST_PRESETS:
+        item["out_pre"] = str(value)
+    else:
+        return
+    _sync_projects_from_use_case_defs(state)
+
+
+def set_use_case_def_capability(state: PlannerState, key: str, capability: str, required: bool):
+    item = _find_use_case_def(state, key)
+    if item is None or capability not in ALLOWED_CAPABILITIES:
+        return
+    caps = set(item.get("requires", ()))
+    if required:
+        caps.add(capability)
+    else:
+        caps.discard(capability)
+    item["requires"] = tuple(c for c in MODEL_CAPABILITIES if c in caps)
+    _sync_projects_from_use_case_defs(state)
+
+
+def _project_definition_payload(proj: Project) -> dict:
+    return {
+        "difficulty": float(proj.difficulty),
+        "scale_kind": copy.deepcopy(getattr(proj, "scale_kind", DEFAULT_SCALE_KIND)),
+        "wtp_per_m": float(proj.wtp_per_m),
+        "requires": sorted(proj.requires),
+        "min_success_rate": float(proj.min_success_rate),
+        "batch_eligible": bool(proj.batch_eligible),
+        "unlock_price_per_m": float(proj.unlock_price_per_m),
+        "in_pre": proj.in_pre,
+        "out_pre": proj.out_pre,
+    }
+
+
+def _project_scale_payload(proj: Project) -> dict:
+    return {
+        "value": float(getattr(proj, "scale_value", tokens_to_scale_value(proj.tokens_day, getattr(proj, "scale_kind", {})))),
+        "tokens_day": float(proj.tokens_day),
+        "latent_jobs_day": float(proj.latent_jobs_day),
+    }
+
+
+def serialize_project_set(state: PlannerState) -> dict:
+    """JSON-save format for the demand side only.
+
+    Each row keeps definition and scale separate so a saved file can contain many
+    use-case kinds while each organization chooses its own deployment scale.
+    """
+    return {
+        "type": "gpullm-use-case-set",
+        "version": 1,
+        "use_cases": [
+            {
+                "name": proj.name,
+                "kind_key": getattr(proj, "kind_key", "custom"),
+                "scale": _project_scale_payload(proj),
+                "definition": _project_definition_payload(proj),
+            }
+            for proj in state.projects
+        ],
+    }
+
+
+def _payload_dict(value: Any) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _payload_float(source: dict, key: str, default: float) -> float:
+    try:
+        return float(source.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _bounded_project_value(field_name: str, value: float) -> float:
+    lo, hi = PROJECT_FIELD_BOUNDS[field_name]
+    return min(max(float(value), lo), hi)
+
+
+def _project_from_payload(state: PlannerState, item: dict) -> Project:
+    kind_key = str(item.get("kind_key") or item.get("kind") or "custom")
+    preset = _find_use_case_def(state, kind_key) if kind_key != "custom" else None
+    if preset is None and kind_key != "custom":
+        preset = _find_preset(kind_key)
+    base = preset or {
+        "key": "custom",
+        "name": "Custom use case",
+        "difficulty": 0.3,
+        "tokens_day": 500e6,
+        "scale_value": 500.0,
+        "scale_kind": copy.deepcopy(DEFAULT_SCALE_KIND),
+        "wtp_per_m": 1.0,
+        "requires": (),
+        "min_success_rate": 0.85,
+        "batch_eligible": False,
+        "latent_jobs_day": 0.0,
+        "unlock_price_per_m": 0.0,
+        "in_pre": "Chat",
+        "out_pre": "Chat",
+    }
+    definition = _payload_dict(item.get("definition")) or item
+    scale = _payload_dict(item.get("scale")) or item
+    requires_raw = definition.get("requires", base.get("requires", ()))
+    if isinstance(requires_raw, str):
+        requires_iter = (requires_raw,)
+    else:
+        requires_iter = requires_raw or ()
+    requires = frozenset(c for c in requires_iter if c in ALLOWED_CAPABILITIES)
+    scale_kind_source = definition if isinstance(definition.get("scale_kind"), dict) else base
+    scale_kind = _normalize_scale_kind(scale_kind_source)
+    scale_value = _payload_optional_float(scale, "value")
+    if scale_value is None:
+        scale_value = _payload_optional_float(definition, "scale_value")
+    if scale_value is None:
+        scale_value = tokens_to_scale_value(
+            _payload_float(scale, "tokens_day", float(base.get("tokens_day", 500e6))),
+            scale_kind,
+        )
+
+    proj = Project(
+        uid=_next_uid(),
+        name=str(item.get("name") or base["name"])[:60],
+        difficulty=_bounded_project_value(
+            "difficulty",
+            _payload_float(definition, "difficulty", float(base["difficulty"])),
+        ),
+        tokens_day=_bounded_project_value(
+            "tokens_day",
+            scale_value_to_tokens(scale_value, scale_kind),
+        ),
+        wtp_per_m=_bounded_project_value(
+            "wtp_per_m",
+            _payload_float(definition, "wtp_per_m", float(base["wtp_per_m"])),
+        ),
+        scale_value=max(0.0, float(scale_value)),
+        scale_kind=copy.deepcopy(scale_kind),
+        kind_key=str(base["key"]) if preset else "custom",
+        batch_eligible=bool(definition.get("batch_eligible", base.get("batch_eligible", False))),
+        requires=requires,
+        min_success_rate=_bounded_project_value(
+            "min_success_rate",
+            _payload_float(definition, "min_success_rate", float(base.get("min_success_rate", 0.85))),
+        ),
+        latent_jobs_day=_bounded_project_value(
+            "latent_jobs_day",
+            _payload_float(scale, "latent_jobs_day", float(base.get("latent_jobs_day", 0.0))),
+        ),
+        unlock_price_per_m=_bounded_project_value(
+            "unlock_price_per_m",
+            _payload_float(definition, "unlock_price_per_m", float(base.get("unlock_price_per_m", 0.0))),
+        ),
+        in_pre=str(definition.get("in_pre", base.get("in_pre", "Chat"))),
+        out_pre=str(definition.get("out_pre", base.get("out_pre", "Chat"))),
+    )
+    return proj
+
+
+def replace_project_set(state: PlannerState, payload: Any) -> int:
+    if isinstance(payload, list):
+        items = payload
+    elif isinstance(payload, dict):
+        items = payload.get("use_cases")
+    else:
+        items = None
+    if not isinstance(items, list):
+        raise ValueError("Use-case JSON must contain a use_cases array.")
+
+    projects = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("Each use case must be a JSON object.")
+        projects.append(_project_from_payload(state, item))
+
+    state.projects = projects
+    _sync_aggregate_distribution(state)
+    return len(projects)
+
+
+def _infer_project_kind(state: PlannerState, proj: Project) -> str:
+    current = getattr(proj, "kind_key", "custom")
+    if current == "custom" or _find_use_case_def(state, current) is not None:
+        return current
+    for preset in get_use_case_defs(state):
+        if getattr(proj, "name", "") == preset["name"]:
+            return str(preset["key"])
+    return "custom"
+
+
+def normalize_projects(state: PlannerState):
+    normalize_use_case_defs(state)
+    for proj in state.projects:
+        proj.kind_key = _infer_project_kind(state, proj)
+        preset = _find_use_case_def(state, proj.kind_key) if proj.kind_key != "custom" else None
+        if preset is not None:
+            _apply_preset_definition(proj, preset, preserve_scale=True)
+        else:
+            proj.scale_kind = _normalize_scale_kind({"scale_kind": getattr(proj, "scale_kind", {})})
+            if getattr(proj, "scale_value", None) is None:
+                proj.scale_value = tokens_to_scale_value(getattr(proj, "tokens_day", 0.0), proj.scale_kind)
+            else:
+                proj.scale_value = max(0.0, float(proj.scale_value))
+                proj.tokens_day = scale_value_to_tokens(proj.scale_value, proj.scale_kind)
+        if not isinstance(proj.requires, frozenset):
+            proj.requires = frozenset(c for c in (proj.requires or ()) if c in ALLOWED_CAPABILITIES)
+        if proj.in_pre not in DIST_PRESETS:
+            proj.in_pre = "Chat"
+        if proj.out_pre not in DIST_PRESETS:
+            proj.out_pre = "Chat"
+        proj.difficulty = _bounded_project_value("difficulty", getattr(proj, "difficulty", 0.3))
+        proj.tokens_day = _bounded_project_value("tokens_day", getattr(proj, "tokens_day", 0.0))
+        proj.scale_value = tokens_to_scale_value(proj.tokens_day, getattr(proj, "scale_kind", {}))
+        proj.wtp_per_m = _bounded_project_value("wtp_per_m", getattr(proj, "wtp_per_m", 1.0))
+        proj.min_success_rate = _bounded_project_value("min_success_rate", getattr(proj, "min_success_rate", 0.85))
+        proj.latent_jobs_day = _bounded_project_value("latent_jobs_day", getattr(proj, "latent_jobs_day", 0.0))
+        proj.unlock_price_per_m = _bounded_project_value("unlock_price_per_m", getattr(proj, "unlock_price_per_m", 0.0))
+    _sync_aggregate_distribution(state)
 
 
 def add_gpu(state: PlannerState, gpu_type: str, count: int = 8):
@@ -910,6 +1584,7 @@ def get_state(session_id: str) -> PlannerState:
     s.mode = normalize_plot_mode(s.mode)
     s.projection_day_shape = normalize_day_shape(s.projection_day_shape)
     s.corpo_cloud = normalize_corpo_cloud(getattr(s, "corpo_cloud", CORPO_CLOUD_DEFAULT))
+    normalize_projects(s)
     return s
 
 
@@ -921,6 +1596,7 @@ def get_compare_state(session_id: str) -> Optional[PlannerState]:
         state.mode = normalize_plot_mode(state.mode)
         state.projection_day_shape = normalize_day_shape(state.projection_day_shape)
         state.corpo_cloud = normalize_corpo_cloud(getattr(state, "corpo_cloud", CORPO_CLOUD_DEFAULT))
+        normalize_projects(state)
     return state
 
 
@@ -992,16 +1668,18 @@ def _build_model_info(state: PlannerState, am: ModelAssignment, gpu_pool: Option
     avg_seq = avg_in + avg_out / 2.0
 
     decode_max_slots = 0
-    if decode_mem and avg_seq > 0 and decode_mem.kv_per_token > 0:
-        decode_per_replica = int(decode_mem.kv_budget / (avg_seq * decode_mem.kv_per_token))
+    if decode_mem and avg_seq > 0:
+        decode_kv = per_replica_kv_cache_bytes(model, avg_seq, am.prec, am.pp, am.tp)
+        decode_per_replica = int(decode_mem.kv_budget / decode_kv) if decode_kv > 0 else 0
         if state.decode_efficiency.sched_budget > 0:
             decode_per_replica = min(decode_per_replica, state.decode_efficiency.sched_budget)
         decode_max_slots = decode_per_replica * am.dp
 
     prefill_probe_len = max(1, effective_prefill_length(max(state.task_il, avg_in), state.prefix_hit_rate))
     prefill_max_batch = 0
-    if prefill_mem and prefill_probe_len > 0 and prefill_mem.kv_per_token > 0:
-        prefill_max_batch = int(prefill_mem.kv_budget / (prefill_probe_len * prefill_mem.kv_per_token)) * am.prefill_dp
+    if prefill_mem and prefill_probe_len > 0:
+        prefill_kv = per_replica_kv_cache_bytes(model, prefill_probe_len, am.prec, am.prefill_pp, am.prefill_tp)
+        prefill_max_batch = (int(prefill_mem.kv_budget / prefill_kv) if prefill_kv > 0 else 0) * am.prefill_dp
 
     others_used = sum(x.gpu_count for x in state.models if x.uid != am.uid and x.gpu_uid == am.gpu_uid)
     max_avail = gpu_pool.count - others_used if gpu_pool else 0
