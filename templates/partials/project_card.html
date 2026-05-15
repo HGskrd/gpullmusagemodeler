@@ -1,6 +1,6 @@
 {# Calculator use-case card: selected kind + organization-specific scale only. #}
 {% set scale_cfg = project_scale_config(state, proj) %}
-{% set q_floor = required_quality(proj.difficulty, proj.min_success_rate) %}
+{% set q_floor = required_quality(proj.difficulty, proj.min_success_rate, quality_floor=proj.quality_floor) %}
 <div class="card project-card compact-project-card" style="position:relative;">
   <button class="ghost sm" style="position:absolute;top:3px;right:3px;color:var(--red);padding:1px 4px;"
           hx-post="/project/remove" hx-target="#main-content"

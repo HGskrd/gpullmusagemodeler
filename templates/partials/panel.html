@@ -137,8 +137,16 @@
 <div class="panel">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;">
     <h2 style="margin:0;">Models</h2>
-    <div class="picker-wrap">
-      <button class="acc sm" data-picker="model" onclick="togglePicker(this, '/picker/model?panel={{ panel }}')" {{ 'disabled' if state.gpus|length == 0 else '' }}>+ Add model</button>
+    <div style="display:flex;align-items:center;gap:4px;">
+      <button class="ghost sm"
+              hx-post="/model/auto"
+              hx-target="#main-content"
+              hx-vals='{"panel":"{{ panel }}"}'
+              title="Replace this panel's model set with an automatic fit for the configured hardware and use cases."
+              {{ 'disabled' if state.gpus|length == 0 else '' }}>Auto</button>
+      <div class="picker-wrap">
+        <button class="acc sm" data-picker="model" onclick="togglePicker(this, '/picker/model?panel={{ panel }}')" {{ 'disabled' if state.gpus|length == 0 else '' }}>+ Add model</button>
+      </div>
     </div>
   </div>
   <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(250px,1fr));">
@@ -149,6 +157,24 @@
   {% endfor %}
   </div>
   {% include "partials/membar.html" %}
+  {% if state.auto_mode and state.auto_excluded %}
+  <div style="margin-top:8px;padding-top:6px;border-top:1px solid var(--border);">
+    <span class="T" style="display:block;margin-bottom:4px;color:var(--fg3);">Excluded from auto</span>
+    <div style="display:flex;flex-wrap:wrap;gap:4px;">
+      {% for key in state.auto_excluded %}
+        {% if key in MODELS %}
+        <div style="display:flex;align-items:center;gap:4px;padding:2px 6px;border:1px solid var(--border);border-radius:4px;opacity:0.5;">
+          <span class="T">{{ MODELS[key].name }}</span>
+          <button class="ghost sm" style="padding:1px 3px;"
+                  hx-post="/model/auto-reallow"
+                  hx-target="#main-content"
+                  hx-vals='{"panel":"{{ panel }}","key":"{{ key }}"}'>✕</button>
+        </div>
+        {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
 </div>
 
 {% include "partials/use_cases_panel.html" %}

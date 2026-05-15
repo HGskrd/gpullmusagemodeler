@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2026-05-15
+
+### Added
+
+- Added automatic model selection that fits deployed models to configured GPU pools, use-case demand, capability gates, SLOs, and quality floors.
+- Added model exclusion and re-allow controls for auto-selected model sets.
+- Added a bulk project picker action to add one project for every current use-case definition.
+- Added a copyable projection report endpoint and UI action for exporting deployment, routing, economics, supply, and expansion diagnostics.
+- Added internal user price readouts for deployed models, split into input and output $/1M token prices.
+- Added best-next-GPU recommendations that estimate margin gain, cloud spend avoided, destroyed demand recovered, and served-token uplift.
+- Added revenue projection tests for coverage metrics, zero-capacity assignments, and smooth latent-demand activation.
+
+### Changed
+
+- Updated routing quality checks to use confidence-adjusted effective quality plus an explicit per-use-case quality floor.
+- Updated cloud and internal effective-price calculations so token efficiency scales output tokens rather than fixed prompt tokens.
+- Reworked projection headline metrics around owner revenue, active demand, token coverage, value capture, and revenue multiple.
+- Changed latent demand unlocks from a hard threshold to a smooth activation curve around the unlock price.
+- Improved per-use-case routing diagnostics for SLO, capability, cloud, price-ceiling, and latent-demand outcomes.
+
 ## 2026-05-09
 
 ### Added

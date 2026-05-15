@@ -1,7 +1,15 @@
 <div id="projectionContent" style="margin-top:10px;" hx-swap-oob="outerHTML">
   <div style="margin-bottom:6px;">
-    <h2 style="margin:0;">Economic impact</h2>
-    <div class="T">Given your hardware, deployed models, and configured use cases: where does demand actually land? Served on your GPUs, spilled to cloud because you're under-provisioned, leaked because no deployed model meets the SLO at that difficulty, or destroyed because price exceeded the ceiling. Reference cloud prices come from the cheapest compatible catalog model (compatibility = success_rate(cloud.quality, difficulty) ≥ min_success_rate).</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+      <h2 style="margin:0;">Economic impact</h2>
+      <button type="button"
+              class="sm"
+              onclick="copyProjectionReport(this)"
+              title="Copy a clean text report with config, demand, routing, and supply results">
+        Copy report
+      </button>
+    </div>
+    <div class="T">Given your hardware, deployed models, and configured use cases: where does demand actually land? Served on your GPUs, spilled to cloud because you're under-provisioned, leaked because no deployed model meets the SLO and quality floor, or destroyed because price exceeded the ceiling. Reference cloud prices come from the cheapest compatible catalog model after the same quality gates.</div>
   </div>
 
   <div class="compare-container">

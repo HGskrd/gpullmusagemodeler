@@ -1,7 +1,8 @@
 {# Single model card #}
 <div class="card" style="position:relative;">
   <button class="ghost sm" style="position:absolute;top:3px;right:3px;color:var(--red);padding:1px 4px;"
-          hx-post="/model/remove" hx-target="#main-content"
+          hx-post="{{ '/model/auto-exclude' if state.auto_mode else '/model/remove' }}"
+          hx-target="#main-content"
           hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}'>✕</button>
 
   <div style="display:flex;align-items:center;gap:4px;margin-bottom:4px;">
@@ -24,8 +25,8 @@
   <div class="warn">⚠ {{ alert }}</div>
   {% endfor %}
   <div class="T" style="margin-bottom:3px;display:flex;gap:6px;">
-    <span class="tip" title="Benchmark-anchored model quality on a 0..1 axis (AA Intelligence Index, calibrated to 0.30..0.95). Paired with each use case's difficulty via success_rate() — model is eligible when its quality clears the use case's required-quality floor.">Q&nbsp;{{ "%.2f"|format(m.quality) }}</span>
-    <span class="tip" title="Token efficiency: 1.00× = 10M output tokens on AA's Intelligence Index reference; 0.50× = twice as verbose (thinks ~2× longer); 2.00× = half as many tokens. Effective $/M divides internal $/M by this, so verbose models cost more per unit of delivered answer — Nemotron Nano's ~0.07× is roughly 10× the tokens of Gemma 4 31B's ~1.4× on the same benchmarks.">η&nbsp;{{ "%.2f"|format(m.token_efficiency) }}×</span>
+    <span class="tip" title="Confidence-adjusted routing quality. Raw Q {{ '%.2f'|format(m.quality) }} · benchmark confidence {{ '%.0f'|format(m.quality_confidence * 100) }}%.">Q&nbsp;{{ "%.2f"|format(effective_quality(m)) }}</span>
+    <span class="tip" title="Token efficiency: 1.00× = 10M output tokens on AA's Intelligence Index reference; 0.50× = twice as verbose (thinks ~2× longer); 2.00× = half as many output tokens. Effective $/M scales the output side only, so long-prompt workloads are penalized less than pure generation workloads.">η&nbsp;{{ "%.2f"|format(m.token_efficiency) }}×</span>
   </div>
   {% if m.is_moe %}
   <div class="T" style="margin-bottom:3px;">

@@ -185,7 +185,7 @@
   <p>
     Amortized total cost of ownership per GPU-hour: hardware capex spread over its useful life,
     plus power, cooling, datacenter, and ops. When set (non-zero), it powers the daily cluster
-    cost and the <em>coverage / margin</em> readout in the internal-market panel. Leave it at 0
+    cost and the <em>revenue multiple / margin</em> readout in the internal-market panel. Leave it at 0
     and those readouts are suppressed.
   </p>
 
@@ -371,8 +371,8 @@
     <dt>Demand (tok/day)</dt><dd>Daily token volume the use case brings.</dd>
     <dt>WTP ceiling ($/M)</dt><dd>Willingness-to-pay per million tokens. If effective on-prem price
       exceeds this, the use case prefers cloud; if cloud also exceeds it, the work is destroyed.
-      Effective $/M divides raw $/M by the routed model's token_efficiency, so a verbose model
-      effectively costs more than its headline price.</dd>
+      Effective $/M scales only the output side by the routed model's token_efficiency, so verbose
+      models cost more without pretending the fixed prompt grew too.</dd>
     <dt>Difficulty</dt><dd>Task difficulty ∈ [0, 1], paired with each model's benchmark-anchored
       <em>quality</em> via <code>success_rate(quality, difficulty)</code> to decide eligibility.</dd>
     <dt>Quality SLO</dt><dd>Floor on <code>success_rate</code>. Candidate models below this are

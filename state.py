@@ -25,6 +25,9 @@ from data import (
     PRECISIONS,
     PRECISION_LABELS,
     normalize_precision,
+    effective_quality,
+    model_success_rate,
+    required_quality,
 )
 from calc import (
     EfficiencyParams,
@@ -53,6 +56,7 @@ PROJECT_FIELD_BOUNDS = {
     # Job-level success-rate floor. Candidates whose success_rate(model.quality, difficulty)
     # falls below this are rejected.
     "min_success_rate":    (0.50, 1.0),
+    "quality_floor":       (0.0, 1.0),
     # Latent demand that unlocks only when on-prem $/M drops below the project's unlock threshold.
     "latent_jobs_day":     (0.0, 1e12),
     "unlock_price_per_m":  (0.0, 200.0),
@@ -151,6 +155,9 @@ class Project:
     # Quality SLO: project rejects any candidate whose success_rate(model.quality, difficulty)
     # falls below this floor.
     min_success_rate: float = 0.85
+    # Absolute effective-quality floor. This prevents tiny/uncertain models from clearing very
+    # easy tasks only because the sigmoid threshold is low.
+    quality_floor: float = 0.0
     # Latent demand — hidden workload that only materializes when on-prem $/M falls at or
     # below unlock_price_per_m. Hard threshold: the pool is all-or-nothing per routing pass.
     latent_jobs_day: float = 0.0
@@ -172,6 +179,7 @@ class Project:
         else:
             self.scale_value = max(0.0, float(self.scale_value))
             self.tokens_day = scale_value_to_tokens(self.scale_value, self.scale_kind)
+        self.quality_floor = min(max(float(getattr(self, "quality_floor", 0.0)), 0.0), 1.0)
         if self.in_pre not in DIST_PRESETS:
             self.in_pre = "Chat"
         if self.out_pre not in DIST_PRESETS:
@@ -249,6 +257,8 @@ class PlannerState:
     gpus: list[GpuPool] = field(default_factory=list)
     models: list[ModelAssignment] = field(default_factory=list)
     projects: list[Project] = field(default_factory=list)
+    auto_excluded: list[str] = field(default_factory=list)
+    auto_mode: bool = False
     use_case_defs: list[dict[str, Any]] = field(default_factory=lambda: copy.deepcopy(PROJECT_PRESETS))
     in_dist: list[int] = field(default_factory=lambda: list(DIST_PRESETS["Chat"]["in"]))
     out_dist: list[int] = field(default_factory=lambda: list(DIST_PRESETS["Chat"]["out"]))
@@ -738,6 +748,7 @@ def _normalize_use_case_def(raw: dict[str, Any], fallback_key: str | None = None
         "wtp_per_m": _bounded_def_value("wtp_per_m", _payload_float(raw, "wtp_per_m", 1.0)),
         "requires": _coerce_requires(raw.get("requires", ())),
         "min_success_rate": _bounded_def_value("min_success_rate", _payload_float(raw, "min_success_rate", 0.85)),
+        "quality_floor": _bounded_def_value("quality_floor", _payload_float(raw, "quality_floor", 0.0)),
         "batch_eligible": bool(raw.get("batch_eligible", False)),
         "latent_jobs_day": _bounded_def_value("latent_jobs_day", _payload_float(raw, "latent_jobs_day", 0.0)),
         "unlock_price_per_m": _bounded_def_value("unlock_price_per_m", _payload_float(raw, "unlock_price_per_m", 0.0)),
@@ -799,6 +810,7 @@ def _apply_preset_definition(proj: Project, preset: dict, preserve_scale: bool =
     proj.batch_eligible = bool(preset.get("batch_eligible", False))
     proj.requires = frozenset(preset.get("requires", ()))
     proj.min_success_rate = float(preset.get("min_success_rate", 0.85))
+    proj.quality_floor = float(preset.get("quality_floor", 0.0))
     proj.unlock_price_per_m = float(preset.get("unlock_price_per_m", 0.0))
     proj.in_pre = str(preset.get("in_pre", "Chat"))
     proj.out_pre = str(preset.get("out_pre", "Chat"))
@@ -834,6 +846,7 @@ def _add_project_from_preset(state: PlannerState, preset_key: str) -> Optional[P
         batch_eligible=bool(preset.get("batch_eligible", False)),
         requires=frozenset(preset.get("requires", ())),
         min_success_rate=float(preset.get("min_success_rate", 0.85)),
+        quality_floor=float(preset.get("quality_floor", 0.0)),
         latent_jobs_day=float(preset.get("latent_jobs_day", 0.0)),
         unlock_price_per_m=float(preset.get("unlock_price_per_m", 0.0)),
         in_pre=str(preset.get("in_pre", "Chat")),
@@ -863,6 +876,7 @@ def add_project(state: PlannerState, preset_key: Optional[str] = None) -> Projec
         batch_eligible=False,
         requires=frozenset(),
         min_success_rate=0.85,
+        quality_floor=0.0,
         latent_jobs_day=0.0,
         unlock_price_per_m=0.0,
         in_pre="Chat",
@@ -933,8 +947,8 @@ def set_project_dist_preset(state: PlannerState, project_uid: int, kind: str, pr
 
 def _sync_aggregate_distribution(state: "PlannerState"):
     """Recompute state.in_dist / state.out_dist as a demand-weighted blend of each
-    project's in_pre / out_pre preset. calc.py still consumes the single aggregate
-    distribution; this just keeps it in sync with the projects' declared shapes."""
+    project's in_pre / out_pre preset. Shared capacity views consume this aggregate, while
+    routing economics can still use each project's declared shape directly."""
     in_len = len(INPUT_BUCKETS)
     out_len = len(OUTPUT_BUCKETS)
     in_agg = [0.0] * in_len
@@ -1058,6 +1072,7 @@ def add_use_case_def(state: PlannerState) -> dict[str, Any]:
         "wtp_per_m": 1.0,
         "requires": (),
         "min_success_rate": 0.85,
+        "quality_floor": 0.0,
         "batch_eligible": False,
         "latent_jobs_day": 0.0,
         "unlock_price_per_m": 0.0,
@@ -1152,6 +1167,7 @@ def _project_definition_payload(proj: Project) -> dict:
         "wtp_per_m": float(proj.wtp_per_m),
         "requires": sorted(proj.requires),
         "min_success_rate": float(proj.min_success_rate),
+        "quality_floor": float(getattr(proj, "quality_floor", 0.0)),
         "batch_eligible": bool(proj.batch_eligible),
         "unlock_price_per_m": float(proj.unlock_price_per_m),
         "in_pre": proj.in_pre,
@@ -1219,6 +1235,7 @@ def _project_from_payload(state: PlannerState, item: dict) -> Project:
         "wtp_per_m": 1.0,
         "requires": (),
         "min_success_rate": 0.85,
+        "quality_floor": 0.0,
         "batch_eligible": False,
         "latent_jobs_day": 0.0,
         "unlock_price_per_m": 0.0,
@@ -1267,6 +1284,10 @@ def _project_from_payload(state: PlannerState, item: dict) -> Project:
         min_success_rate=_bounded_project_value(
             "min_success_rate",
             _payload_float(definition, "min_success_rate", float(base.get("min_success_rate", 0.85))),
+        ),
+        quality_floor=_bounded_project_value(
+            "quality_floor",
+            _payload_float(definition, "quality_floor", float(base.get("quality_floor", 0.0))),
         ),
         latent_jobs_day=_bounded_project_value(
             "latent_jobs_day",
@@ -1338,6 +1359,7 @@ def normalize_projects(state: PlannerState):
         proj.scale_value = tokens_to_scale_value(proj.tokens_day, getattr(proj, "scale_kind", {}))
         proj.wtp_per_m = _bounded_project_value("wtp_per_m", getattr(proj, "wtp_per_m", 1.0))
         proj.min_success_rate = _bounded_project_value("min_success_rate", getattr(proj, "min_success_rate", 0.85))
+        proj.quality_floor = _bounded_project_value("quality_floor", getattr(proj, "quality_floor", 0.0))
         proj.latent_jobs_day = _bounded_project_value("latent_jobs_day", getattr(proj, "latent_jobs_day", 0.0))
         proj.unlock_price_per_m = _bounded_project_value("unlock_price_per_m", getattr(proj, "unlock_price_per_m", 0.0))
     _sync_aggregate_distribution(state)
@@ -1439,6 +1461,228 @@ def add_model(state: PlannerState, model_key: str):
     am = ModelAssignment(_next_uid(), model_key, gp.uid, gpu_count, 1, 1, selected_prec)
     state.models.append(am)
     _retune_model(state, am)
+    state.auto_mode = False
+    state.auto_excluded = []
+
+
+def _model_serves_project(model: Model, project: Project) -> bool:
+    return (
+        project.requires <= model.capabilities
+        and effective_quality(model) + 1e-9 >= float(getattr(project, "quality_floor", 0.0))
+        and model_success_rate(model, project.difficulty) >= project.min_success_rate
+    )
+
+
+def _active_project_demand(project: Project) -> float:
+    return max(0.0, float(project.tokens_day or 0.0)) + 0.25 * max(0.0, float(project.latent_jobs_day or 0.0))
+
+
+def _best_available_placement(state: PlannerState, model: Model) -> Optional[tuple[GpuPool, int, str]]:
+    placements: list[tuple[int, int, float, int, GpuPool, str]] = []
+    for gp in state.gpus:
+        avail = state.free_gpu_for_pool(gp.uid)
+        if avail <= 0:
+            continue
+        for prec in PRECISIONS:
+            need = _min_gpu_count_for_pool(model, gp.gpu, state.mu, state.profiled_non_kv_gb, prec, avail)
+            if math.isinf(need):
+                continue
+            placements.append((int(need), PRECISIONS.index(prec), -gp.gpu.mem, -avail, gp, prec))
+    if not placements:
+        return None
+    need, _, _, _, gp, prec = min(placements)
+    return gp, need, prec
+
+
+def _best_available_placement_on_pool(
+    state: PlannerState,
+    model: Model,
+    gp: GpuPool,
+) -> Optional[tuple[int, str]]:
+    avail = state.free_gpu_for_pool(gp.uid)
+    if avail <= 0:
+        return None
+
+    placements: list[tuple[int, int, str]] = []
+    for prec in PRECISIONS:
+        need = _min_gpu_count_for_pool(model, gp.gpu, state.mu, state.profiled_non_kv_gb, prec, avail)
+        if not math.isinf(need):
+            placements.append((int(need), PRECISIONS.index(prec), prec))
+    if not placements:
+        return None
+
+    need, _, prec = min(placements)
+    return need, prec
+
+
+def _auto_assignment_demand(state: PlannerState, am: ModelAssignment) -> float:
+    model = MODELS[am.model_key]
+    demand = sum(_active_project_demand(project) for project in state.projects if _model_serves_project(model, project))
+    return demand or model.quality * 1e6
+
+
+def _auto_model_value(model: Model, projects: list[Project]) -> float:
+    value = 0.0
+    for project in projects:
+        if not _model_serves_project(model, project):
+            continue
+        sr = model_success_rate(model, project.difficulty)
+        value += _active_project_demand(project) * max(0.0, float(project.wtp_per_m or 0.0)) * sr
+    return value
+
+
+def _auto_model_value_density(model: Model, projects: list[Project], gpu_count: int) -> float:
+    return _auto_model_value(model, projects) / max(int(gpu_count or 0), 1)
+
+
+def _seed_empty_auto_pools(state: PlannerState, projects: list[Project]):
+    for gp in state.gpus:
+        if state.free_gpu_for_pool(gp.uid) <= 0:
+            continue
+        if any(am.gpu_uid == gp.uid for am in state.models):
+            continue
+
+        candidates = []
+        for model in MODELS.values():
+            if model.hidden or model.key in state.auto_excluded:
+                continue
+            value = _auto_model_value(model, projects)
+            if value <= 0:
+                continue
+            placement = _best_available_placement_on_pool(state, model, gp)
+            if placement is None:
+                continue
+            gpu_count, prec = placement
+            value_density = _auto_model_value_density(model, projects, gpu_count)
+            candidates.append((
+                -value_density,
+                -value,
+                -effective_quality(model),
+                model.active_params / max(model.token_efficiency, 1e-6),
+                gpu_count,
+                model.total_params,
+                PRECISIONS.index(prec),
+                model,
+                prec,
+            ))
+
+        if not candidates:
+            continue
+
+        _, _, _, _, _, _, _, model, prec = min(candidates)
+        gpu_count, _ = _best_available_placement_on_pool(state, model, gp) or (0, prec)
+        if gpu_count <= 0:
+            continue
+        state.models.append(ModelAssignment(_next_uid(), model.key, gp.uid, gpu_count, 1, 1, prec))
+        _retune_model(state, state.models[-1])
+
+
+def _grow_auto_assignments(state: PlannerState):
+    for gp in state.gpus:
+        while state.free_gpu_for_pool(gp.uid) > 0:
+            candidates = [am for am in state.models if am.gpu_uid == gp.uid]
+            candidates.sort(key=lambda am: (-_auto_assignment_demand(state, am), am.gpu_count, am.uid))
+            grew = False
+            for am in candidates:
+                next_count = am.gpu_count + 1
+                if not valid_strategies(MODELS[am.model_key], next_count, gp.gpu, state.mu, state.profiled_non_kv_gb, am.prec):
+                    continue
+                am.gpu_count = next_count
+                _retune_model(state, am)
+                grew = True
+                break
+            if not grew:
+                break
+
+
+def auto_select_models(state: PlannerState):
+    if not state.gpus:
+        raise ValueError("Add a GPU pool before auto-selecting models.")
+
+    original_models = list(state.models)
+    state.models = []
+    projects = [project for project in state.projects if _active_project_demand(project) > 0]
+    if not projects:
+        projects = [
+            Project(_next_uid(), "Balanced chat", 0.30, 1.0, 1.0, min_success_rate=0.90, quality_floor=0.55),
+            Project(_next_uid(), "Coding / reasoning", 0.55, 1.0, 4.0, requires=frozenset({"tools", "ctx_128k"}), min_success_rate=0.85, quality_floor=0.70),
+            Project(_next_uid(), "Frontier reasoning", 0.90, 1.0, 20.0, requires=frozenset({"tools", "reasoning"}), min_success_rate=0.95, quality_floor=0.90),
+        ]
+
+    selected_keys: set[str] = set()
+    ordered_projects = sorted(
+        projects,
+        key=lambda project: (
+            -required_quality(project.difficulty, project.min_success_rate, quality_floor=getattr(project, "quality_floor", 0.0)),
+            -_active_project_demand(project),
+            -len(project.requires),
+        ),
+    )
+
+    for project in ordered_projects:
+        candidates = []
+        for model in MODELS.values():
+            if model.hidden or model.key in selected_keys or model.key in state.auto_excluded or not _model_serves_project(model, project):
+                continue
+            placement = _best_available_placement(state, model)
+            if placement is None:
+                continue
+            _, gpu_count, prec = placement
+            value = _auto_model_value(model, [project])
+            value_density = _auto_model_value_density(model, [project], gpu_count)
+            candidates.append((
+                -value_density,
+                -value,
+                -effective_quality(model),
+                model.active_params / max(model.token_efficiency, 1e-6),
+                gpu_count,
+                model.total_params,
+                PRECISIONS.index(prec),
+                model,
+                placement,
+            ))
+        if not candidates:
+            continue
+
+        _, _, _, _, _, _, _, model, placement = min(candidates)
+        gp, gpu_count, prec = placement
+        state.models.append(ModelAssignment(_next_uid(), model.key, gp.uid, gpu_count, 1, 1, prec))
+        selected_keys.add(model.key)
+        _retune_model(state, state.models[-1])
+
+    if not state.models:
+        state.models = original_models
+        raise ValueError("No eligible model fits the configured GPU pools and use-case SLOs.")
+
+    _seed_empty_auto_pools(state, projects)
+    _grow_auto_assignments(state)
+    state.auto_mode = True
+
+
+def auto_exclude_model(state: PlannerState, model_uid: int):
+    am = state.find_model(model_uid)
+    if am is None:
+        return
+    model_key = am.model_key
+    if model_key in state.auto_excluded:
+        return
+    state.auto_excluded.append(model_key)
+    try:
+        auto_select_models(state)
+    except ValueError:
+        state.auto_excluded.remove(model_key)
+        state.auto_mode = True
+
+
+def auto_reallow_model(state: PlannerState, model_key: str):
+    if model_key not in state.auto_excluded:
+        return
+    state.auto_excluded = [k for k in state.auto_excluded if k != model_key]
+    try:
+        auto_select_models(state)
+    except ValueError:
+        state.auto_excluded.append(model_key)
+        state.auto_mode = True
 
 
 def remove_model(state: PlannerState, model_uid: int):
@@ -1584,6 +1828,10 @@ def get_state(session_id: str) -> PlannerState:
     s.mode = normalize_plot_mode(s.mode)
     s.projection_day_shape = normalize_day_shape(s.projection_day_shape)
     s.corpo_cloud = normalize_corpo_cloud(getattr(s, "corpo_cloud", CORPO_CLOUD_DEFAULT))
+    if not hasattr(s, "auto_excluded"):
+        s.auto_excluded = []
+    if not hasattr(s, "auto_mode"):
+        s.auto_mode = False
     normalize_projects(s)
     return s
 
@@ -1596,6 +1844,10 @@ def get_compare_state(session_id: str) -> Optional[PlannerState]:
         state.mode = normalize_plot_mode(state.mode)
         state.projection_day_shape = normalize_day_shape(state.projection_day_shape)
         state.corpo_cloud = normalize_corpo_cloud(getattr(state, "corpo_cloud", CORPO_CLOUD_DEFAULT))
+        if not hasattr(state, "auto_excluded"):
+            state.auto_excluded = []
+        if not hasattr(state, "auto_mode"):
+            state.auto_mode = False
         normalize_projects(state)
     return state
 

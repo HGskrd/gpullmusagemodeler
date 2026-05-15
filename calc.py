@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import math
 from collections import defaultdict
 from dataclasses import dataclass
@@ -24,6 +25,8 @@ from data import (
     normalize_precision,
     carbon_intensity_avg,
     corpo_cloud_models,
+    effective_quality,
+    model_success_rate,
     success_rate,
 )
 
@@ -31,6 +34,8 @@ from data import (
 # vLLM-at-saturation is typically compute- or bandwidth-bound; measured draw on
 # H100/MI300 commonly lands in the 0.6–0.8 range. Held central for transparency.
 GPU_POWER_UTILIZATION = 0.70
+LATENT_UNLOCK_STEEPNESS = 4.0
+MARGINAL_RECOMMENDATION_LIMIT = 5
 
 INTER_NODE_COLLECTIVE_BW = 25e9
 DATA_BATCH_SIZES = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]  # Fixed to match BATCH_SIZES
@@ -1568,6 +1573,27 @@ def _workload_profile(state) -> dict:
     }
 
 
+def _project_workload_profile(project, fallback: dict) -> dict:
+    """Average in/out lengths for one project's declared workload shape.
+
+    The capacity model still uses the aggregate workload to estimate shared GPU supply, but
+    routing economics need the project's own shape. Otherwise a short classification stream
+    inherits the blended portfolio's long-output token tax and can look falsely priced out.
+    """
+    in_preset = DIST_PRESETS.get(getattr(project, "in_pre", "")) or DIST_PRESETS["Chat"]
+    out_preset = DIST_PRESETS.get(getattr(project, "out_pre", "")) or DIST_PRESETS["Chat"]
+    in_len = avg_dist(in_preset["in"], INPUT_BUCKETS)
+    out_len = avg_dist(out_preset["out"], OUTPUT_BUCKETS)
+    if in_len <= 0 or out_len <= 0:
+        in_len = float(fallback["in_len"])
+        out_len = float(fallback["out_len"])
+    return {
+        "in_len": in_len,
+        "out_len": out_len,
+        "tokens_per_request": max(1.0, in_len + out_len),
+    }
+
+
 def _stall_curve(load: float) -> float:
     """Map requested load (fraction of peak capacity) → served fraction.
     Below 100% runs clean. 100–115% thrashes (KV pressure, scheduler contention). Above 115% stalls."""
@@ -1644,6 +1670,7 @@ def _best_deployment_result_for_model(state, am, gpu: GPU, in_len: int, out_len:
 def _cloud_price_per_m_in_preset(
     difficulty: float,
     min_success: float,
+    quality_floor: float,
     profile: dict,
     prefix_hit_rate: float,
     preset_name: str,
@@ -1668,16 +1695,17 @@ def _cloud_price_per_m_in_preset(
             continue
         cloud_quality = float(cloud.get("quality", 0.5))
         cloud_eff = max(float(cloud.get("token_efficiency", 1.0)), 1e-6)
+        if cloud_quality + 1e-9 < quality_floor:
+            continue
         if success_rate(cloud_quality, difficulty) + 1e-9 < min_success:
             continue
         sticker = (
             (uncached / 1e6) * cloud["in_per_m"]
             + (cached / 1e6) * cloud["cached_in_per_m"]
-            + (out_len / 1e6) * cloud["out_per_m"]
+            + ((out_len / cloud_eff) / 1e6) * cloud["out_per_m"]
         )
-        # Token-efficiency folds in: a less-efficient cloud burns more tokens per useful unit.
-        effective_dollars = sticker / cloud_eff
-        price_pm = effective_dollars / (tokens_per_req / 1e6)
+        # Token efficiency affects generated tokens, not the fixed prompt payload.
+        price_pm = sticker / (tokens_per_req / 1e6)
         if best is None or price_pm < best[0]:
             best = (price_pm, cloud | {"key": key})
 
@@ -1690,6 +1718,31 @@ def tokens_per_task(model: Model, task_il: int, task_ol: int) -> float:
     """Output tokens scale by 1/token_efficiency (verbose models emit more to finish a task)."""
     eff = max(float(getattr(model, "token_efficiency", 1.0)), 1e-6)
     return float(task_il) + float(task_ol) / eff
+
+
+def _actual_token_multiplier(token_efficiency: float, in_len: float, out_len: float) -> float:
+    """Actual GPU/cloud tokens consumed per useful workload token.
+
+    Token efficiency is an output-token verbosity proxy. Prompts do not get longer just
+    because a model thinks or writes more, so only the output side is scaled.
+    """
+    eff = max(float(token_efficiency), 1e-6)
+    useful = max(float(in_len) + float(out_len), 1.0)
+    actual = max(float(in_len), 0.0) + max(float(out_len), 0.0) / eff
+    return max(actual / useful, 1e-9)
+
+
+def latent_activation_share(cheapest_pm: float, unlock_price: float) -> float:
+    """Smooth latent-demand activation around the configured unlock price.
+
+    A hard threshold makes portfolio demand jump discontinuously when a model becomes
+    barely cheap enough. This curve keeps the same midpoint semantics: at the unlock
+    price, half the latent pool is active; materially cheaper routes approach 100%.
+    """
+    if unlock_price <= 0 or math.isinf(cheapest_pm) or cheapest_pm <= 0:
+        return 0.0
+    ratio = unlock_price / cheapest_pm
+    return min(max(1.0 / (1.0 + math.exp(-LATENT_UNLOCK_STEEPNESS * (ratio - 1.0))), 0.0), 1.0)
 
 
 def co2_g_per_task(
@@ -1767,6 +1820,8 @@ def _build_model_supply(state, profile, prefix_hit_rate, peak_factor_eff) -> lis
             "gpu_count": am.gpu_count,
             "model": am.model,
             "quality": float(am.model.quality),
+            "effective_quality": effective_quality(am.model),
+            "quality_confidence": min(max(float(getattr(am.model, "quality_confidence", 1.0)), 0.0), 1.0),
             "token_efficiency": max(float(am.model.token_efficiency), 1e-6),
             "peak_rps": peak_rps,
             "daily_tokens_cap": daily_tokens_cap,
@@ -1785,7 +1840,7 @@ def _build_model_supply(state, profile, prefix_hit_rate, peak_factor_eff) -> lis
     return supply
 
 
-def compute_revenue_projection(state) -> dict:
+def compute_revenue_projection(state, include_recommendations: bool = True) -> dict:
     """Internal-market economics for the current deployment, driven by project-level demand.
 
     For each project we allocate demand to the cheapest tier-compatible deployed model that
@@ -1827,8 +1882,10 @@ def compute_revenue_projection(state) -> dict:
     for p in projects_sorted:
         difficulty = float(getattr(p, "difficulty", 0.5))
         slo = float(getattr(p, "min_success_rate", 0.85))
+        quality_floor = float(getattr(p, "quality_floor", 0.0))
+        project_profile = _project_workload_profile(p, profile)
         cloud_info, cloud_pm = _cloud_price_per_m_in_preset(
-            difficulty, slo, profile, prefix_hit_rate, corpo_cloud,
+            difficulty, slo, quality_floor, project_profile, prefix_hit_rate, corpo_cloud,
         )
         cloud_blocked = cloud_info is None
         wtp = float(p.wtp_per_m)
@@ -1836,8 +1893,8 @@ def compute_revenue_projection(state) -> dict:
         required_caps = getattr(p, "requires", frozenset()) or frozenset()
 
         # Candidate list with capability + success-rate gates. `useful tokens` = work the
-        # project needs done; each candidate burns `token_mult = 1 / model.token_efficiency`
-        # real tokens per useful token, so the effective $/M is internal_pm × token_mult.
+        # project needs done; token efficiency affects generated/output tokens only, so the
+        # actual GPU tokens burned per useful token depends on this workload's input/output mix.
         candidates: list[dict] = []
         cap_filtered = False
         slo_filtered = False
@@ -1847,34 +1904,37 @@ def compute_revenue_projection(state) -> dict:
             if not (required_caps <= me["model"].capabilities):
                 cap_filtered = True
                 continue
-            sr = success_rate(me["quality"], difficulty)
+            if me["effective_quality"] + 1e-9 < quality_floor:
+                slo_filtered = True
+                continue
+            sr = model_success_rate(me["model"], difficulty)
             if sr + 1e-9 < slo:
                 slo_filtered = True
                 continue
-            token_mult = 1.0 / me["token_efficiency"]
+            token_mult = _actual_token_multiplier(
+                me["token_efficiency"],
+                float(project_profile["in_len"]),
+                float(project_profile["out_len"]),
+            )
+            retry_mult = 1.0 / max(sr, 1e-6)
             candidates.append({
                 "me": me,
                 "success_rate": sr,
-                "token_mult": token_mult,
-                "effective_pm": me["internal_pm"] * token_mult,
+                "retry_mult": retry_mult,
+                "token_mult": token_mult * retry_mult,
+                "effective_pm": me["internal_pm"] * token_mult * retry_mult,
             })
         candidates.sort(key=lambda c: c["effective_pm"])
 
-        # Latent demand — hard threshold. If the cheapest viable candidate's effective $/M is at
-        # or below the project's unlock price, the latent pool joins the baseline demand for
-        # this routing pass. All-or-nothing per pass — picks up archive/backfill scenarios that
-        # only make sense when on-prem is genuinely cheap.
+        # Latent demand activates smoothly around the unlock price. This keeps the configured
+        # unlock as the midpoint while avoiding discontinuous portfolio demand jumps.
         baseline_tokens = total
         latent_pool = max(0.0, float(getattr(p, "latent_jobs_day", 0.0)))
         unlock_price = float(getattr(p, "unlock_price_per_m", 0.0))
         cheapest_pm = candidates[0]["effective_pm"] if candidates else float("inf")
-        latent_unlocked = (
-            latent_pool > 0
-            and unlock_price > 0
-            and bool(candidates)
-            and cheapest_pm <= unlock_price + 1e-9
-        )
-        latent_active = latent_pool if latent_unlocked else 0.0
+        latent_activation = latent_activation_share(cheapest_pm, unlock_price) if candidates else 0.0
+        latent_active = latent_pool * latent_activation
+        latent_unlocked = latent_active > 1.0
         total = baseline_tokens + latent_active
 
         served = 0.0  # useful tokens delivered (project-perspective)
@@ -1884,6 +1944,7 @@ def compute_revenue_projection(state) -> dict:
         # Internal price cap: never charge above WTP; if cloud is reachable, also cap at cloud
         # (otherwise the project would just buy from cloud instead of paying us more).
         price_cap = wtp if cloud_blocked else min(wtp, cloud_pm)
+        has_affordable_candidate = any(c["effective_pm"] <= price_cap + 1e-9 for c in candidates)
         for c in candidates:
             me = c["me"]
             if me["remaining_cap"] <= 0:
@@ -1914,9 +1975,10 @@ def compute_revenue_projection(state) -> dict:
                 # to. The work is dropped regardless of WTP.
                 destroyed = unserved
             else:
-                # "Had a usable home" means some tokens did fit internally. If not, this is
-                # either a wrong-model-mix issue (no cap/SLO match) or priced-out — both leak.
-                if served > 0:
+                # "Had a usable home" means a matching model exists below the project price cap.
+                # If none was served, the reason can still be capacity exhaustion caused by
+                # higher-priority workloads, so classify that as spill instead of wrong-model leak.
+                if served > 0 or has_affordable_candidate:
                     spilled = unserved
                 else:
                     leaked = unserved
@@ -1927,9 +1989,8 @@ def compute_revenue_projection(state) -> dict:
         # Value of internally served tokens reflects the cheapest substitute (cloud price);
         # when cloud is blocked there's no substitute, so use WTP as the realized value.
         value_basis = wtp if cloud_blocked else cloud_pm
-        task_il = int(getattr(state, "task_il", profile["in_len"]))
-        task_ol = int(getattr(state, "task_ol", profile["out_len"]))
-        baseline_tokens_per_task = max(float(task_il + task_ol), 1.0)
+        value_served = sum((useful_t / 1e6) * value_basis * sr for _, useful_t, _, sr in per_model_served)
+        baseline_tokens_per_task = max(float(project_profile["tokens_per_request"]), 1.0)
         tasks_served_day = served / baseline_tokens_per_task
         co2_g_per_task_project = (co2_g_day_project / tasks_served_day) if tasks_served_day > 0 else 0.0
         routed[p.uid] = {
@@ -1952,11 +2013,12 @@ def compute_revenue_projection(state) -> dict:
             "leaked_pct": (leaked / total * 100.0) if total > 0 else 0.0,
             "destroyed_pct": (destroyed / total * 100.0) if total > 0 else 0.0,
             "internal_cost_day": internal_cost,
-            "value_served": (served / 1e6) * value_basis,
+            "quality_floor": quality_floor,
+            "value_served": value_served,
             "value_spilled": (spilled / 1e6) * value_basis,
             "value_leaked": (leaked / 1e6) * value_basis,
             "value_destroyed": (destroyed / 1e6) * value_basis,
-            "margin_day": (served / 1e6) * value_basis - internal_cost,
+            "margin_day": value_served - internal_cost,
             "tasks_served_day": tasks_served_day,
             "co2_kg_day": co2_g_day_project / 1000.0,
             "co2_g_per_task_avg": co2_g_per_task_project,
@@ -1975,12 +2037,13 @@ def compute_revenue_projection(state) -> dict:
             "unlock_price_per_m": unlock_price,
             "latent_unlocked": latent_unlocked,
             "latent_active_tokens": latent_active,
+            "latent_activation_pct": latent_activation * 100.0,
             "cheapest_effective_pm": (0.0 if math.isinf(cheapest_pm) else cheapest_pm),
             # Diagnostic hint: cheapest is within ~1.5× of unlock price but not yet under it.
             "latent_close_to_unlock": (
                 latent_pool > 0
                 and unlock_price > 0
-                and not latent_unlocked
+                and latent_activation < 0.50
                 and bool(candidates)
                 and cheapest_pm <= unlock_price * 1.5 + 1e-9
             ),
@@ -1991,6 +2054,7 @@ def compute_revenue_projection(state) -> dict:
                     "tokens": useful_t,
                     "actual_tokens": actual_t,
                     "success_rate": sr,
+                    "retry_mult": 1.0 / max(sr, 1e-6),
                     "color": me["model"].color,
                 }
                 for me, useful_t, actual_t, sr in per_model_served
@@ -2012,6 +2076,7 @@ def compute_revenue_projection(state) -> dict:
     value_destroyed = sum(r["value_destroyed"] for r in project_rows)
     value_cloud = value_spilled + value_leaked  # money that leaves for the cloud
     value_lost = value_cloud + value_destroyed  # money not captured internally
+    value_opportunity = value_served + value_lost
 
     cost_day = sum(gp.cost_per_gpu_hour * 24.0 * gp.count for gp in state.gpus)
     cost_per_m_served = (cost_day * 1e6 / total_served) if total_served > 0 else 0.0
@@ -2020,7 +2085,11 @@ def compute_revenue_projection(state) -> dict:
     co2_kg_day_total = _co2_numer / 1000.0
     co2_g_per_task_avg = (_co2_numer / sum(me["served_tokens"] / max(me.get("tokens_per_task", 0.0), 1e-9) for me in supply)) if total_served > 0 else 0.0
     margin_day = value_served - cost_day
-    coverage = (value_served / cost_day) if cost_day > 0 else 0.0
+    revenue_multiple = (value_served / cost_day) if cost_day > 0 else 0.0
+    token_coverage = (total_served / total_tokens) if total_tokens > 0 else 0.0
+    value_capture_rate = (value_served / value_opportunity) if value_opportunity > 0 else 0.0
+    baseline_tokens_total = sum(r["baseline_tokens_day"] for r in project_rows)
+    latent_active_tokens_total = sum(r["latent_active_tokens"] for r in project_rows)
 
     # Per-model "demand fit" rows (what each deployed model actually ended up serving).
     # Note `served_tokens` here is *actual* GPU-tokens consumed (including downgrade waste);
@@ -2043,6 +2112,8 @@ def compute_revenue_projection(state) -> dict:
             "name": me["model"].name,
             "color": me["model"].color,
             "quality": me["quality"],
+            "effective_quality": me["effective_quality"],
+            "quality_confidence": me["quality_confidence"],
             "token_efficiency": me["token_efficiency"],
             "gpu_count": me["gpu_count"],
             "peak_rps": me["peak_rps"],
@@ -2050,6 +2121,11 @@ def compute_revenue_projection(state) -> dict:
             "served_tokens": me["served_tokens"],
             "utilization": util,
             "internal_pm": 0.0 if math.isinf(me["internal_pm"]) else me["internal_pm"],
+            "internal_input_pm": 0.0 if math.isinf(me["internal_pm"]) else me["internal_pm"],
+            "internal_output_pm": (
+                0.0 if math.isinf(me["internal_pm"])
+                else me["internal_pm"] / max(me["token_efficiency"], 1e-6)
+            ),
             "gpu_cost_day": me["gpu_cost_day"],
             "tokens_per_task": tpt,
             "country": me.get("country", DEFAULT_COUNTRY),
@@ -2060,7 +2136,18 @@ def compute_revenue_projection(state) -> dict:
             "co2_kg_day": co2_g_day_total / 1000.0,
             "saturated": saturated,
             "runnable": me["runnable"],
+            "status": (
+                "NOT RUNNABLE" if not me["runnable"]
+                else "SATURATED" if saturated
+                else "IDLE" if util < 0.05
+                else "OK"
+            ),
         })
+
+    recommendations = (
+        _marginal_gpu_recommendations(state, margin_day, value_cloud, value_destroyed, total_served)
+        if include_recommendations else []
+    )
 
     return {
         "ready": bool(supply) and bool(project_rows),
@@ -2092,12 +2179,19 @@ def compute_revenue_projection(state) -> dict:
         "value_destroyed_day": value_destroyed,
         "value_cloud_day": value_cloud,
         "value_lost_day": value_lost,
+        "avoidable_cloud_outflow_day": value_cloud,
         "cost_day": cost_day,
         "cost_per_m_served": cost_per_m_served,
         "co2_kg_day_total": co2_kg_day_total,
         "co2_g_per_task_avg": co2_g_per_task_avg,
         "margin_day": margin_day,
-        "coverage": coverage,
+        "coverage": revenue_multiple,
+        "revenue_multiple": revenue_multiple,
+        "token_coverage": token_coverage,
+        "value_capture_rate": value_capture_rate,
+        "baseline_tokens_day": baseline_tokens_total,
+        "latent_active_tokens_day": latent_active_tokens_total,
+        "recommendations": recommendations,
         "total_gpus_used": sum(me["gpu_count"] for me in supply),
         "total_gpus": sum(gp.count for gp in state.gpus),
         "total_cap_tokens_day": total_cap,
@@ -2106,3 +2200,70 @@ def compute_revenue_projection(state) -> dict:
         "workload_in_len": profile["in_len"],
         "workload_out_len": profile["out_len"],
     }
+
+
+def _marginal_gpu_recommendations(
+    state,
+    base_margin: float,
+    base_cloud: float,
+    base_destroyed: float,
+    base_served_tokens: float,
+) -> list[dict]:
+    """Estimate the best one-GPU expansions for currently deployed models.
+
+    This stays inside calc.py to avoid importing state.py back into the module that state.py
+    already imports. It therefore simulates only growth of existing assignments and retunes
+    their topology with calc.py's local strategy helper.
+    """
+    seen: set[tuple[int, int]] = set()
+    rows: list[dict] = []
+    for am, gpu in _iter_resolved_models(state):
+        key = (am.uid, am.gpu_uid)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        sim = copy.deepcopy(state)
+        sim_am = next((m for m in sim.models if m.uid == am.uid), None)
+        sim_gp = next((gp for gp in sim.gpus if gp.uid == am.gpu_uid), None)
+        if sim_am is None or sim_gp is None:
+            continue
+
+        sim_gp.count += 1
+        sim_am.gpu_count += 1
+        strategy = default_strategy(
+            sim_am.model,
+            sim_am.gpu_count,
+            sim_gp.gpu,
+            sim.mu,
+            sim.profiled_non_kv_gb,
+            sim_am.prec,
+        )
+        if not valid_strategies(sim_am.model, sim_am.gpu_count, sim_gp.gpu, sim.mu, sim.profiled_non_kv_gb, sim_am.prec):
+            continue
+        sim_am.tp, sim_am.pp, sim_am.dp = strategy
+        sim_am.prefill_tp, sim_am.prefill_pp, sim_am.prefill_dp = strategy
+
+        projected = compute_revenue_projection(sim, include_recommendations=False)
+        margin_gain = projected["margin_day"] - base_margin
+        cloud_reduced = max(0.0, base_cloud - projected["value_cloud_day"])
+        destroyed_reduced = max(0.0, base_destroyed - projected["value_destroyed_day"])
+        score = margin_gain + 0.25 * cloud_reduced + 0.50 * destroyed_reduced
+        if score <= 0 and margin_gain <= 0 and cloud_reduced <= 0 and destroyed_reduced <= 0:
+            continue
+        rows.append({
+            "model_name": sim_am.model.name,
+            "gpu_name": sim_gp.gpu.name,
+            "gpu_uid": sim_gp.uid,
+            "am_uid": sim_am.uid,
+            "added_gpus": 1,
+            "new_gpu_count": sim_am.gpu_count,
+            "margin_gain_day": margin_gain,
+            "cloud_reduced_day": cloud_reduced,
+            "destroyed_reduced_day": destroyed_reduced,
+            "served_gain_tokens": max(0.0, projected["fates"]["served_tokens"] - base_served_tokens),
+            "score": score,
+        })
+
+    rows.sort(key=lambda r: (-r["score"], -r["margin_gain_day"], r["model_name"]))
+    return rows[:MARGINAL_RECOMMENDATION_LIMIT]

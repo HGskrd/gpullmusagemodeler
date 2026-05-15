@@ -17,7 +17,7 @@
 
 {% macro use_case_controls(preset) -%}
   {% set key = preset.key %}
-  {% set q_floor = required_quality(preset.difficulty, preset.min_success_rate) %}
+  {% set q_floor = required_quality(preset.difficulty, preset.min_success_rate, quality_floor=preset.quality_floor) %}
   {% set in_preset = DIST_PRESETS[preset.in_pre] %}
   {% set out_preset = DIST_PRESETS[preset.out_pre] %}
   {% set scale_kind = preset.scale_kind %}
@@ -165,6 +165,29 @@
                hx-target="#useCaseLibrary"
                hx-trigger="change, keyup[key=='Enter']"
                hx-vals='{"key":"{{ key }}","field":"min_success_rate_pct"}' />
+        <span class="T">%</span>
+      </span>
+    </div>
+
+    <div class="pc-row" title="Absolute effective-quality floor; proxy/uncertain model scores are discounted before this gate.">
+      <span class="T">Quality floor</span>
+      <input type="range" min="0" max="100" step="1"
+             name="value"
+             value="{{ (preset.quality_floor * 100)|round|int }}"
+             hx-post="/use-cases/definition/set"
+             hx-target="#useCaseLibrary"
+             hx-trigger="change"
+             hx-vals='{"key":"{{ key }}","field":"quality_floor_pct"}'
+             data-live-target="#def-qfloor-{{ key }}" />
+      <span class="val">
+        <input type="text" class="val-input" inputmode="numeric"
+               id="def-qfloor-{{ key }}"
+               value="{{ (preset.quality_floor * 100)|round|int }}"
+               name="value"
+               hx-post="/use-cases/definition/set"
+               hx-target="#useCaseLibrary"
+               hx-trigger="change, keyup[key=='Enter']"
+               hx-vals='{"key":"{{ key }}","field":"quality_floor_pct"}' />
         <span class="T">%</span>
       </span>
     </div>
@@ -354,7 +377,7 @@
 {% for preset in USE_CASE_DEFS %}
 {% set detail = use_case_details.get(preset.key, {}) %}
 {% set requires = preset.get("requires", ()) %}
-{% set q_floor = required_quality(preset.difficulty, preset.min_success_rate) %}
+{% set q_floor = required_quality(preset.difficulty, preset.min_success_rate, quality_floor=preset.quality_floor) %}
 {% set in_preset = DIST_PRESETS[preset.in_pre] %}
 {% set out_preset = DIST_PRESETS[preset.out_pre] %}
 {% set latent = preset.get("latent_jobs_day", 0.0) %}

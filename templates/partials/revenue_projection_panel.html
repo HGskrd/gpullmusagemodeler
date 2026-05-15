@@ -9,15 +9,22 @@
   {# ── Headline: demand served vs leaked vs destroyed ─────────────────────── #}
   <div class="card">
     <div class="projection-headline">
+      <div class="hs money-hero">
+        <span class="T tip" title="Daily revenue captured by the infrastructure owner from demand served on these GPUs, priced at the cloud substitute or WTP when cloud is blocked.">Owner revenue / day</span>
+        <span class="val good">{{ p.value_served_day|fmt_money }}</span>
+        <span class="sub">
+          {% if p.cost_day > 0 %}margin {{ p.margin_day|fmt_money }}/day · revenue multiple {{ "%.2f"|format(p.revenue_multiple) }}×{% else %}captured by your GPUs{% endif %}
+        </span>
+      </div>
       <div class="hs">
-        <span class="T">Demand (use cases)</span>
+        <span class="T">Active demand</span>
         <span class="val">{{ f.total_tokens|fmt_num }}</span>
-        <span class="sub">tokens/day across {{ state.projects|length }} use case{{ '' if state.projects|length == 1 else 's' }}</span>
+        <span class="sub">{{ p.baseline_tokens_day|fmt_num }} base + {{ p.latent_active_tokens_day|fmt_num }} latent</span>
       </div>
       <div class="hs">
         <span class="T">Served internally</span>
         <span class="val good">{{ (f.served_pct)|round(0)|int }}%</span>
-        <span class="sub">{{ f.served_tokens|fmt_num }} tok · {{ p.value_served_day|fmt_money }}/day captured</span>
+        <span class="sub">{{ f.served_tokens|fmt_num }} tok on your GPUs</span>
       </div>
       <div class="hs">
         <span class="T">Leaked to cloud</span>
@@ -34,12 +41,12 @@
         <span class="sub">price too high — work not done</span>
       </div>
       <div class="hs">
-        <span class="T">Coverage</span>
-        <span class="val {{ 'good' if p.coverage >= 1.5 else ('warn' if p.coverage >= 1 else 'bad') }}">
-          {% if p.cost_day > 0 %}{{ "%.2f"|format(p.coverage) }}×{% else %}—{% endif %}
+        <span class="T">Revenue multiple</span>
+        <span class="val {{ 'good' if p.revenue_multiple >= 1.5 else ('warn' if p.revenue_multiple >= 1 else 'bad') }}">
+          {% if p.cost_day > 0 %}{{ "%.2f"|format(p.revenue_multiple) }}×{% else %}—{% endif %}
         </span>
         <span class="sub">
-          {% if p.cost_day > 0 %}margin {{ p.margin_day|fmt_money }}/day · cluster {{ p.cost_day|fmt_money }}/day
+          {% if p.cost_day > 0 %}{{ (p.value_capture_rate * 100)|round(0)|int }}% value capture · cluster {{ p.cost_day|fmt_money }}/day
           {% else %}set TCO $/GPU·hr to see{% endif %}
         </span>
       </div>
@@ -70,7 +77,51 @@
       </div>
     </div>
     {% endif %}
+
+    {% if p.models %}
+    <div class="tariff-strip" aria-label="Internal user prices by deployed model">
+      <div class="T tariff-heading">Internal user price · $/1M tokens</div>
+      <div class="tariff-grid">
+        {% for m in p.models %}
+        <div class="tariff-pill" title="Input price uses blended internal GPU cost. Output price is adjusted by token efficiency, so verbose models cost more per delivered output token. Routing uses the workload's input/output mix.">
+          <span class="dot" style="background:{{ m.color }};"></span>
+          <span class="tariff-model">{{ m.name }}</span>
+          <span class="tariff-price">in {% if m.runnable and m.internal_input_pm > 0 %}${{ "%.2f"|format(m.internal_input_pm) }}{% else %}—{% endif %}</span>
+          <span class="tariff-price">out {% if m.runnable and m.internal_output_pm > 0 %}${{ "%.2f"|format(m.internal_output_pm) }}{% else %}—{% endif %}</span>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
   </div>
+
+  {% if p.recommendations %}
+  <div class="card">
+    <div class="T" style="margin-bottom:4px;font-weight:600;color:var(--fg0);">Best next GPU</div>
+    <table class="projection-table">
+      <thead>
+        <tr>
+          <th>Expansion</th>
+          <th>Margin gain</th>
+          <th>Cloud avoided</th>
+          <th>Destroyed recovered</th>
+          <th>Served gain</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for rec in p.recommendations[:3] %}
+        <tr>
+          <td>+{{ rec.added_gpus }} {{ rec.gpu_name }} to {{ rec.model_name }}</td>
+          <td class="{{ 'good' if rec.margin_gain_day > 0 else 'muted' }}">{{ rec.margin_gain_day|fmt_money }}/day</td>
+          <td class="{{ 'good' if rec.cloud_reduced_day > 0 else 'muted' }}">{{ rec.cloud_reduced_day|fmt_money }}/day</td>
+          <td class="{{ 'good' if rec.destroyed_reduced_day > 0 else 'muted' }}">{{ rec.destroyed_reduced_day|fmt_money }}/day</td>
+          <td>{{ rec.served_gain_tokens|fmt_num }} tok/day</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
 
   {# ── Per-use-case fate & diagnostic (read-only) ─────────────────────────── #}
   {% if state.projects %}
@@ -132,12 +183,12 @@
           {% elif row.leaked > 0 and not row.has_compatible %}
             <span class="bad">✗ No compatible model deployed → 100% flees to cloud ({{ row.value_leaked|fmt_money }}/day leaking)</span>
           {% elif row.leaked > 0 %}
-            <span class="bad">✗ Your on-prem $/M beats your ceiling — users skip internal → {{ row.value_leaked|fmt_money }}/day leaks</span>
+            <span class="bad">✗ Your on-prem $/M exceeds your ceiling — users skip internal → {{ row.value_leaked|fmt_money }}/day leaks</span>
           {% elif row.destroyed > 0 %}
             <span class="bad">✗ Cloud ({{ row.cloud_label }}: ${{ "%.2f"|format(row.cloud_pm) }}/M) exceeds WTP — {{ (row.destroyed_pct)|round(0)|int }}% of demand is shelved</span>
           {% endif %}
           {% if row.latent_unlocked %}
-            <span class="ok">↑ Latent pool unlocked: +{{ row.latent_active_tokens|fmt_num }} tok/day (cheapest ${{ "%.2f"|format(row.cheapest_effective_pm) }}/M ≤ ${{ "%.2f"|format(proj.unlock_price_per_m) }}/M unlock)</span>
+            <span class="ok">↑ Latent pool active: +{{ row.latent_active_tokens|fmt_num }} tok/day ({{ row.latent_activation_pct|round(0)|int }}% active; cheapest ${{ "%.2f"|format(row.cheapest_effective_pm) }}/M vs ${{ "%.2f"|format(proj.unlock_price_per_m) }}/M unlock)</span>
           {% elif row.latent_close_to_unlock %}
             <span class="warn">○ Latent pool close to unlock — cheapest is ${{ "%.2f"|format(row.cheapest_effective_pm) }}/M, need ≤ ${{ "%.2f"|format(proj.unlock_price_per_m) }}/M ({{ proj.latent_jobs_day|fmt_num }} tok/day waiting).</span>
           {% endif %}
@@ -159,8 +210,8 @@
       <thead>
         <tr>
           <th>Model</th>
-          <th title="Benchmark-anchored capability score ∈ [0,1]. Paired with each use case's difficulty by success_rate().">Quality</th>
-          <th title="Per-model token-budget multiplier. 1.0 = reference; >1 = terser; <1 = more verbose/thinks more. Effective $/M = internal × (1 / token_efficiency).">Tok eff</th>
+          <th title="Confidence-adjusted quality used by routing. Proxy benchmark scores are discounted before SLO and floor gates.">Quality</th>
+          <th title="Per-model output-token multiplier. 1.0 = reference; >1 = terser; <1 = more verbose/thinks more. Effective $/M scales only the output side, weighted by the workload's input/output mix.">Tok eff</th>
           <th>Capabilities</th>
           <th>GPUs</th>
           <th>Cap tokens/day</th>
@@ -179,7 +230,9 @@
             <span class="dot" style="background:{{ m.color }};"></span>
             <span style="margin-left:4px;">{{ m.name }}</span>
           </td>
-          <td class="muted">{{ (m.quality * 100)|round(0)|int }}%</td>
+          <td class="muted" title="Raw Q {{ '%.2f'|format(m.quality) }} · confidence {{ '%.0f'|format(m.quality_confidence * 100) }}%">
+            {{ (m.effective_quality * 100)|round(0)|int }}%
+          </td>
           <td class="muted">{{ "%.2f"|format(m.token_efficiency) }}×</td>
           <td>
             {% for cap in MODEL_CAPABILITIES if cap in m.model.capabilities %}
@@ -202,7 +255,8 @@
             {% if m.co2_g_per_task_day > 0 %}{{ "%.1f"|format(m.co2_g_per_task_day * 1000) }}{% else %}—{% endif %}
           </td>
           <td>
-            {% if m.saturated %}<span class="tag warn" title="All daily capacity consumed — adding GPUs would stop spill">SATURATED</span>
+            {% if not m.runnable %}<span class="tag bad" title="Assigned GPUs produce zero modeled daily capacity — adjust precision, topology, memory, or model placement">NOT RUNNABLE</span>
+            {% elif m.saturated %}<span class="tag warn" title="All daily capacity consumed — adding GPUs would stop spill">SATURATED</span>
             {% elif m.runnable and m.utilization < 0.05 %}<span class="tag muted" title="No use case routed here — quality doesn't meet any use case's SLO, or effective $/M is above use case WTP">IDLE</span>
             {% endif %}
           </td>

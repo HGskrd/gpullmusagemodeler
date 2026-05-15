@@ -9,6 +9,13 @@
   <span class="T">ELO {{ (preset.difficulty * 3000)|round(0)|int }} · {{ format_scale_value(preset.scale_value, scale_kind) }} {{ scale_kind.unit }} start</span>
 </div>
 {% endfor %}
+<div class="cat">Bulk</div>
+<div class="item"
+     hx-post="/project/add-all" hx-target="#main-content"
+     hx-vals='{"panel":"{{ panel }}"}'>
+  <span>Add one of each</span>
+  <span class="T">all current use-case definitions</span>
+</div>
 <div class="cat">Need another kind?</div>
 <a class="item" href="{{ url_for('use_cases') }}" style="text-decoration:none;color:var(--fg0);">
   <span>Edit definitions</span>

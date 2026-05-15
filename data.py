@@ -175,6 +175,7 @@ class Model:
     # token_efficiency > 0: per-model token-budget multiplier baseline — 1.0 = 10M output
     # tokens on Artificial Analysis' Intelligence Index, >1 = uses fewer tokens, <1 = verbose.
     quality: float = 0.5
+    quality_confidence: float = 1.0
     token_efficiency: float = 1.0
     hidden_dim: int = 0
     attention_layers: int = 0
@@ -284,6 +285,7 @@ AA_INTELLIGENCE_INDEX_MAX = 51.0
 AA_QUALITY_MIN = 0.30
 AA_QUALITY_MAX = 0.95
 AA_TOKEN_EFFICIENCY_REF_OUTPUT_TOKENS_M = 10.0
+QUALITY_CONFIDENCE_PENALTY = 0.12
 
 
 def aa_intelligence_to_quality(score: float) -> float:
@@ -295,6 +297,21 @@ def aa_intelligence_to_quality(score: float) -> float:
 
 def aa_output_tokens_to_efficiency(output_tokens_m: float) -> float:
     return AA_TOKEN_EFFICIENCY_REF_OUTPUT_TOKENS_M / max(output_tokens_m, 0.1)
+
+
+def effective_quality(model: Model) -> float:
+    """Conservative quality used for routing.
+
+    Direct benchmark scores keep their catalog quality. Proxy or uncertain scores are
+    discounted so unknown tiny models do not pass workload gates only because their
+    throughput is attractive.
+    """
+    confidence = min(max(float(getattr(model, "quality_confidence", 1.0)), 0.0), 1.0)
+    return min(max(float(model.quality) - QUALITY_CONFIDENCE_PENALTY * (1.0 - confidence), 0.0), 1.0)
+
+
+def model_success_rate(model: Model, difficulty: float) -> float:
+    return success_rate(effective_quality(model), difficulty)
 
 
 GPUS: dict[str, GPU] = {
@@ -934,6 +951,24 @@ for _k, (_score, _verbosity_m) in AA_MODEL_METRICS.items():
         MODELS[_k].quality = aa_intelligence_to_quality(_score)
         MODELS[_k].token_efficiency = aa_output_tokens_to_efficiency(_verbosity_m)
 
+# Confidence is separate from score: direct benchmark rows stay at 1.0, family/proxy rows
+# are discounted by effective_quality(). This is intentionally conservative for models
+# whose public benchmark coverage is missing or weak.
+AA_MODEL_QUALITY_CONFIDENCE: dict[str, float] = {
+    "kimi-linear-48b": 0.55,
+    "nem3no": 0.65,
+    "mx87": 0.70,
+    "cs22": 0.60,
+    "mistral-medium-3.5-preview": 0.70,
+    "zaya1-8b": 0.45,
+    "zaya1-74b-preview": 0.35,
+    "laguna-xs2": 0.45,
+    "cr13": 0.25,
+}
+for _k, _confidence in AA_MODEL_QUALITY_CONFIDENCE.items():
+    if _k in MODELS:
+        MODELS[_k].quality_confidence = _confidence
+
 
 @dataclass
 class Bucket:
@@ -1180,13 +1215,14 @@ def success_rate(quality: float, difficulty: float, k: float = SUCCESS_RATE_SIGM
     return 1.0 / (1.0 + math.exp(-x))
 
 
-def required_quality(difficulty: float, min_success_rate: float, k: float = SUCCESS_RATE_SIGMOID_K) -> float:
+def required_quality(difficulty: float, min_success_rate: float, k: float = SUCCESS_RATE_SIGMOID_K, quality_floor: float = 0.0) -> float:
     """Inverse of success_rate(): minimum model quality that clears `min_success_rate`
     at the given `difficulty`. Returns a value on the same [0, 1] quality axis the model
     catalog uses (AA Intelligence Index calibrated into 0.30..0.95)."""
     slo = min(max(float(min_success_rate), 1e-4), 1 - 1e-4)
     logit = math.log(slo / (1.0 - slo))
-    return min(max(float(difficulty) + logit / k, 0.0), 1.0)
+    floor = min(max(float(quality_floor or 0.0), 0.0), 1.0)
+    return min(max(float(difficulty) + logit / k, floor, 0.0), 1.0)
 
 
 # Corporate cloud catalog presets. The cloud isn't an open marketplace — corp procurement
@@ -1252,16 +1288,16 @@ SCALE_MODELS = {
 }
 
 PROJECT_PRESETS = [
-    {"key": "classify",       "name": "Mass classification",        "difficulty": 0.10, "tokens_day": 3.0e9, "scale_value": 5_000_000, "scale_kind": {"model": "linear", "label": "Records processed", "unit": "records/day", "token_multiplier": 600, "min": 0, "max": 10_000_000, "step": 10_000, "formula": "records/day x average tokens per record"}, "wtp_per_m": 0.25, "requires": (),                    "min_success_rate": 0.80, "batch_eligible": True, "latent_jobs_day": 8.0e9, "unlock_price_per_m": 0.05, "in_pre": "Classify", "out_pre": "Classify", "scale_hint": "Records/day x tokens per record; mostly batchable queues."},
-    {"key": "summarize",      "name": "Doc summarization",          "difficulty": 0.25, "tokens_day": 1.5e9, "scale_value": 60_000, "scale_kind": {"model": "linear", "label": "Documents summarized", "unit": "documents/day", "token_multiplier": 25_000, "min": 0, "max": 250_000, "step": 100, "formula": "documents/day x average document+summary tokens"}, "wtp_per_m": 0.90, "requires": ("ctx_128k",),         "min_success_rate": 0.85, "batch_eligible": True, "latent_jobs_day": 3.0e9, "unlock_price_per_m": 0.20, "in_pre": "Long doc", "out_pre": "Long doc", "scale_hint": "Documents/day x document length; periodic backfills can dominate."},
-    {"key": "chatbot",        "name": "Customer chatbot",           "difficulty": 0.30, "tokens_day": 2.0e9, "scale_value": 80_000, "scale_kind": {"model": "linear", "label": "Support tickets", "unit": "tickets/day", "token_multiplier": 25_000, "min": 0, "max": 250_000, "step": 100, "formula": "tickets/day x turns x tokens per turn"}, "wtp_per_m": 1.20, "requires": ("tools",),            "min_success_rate": 0.95, "in_pre": "Chat",     "out_pre": "Chat",     "scale_hint": "Users or tickets/day x turns x tokens per turn; interactive peak matters."},
-    {"key": "email_corrector","name": "Email correction copilot",   "difficulty": 0.18, "tokens_day": 250e6, "scale_value": 5_000, "scale_kind": {"model": "linear", "label": "Enabled headcount", "unit": "employees", "token_multiplier": 50_000, "min": 0, "max": 25_000, "step": 10, "formula": "employees x messages/day x correction tokens"}, "wtp_per_m": 0.65, "requires": (),                    "min_success_rate": 0.90, "in_pre": "Chat",     "out_pre": "Chat",     "scale_hint": "Headcount x messages/day x correction tokens; roughly linear with staff."},
-    {"key": "coding",         "name": "Coding assistant",           "difficulty": 0.55, "tokens_day": 1.2e9, "scale_value": 8_000, "scale_kind": {"model": "linear", "label": "Developer seats", "unit": "developers", "token_multiplier": 150_000, "min": 0, "max": 25_000, "step": 10, "formula": "developer seats x active days x code context"}, "wtp_per_m": 4.00, "requires": ("tools", "ctx_128k"), "min_success_rate": 0.85, "in_pre": "Code",     "out_pre": "Code",     "scale_hint": "Developer seats x active days x code context; bursty during migrations."},
-    {"key": "meeting_notes",  "name": "Meeting notes assistant",    "difficulty": 0.35, "tokens_day": 600e6, "scale_value": 6_000, "scale_kind": {"model": "linear", "label": "Recorded meeting time", "unit": "meeting hours/day", "token_multiplier": 100_000, "min": 0, "max": 20_000, "step": 10, "formula": "meeting hours/day x transcript+summary tokens"}, "wtp_per_m": 1.50, "requires": ("ctx_128k",),         "min_success_rate": 0.88, "batch_eligible": True, "latent_jobs_day": 1.0e9, "unlock_price_per_m": 0.35, "in_pre": "Long doc", "out_pre": "Long doc", "scale_hint": "Meeting hours/day x transcript length; can be delayed after calls."},
-    {"key": "evals",          "name": "Batch evaluations",          "difficulty": 0.45, "tokens_day": 800e6, "scale_value": 400_000, "scale_kind": {"model": "linear", "label": "Evaluation prompts", "unit": "eval prompts/day", "token_multiplier": 2_000, "min": 0, "max": 2_000_000, "step": 1_000, "formula": "eval prompts/day x average prompt+judgment tokens"}, "wtp_per_m": 2.00, "requires": (),                    "min_success_rate": 0.90, "batch_eligible": True, "latent_jobs_day": 2.0e9, "unlock_price_per_m": 0.50, "in_pre": "RAG",      "out_pre": "Classify", "scale_hint": "Runs/day x eval set size; off-peak capacity is usually acceptable."},
-    {"key": "inbox_archive",  "name": "Decade inbox knowledge base","difficulty": 0.50, "tokens_day": 120e6, "scale_value": 50, "scale_kind": {"model": "corpus", "label": "Indexed mailboxes", "unit": "mailboxes indexed", "token_multiplier": 2_400_000, "min": 0, "max": 5_000, "step": 10, "formula": "mailboxes x retained years x messages, dailyized as batch load"}, "wtp_per_m": 1.75, "requires": ("ctx_128k",),         "min_success_rate": 0.86, "batch_eligible": True, "latent_jobs_day": 12.0e9, "unlock_price_per_m": 0.30, "in_pre": "RAG",      "out_pre": "Long doc", "scale_hint": "Mailboxes x retained years x messages; one-time corpus scale dominates."},
-    {"key": "longctx",        "name": "Long-ctx analytics",         "difficulty": 0.70, "tokens_day": 400e6, "scale_value": 200, "scale_kind": {"model": "linear", "label": "Large analyses", "unit": "analyses/day", "token_multiplier": 2_000_000, "min": 0, "max": 1_000, "step": 1, "formula": "analyses/day x full-source-pack length"}, "wtp_per_m": 8.00, "requires": ("ctx_128k",),         "min_success_rate": 0.90, "latent_jobs_day": 1.0e9, "unlock_price_per_m": 3.00, "in_pre": "Long doc", "out_pre": "Long doc", "scale_hint": "Analyses/day x full-source-pack length; limited volume, large prompts."},
-    {"key": "research",       "name": "Deep research agent",        "difficulty": 0.90, "tokens_day": 150e6, "scale_value": 300, "scale_kind": {"model": "custom", "label": "Research jobs", "unit": "investigations/day", "token_multiplier": 500_000, "min": 0, "max": 1_000, "step": 1, "formula": "analysts x investigations/day x agent depth"}, "wtp_per_m": 20.00,"requires": ("tools", "reasoning"),"min_success_rate": 0.95, "latent_jobs_day": 500e6, "unlock_price_per_m": 5.00, "in_pre": "RAG",      "out_pre": "Long doc", "scale_hint": "Analysts x investigations/day x agent depth; low volume, high value."},
+    {"key": "classify",       "name": "Mass classification",        "difficulty": 0.10, "tokens_day": 3.0e9, "scale_value": 5_000_000, "scale_kind": {"model": "linear", "label": "Records processed", "unit": "records/day", "token_multiplier": 600, "min": 0, "max": 10_000_000, "step": 10_000, "formula": "records/day x average tokens per record"}, "wtp_per_m": 0.25, "requires": (),                    "min_success_rate": 0.80, "quality_floor": 0.35, "batch_eligible": True, "latent_jobs_day": 8.0e9, "unlock_price_per_m": 0.05, "in_pre": "Classify", "out_pre": "Classify", "scale_hint": "Records/day x tokens per record; mostly batchable queues."},
+    {"key": "summarize",      "name": "Doc summarization",          "difficulty": 0.25, "tokens_day": 1.5e9, "scale_value": 60_000, "scale_kind": {"model": "linear", "label": "Documents summarized", "unit": "documents/day", "token_multiplier": 25_000, "min": 0, "max": 250_000, "step": 100, "formula": "documents/day x average document+summary tokens"}, "wtp_per_m": 0.90, "requires": ("ctx_128k",),         "min_success_rate": 0.85, "quality_floor": 0.50, "batch_eligible": True, "latent_jobs_day": 3.0e9, "unlock_price_per_m": 0.20, "in_pre": "Long doc", "out_pre": "Long doc", "scale_hint": "Documents/day x document length; periodic backfills can dominate."},
+    {"key": "chatbot",        "name": "Customer chatbot",           "difficulty": 0.30, "tokens_day": 2.0e9, "scale_value": 80_000, "scale_kind": {"model": "linear", "label": "Support tickets", "unit": "tickets/day", "token_multiplier": 25_000, "min": 0, "max": 250_000, "step": 100, "formula": "tickets/day x turns x tokens per turn"}, "wtp_per_m": 1.20, "requires": ("tools",),            "min_success_rate": 0.95, "quality_floor": 0.60, "in_pre": "Chat",     "out_pre": "Chat",     "scale_hint": "Users or tickets/day x turns x tokens per turn; interactive peak matters."},
+    {"key": "email_corrector","name": "Email correction copilot",   "difficulty": 0.18, "tokens_day": 250e6, "scale_value": 5_000, "scale_kind": {"model": "linear", "label": "Enabled headcount", "unit": "employees", "token_multiplier": 50_000, "min": 0, "max": 25_000, "step": 10, "formula": "employees x messages/day x correction tokens"}, "wtp_per_m": 0.65, "requires": (),                    "min_success_rate": 0.90, "quality_floor": 0.40, "in_pre": "Chat",     "out_pre": "Chat",     "scale_hint": "Headcount x messages/day x correction tokens; roughly linear with staff."},
+    {"key": "coding",         "name": "Coding assistant",           "difficulty": 0.55, "tokens_day": 1.2e9, "scale_value": 8_000, "scale_kind": {"model": "linear", "label": "Developer seats", "unit": "developers", "token_multiplier": 150_000, "min": 0, "max": 25_000, "step": 10, "formula": "developer seats x active days x code context"}, "wtp_per_m": 4.00, "requires": ("tools", "ctx_128k"), "min_success_rate": 0.85, "quality_floor": 0.70, "in_pre": "Code",     "out_pre": "Code",     "scale_hint": "Developer seats x active days x code context; bursty during migrations."},
+    {"key": "meeting_notes",  "name": "Meeting notes assistant",    "difficulty": 0.35, "tokens_day": 600e6, "scale_value": 6_000, "scale_kind": {"model": "linear", "label": "Recorded meeting time", "unit": "meeting hours/day", "token_multiplier": 100_000, "min": 0, "max": 20_000, "step": 10, "formula": "meeting hours/day x transcript+summary tokens"}, "wtp_per_m": 1.50, "requires": ("ctx_128k",),         "min_success_rate": 0.88, "quality_floor": 0.55, "batch_eligible": True, "latent_jobs_day": 1.0e9, "unlock_price_per_m": 0.35, "in_pre": "Long doc", "out_pre": "Long doc", "scale_hint": "Meeting hours/day x transcript length; can be delayed after calls."},
+    {"key": "evals",          "name": "Batch evaluations",          "difficulty": 0.45, "tokens_day": 800e6, "scale_value": 400_000, "scale_kind": {"model": "linear", "label": "Evaluation prompts", "unit": "eval prompts/day", "token_multiplier": 2_000, "min": 0, "max": 2_000_000, "step": 1_000, "formula": "eval prompts/day x average prompt+judgment tokens"}, "wtp_per_m": 2.00, "requires": (),                    "min_success_rate": 0.90, "quality_floor": 0.60, "batch_eligible": True, "latent_jobs_day": 2.0e9, "unlock_price_per_m": 0.50, "in_pre": "RAG",      "out_pre": "Classify", "scale_hint": "Runs/day x eval set size; off-peak capacity is usually acceptable."},
+    {"key": "inbox_archive",  "name": "Decade inbox knowledge base","difficulty": 0.50, "tokens_day": 120e6, "scale_value": 50, "scale_kind": {"model": "corpus", "label": "Indexed mailboxes", "unit": "mailboxes indexed", "token_multiplier": 2_400_000, "min": 0, "max": 5_000, "step": 10, "formula": "mailboxes x retained years x messages, dailyized as batch load"}, "wtp_per_m": 1.75, "requires": ("ctx_128k",),         "min_success_rate": 0.86, "quality_floor": 0.62, "batch_eligible": True, "latent_jobs_day": 12.0e9, "unlock_price_per_m": 0.30, "in_pre": "RAG",      "out_pre": "Long doc", "scale_hint": "Mailboxes x retained years x messages; one-time corpus scale dominates."},
+    {"key": "longctx",        "name": "Long-ctx analytics",         "difficulty": 0.70, "tokens_day": 400e6, "scale_value": 200, "scale_kind": {"model": "linear", "label": "Large analyses", "unit": "analyses/day", "token_multiplier": 2_000_000, "min": 0, "max": 1_000, "step": 1, "formula": "analyses/day x full-source-pack length"}, "wtp_per_m": 8.00, "requires": ("ctx_128k",),         "min_success_rate": 0.90, "quality_floor": 0.78, "latent_jobs_day": 1.0e9, "unlock_price_per_m": 3.00, "in_pre": "Long doc", "out_pre": "Long doc", "scale_hint": "Analyses/day x full-source-pack length; limited volume, large prompts."},
+    {"key": "research",       "name": "Deep research agent",        "difficulty": 0.90, "tokens_day": 150e6, "scale_value": 300, "scale_kind": {"model": "custom", "label": "Research jobs", "unit": "investigations/day", "token_multiplier": 500_000, "min": 0, "max": 1_000, "step": 1, "formula": "analysts x investigations/day x agent depth"}, "wtp_per_m": 20.00,"requires": ("tools", "reasoning"),"min_success_rate": 0.95, "quality_floor": 0.90, "latent_jobs_day": 500e6, "unlock_price_per_m": 5.00, "in_pre": "RAG",      "out_pre": "Long doc", "scale_hint": "Analysts x investigations/day x agent depth; low volume, high value."},
 ]
 
 DAY_SHAPES = {
