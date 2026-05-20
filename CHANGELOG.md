@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2026-05-20
+
+### Added
+
+- Added an RTX A2000 mobile GPU catalog entry.
+- Added selectable automatic model-selection strategies for best value per GPU, use-case coverage, quality, lean GPU usage, and throughput.
+- Added auto-selection tests covering every declared strategy and fallback behavior.
+
+### Changed
+
+- Updated automatic model selection so the selected strategy is persisted in state, included in reports, and passed through the model panel UI.
+- Cleaned up planner navigation with shared calculator, user guide, and use-case tabs.
+- Reworked GPU controls to support direct count entry, synced picker state, and faster cost updates.
+- Simplified calculator and use-case editor cards by removing duplicate range sliders where numeric inputs already provide direct editing.
+
 ## 2026-05-15
 
 ### Added
@@ -49,8 +64,3 @@ All notable changes to this project will be documented in this file.
 - Updated model cards to surface attention labels and compressed KV details for MLA and CCA-style models.
 - Updated Mistral Medium 3.5 labeling, cloud pricing, and quality assumptions.
 - Reworked GPU picker cards into simpler single-action rows with planner-profile notes available as tooltips.
-
-### Notes
-
-- The current local branch has a history mismatch with `origin/main`, but no committed file-content difference between `HEAD` and `origin/main`.
-- The changelog entry above describes the update prepared on the `hgskrd/use-case-library-update` branch.
