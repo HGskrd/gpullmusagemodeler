@@ -164,6 +164,15 @@ input[type="range"]::-webkit-slider-thumb {
   line-height: 1;
 }
 
+.auto-strategy-select {
+  width: 126px;
+  min-width: 126px;
+  height: 19px;
+  padding: 1px 18px 1px 5px;
+  font-size: 9px;
+  color: var(--fg1);
+}
+
 .tip { cursor: help; border-bottom: 1px dotted var(--fg2); }
 
 .picker-wrap { position: relative; display: inline-block; }

@@ -72,6 +72,16 @@ ALLOWED_PLOT_MODES = frozenset(mode for mode, _ in VISIBLE_PLOT_MODES)
 DEFAULT_DAY_SHAPE = "workday"
 ALLOWED_DAY_SHAPES = frozenset(DAY_SHAPES)
 ALLOWED_CORPO_CLOUDS = frozenset(CORPO_CLOUD_PRESETS)
+AUTO_MODEL_STRATEGIES = (
+    ("balanced", "Best value / GPU", "Picks the compatible models that capture the most WTP-weighted workload value per assigned GPU."),
+    ("coverage", "Most use cases", "Prefers models that satisfy the largest number of active use cases and capability gates."),
+    ("quality", "Highest quality", "Prefers the highest effective model quality and SLO margin among models that fit."),
+    ("lean", "Fewest GPUs", "Picks the smallest viable model set and leaves unused GPUs free instead of filling every pool."),
+    ("throughput", "Most throughput", "Prefers smaller active-parameter and token-efficient models after quality gates are met."),
+)
+DEFAULT_AUTO_MODEL_STRATEGY = AUTO_MODEL_STRATEGIES[0][0]
+AUTO_MODEL_STRATEGY_LABELS = {key: label for key, label, _ in AUTO_MODEL_STRATEGIES}
+ALLOWED_AUTO_MODEL_STRATEGIES = frozenset(AUTO_MODEL_STRATEGY_LABELS)
 DEFAULT_SCALE_KIND = {
     "model": "linear",
     "label": "Token demand",
@@ -111,6 +121,10 @@ def normalize_day_shape(shape: Optional[str]) -> str:
 
 def normalize_corpo_cloud(name: Optional[str]) -> str:
     return name if name in ALLOWED_CORPO_CLOUDS else CORPO_CLOUD_DEFAULT
+
+
+def normalize_auto_strategy(strategy: Optional[str]) -> str:
+    return strategy if strategy in ALLOWED_AUTO_MODEL_STRATEGIES else DEFAULT_AUTO_MODEL_STRATEGY
 
 
 @dataclass
@@ -259,6 +273,7 @@ class PlannerState:
     projects: list[Project] = field(default_factory=list)
     auto_excluded: list[str] = field(default_factory=list)
     auto_mode: bool = False
+    auto_strategy: str = DEFAULT_AUTO_MODEL_STRATEGY
     use_case_defs: list[dict[str, Any]] = field(default_factory=lambda: copy.deepcopy(PROJECT_PRESETS))
     in_dist: list[int] = field(default_factory=lambda: list(DIST_PRESETS["Chat"]["in"]))
     out_dist: list[int] = field(default_factory=lambda: list(DIST_PRESETS["Chat"]["out"]))
@@ -305,6 +320,7 @@ class PlannerState:
         self.mode = normalize_plot_mode(self.mode)
         self.projection_day_shape = normalize_day_shape(self.projection_day_shape)
         self.corpo_cloud = normalize_corpo_cloud(self.corpo_cloud)
+        self.auto_strategy = normalize_auto_strategy(self.auto_strategy)
 
     @property
     def prefill_efficiency(self) -> EfficiencyParams:
@@ -1535,7 +1551,132 @@ def _auto_model_value_density(model: Model, projects: list[Project], gpu_count: 
     return _auto_model_value(model, projects) / max(int(gpu_count or 0), 1)
 
 
-def _seed_empty_auto_pools(state: PlannerState, projects: list[Project]):
+def _auto_served_projects(model: Model, projects: list[Project]) -> list[Project]:
+    return [project for project in projects if _model_serves_project(model, project)]
+
+
+def _auto_weighted_success(model: Model, projects: list[Project]) -> float:
+    served = _auto_served_projects(model, projects)
+    total = sum(_active_project_demand(project) for project in served)
+    if total <= 0:
+        return 0.0
+    return sum(
+        _active_project_demand(project) * model_success_rate(model, project.difficulty)
+        for project in served
+    ) / total
+
+
+def _auto_quality_margin(model: Model, projects: list[Project]) -> float:
+    served = _auto_served_projects(model, projects)
+    if not served:
+        return 0.0
+    return min(
+        model_success_rate(model, project.difficulty) - float(project.min_success_rate)
+        for project in served
+    )
+
+
+def _auto_covered_demand(model: Model, projects: list[Project]) -> float:
+    return sum(_active_project_demand(project) for project in _auto_served_projects(model, projects))
+
+
+def _auto_required_capability_count(projects: list[Project]) -> int:
+    required: set[str] = set()
+    for project in projects:
+        required.update(getattr(project, "requires", frozenset()) or frozenset())
+    return len(required)
+
+
+def _auto_model_work_size(model: Model) -> float:
+    return model.active_params / max(float(model.token_efficiency), 1e-6)
+
+
+def _auto_model_kv_size(model: Model) -> float:
+    return max(model.kv_layer_count, 1) * max(model.kv_heads, 1) * max(model.head_dim, 1)
+
+
+def _auto_candidate_key(
+    model: Model,
+    projects: list[Project],
+    gpu_count: int,
+    prec: str,
+    strategy: str,
+) -> tuple:
+    strategy = normalize_auto_strategy(strategy)
+    value = _auto_model_value(model, projects)
+    value_density = value / max(int(gpu_count or 0), 1)
+    served = _auto_served_projects(model, projects)
+    served_count = len(served)
+    covered_demand = _auto_covered_demand(model, projects)
+    weighted_success = _auto_weighted_success(model, served)
+    quality_margin = _auto_quality_margin(model, served)
+    quality = effective_quality(model)
+    work_size = _auto_model_work_size(model)
+    kv_size = _auto_model_kv_size(model)
+    prec_idx = PRECISIONS.index(prec) if prec in PRECISIONS else len(PRECISIONS)
+
+    if strategy == "coverage":
+        return (
+            -served_count,
+            -covered_demand,
+            -_auto_required_capability_count(served),
+            -value_density,
+            -weighted_success,
+            gpu_count,
+            work_size,
+            model.total_params,
+            prec_idx,
+            model.key,
+        )
+    if strategy == "quality":
+        return (
+            -quality,
+            -weighted_success,
+            -quality_margin,
+            -value_density,
+            gpu_count,
+            work_size,
+            model.total_params,
+            prec_idx,
+            model.key,
+        )
+    if strategy == "lean":
+        return (
+            gpu_count,
+            work_size,
+            model.total_params,
+            -quality_margin,
+            -weighted_success,
+            -value_density,
+            prec_idx,
+            model.key,
+        )
+    if strategy == "throughput":
+        return (
+            work_size,
+            kv_size,
+            gpu_count,
+            model.total_params,
+            -value_density,
+            -weighted_success,
+            -quality,
+            prec_idx,
+            model.key,
+        )
+
+    return (
+        -value_density,
+        -value,
+        -quality,
+        work_size,
+        gpu_count,
+        model.total_params,
+        prec_idx,
+        model.key,
+    )
+
+
+def _seed_empty_auto_pools(state: PlannerState, projects: list[Project], strategy: str):
     for gp in state.gpus:
         if state.free_gpu_for_pool(gp.uid) <= 0:
             continue
@@ -1553,15 +1694,8 @@ def _seed_empty_auto_pools(state: PlannerState, projects: list[Project]):
             if placement is None:
                 continue
             gpu_count, prec = placement
-            value_density = _auto_model_value_density(model, projects, gpu_count)
             candidates.append((
-                -value_density,
-                -value,
-                -effective_quality(model),
-                model.active_params / max(model.token_efficiency, 1e-6),
-                gpu_count,
-                model.total_params,
-                PRECISIONS.index(prec),
+                _auto_candidate_key(model, projects, gpu_count, prec, strategy),
                 model,
                 prec,
             ))
@@ -1569,7 +1703,7 @@ def _seed_empty_auto_pools(state: PlannerState, projects: list[Project]):
         if not candidates:
             continue
 
-        _, _, _, _, _, _, _, model, prec = min(candidates)
+        _, model, prec = min(candidates)
         gpu_count, _ = _best_available_placement_on_pool(state, model, gp) or (0, prec)
         if gpu_count <= 0:
             continue
@@ -1577,11 +1711,25 @@ def _seed_empty_auto_pools(state: PlannerState, projects: list[Project]):
         _retune_model(state, state.models[-1])
 
 
-def _grow_auto_assignments(state: PlannerState):
+def _auto_assignment_growth_key(state: PlannerState, am: ModelAssignment, strategy: str) -> tuple:
+    model = MODELS[am.model_key]
+    demand = _auto_assignment_demand(state, am)
+    served_projects = [project for project in state.projects if _model_serves_project(model, project)]
+    if strategy == "coverage":
+        return (-len(served_projects), -demand, am.gpu_count, am.uid)
+    if strategy == "quality":
+        return (-effective_quality(model), -demand, am.gpu_count, am.uid)
+    if strategy == "throughput":
+        demand_per_work = demand / max(_auto_model_work_size(model), 1.0)
+        return (-demand_per_work, -demand, am.gpu_count, am.uid)
+    return (-demand, am.gpu_count, am.uid)
+
+
+def _grow_auto_assignments(state: PlannerState, strategy: str):
     for gp in state.gpus:
         while state.free_gpu_for_pool(gp.uid) > 0:
             candidates = [am for am in state.models if am.gpu_uid == gp.uid]
-            candidates.sort(key=lambda am: (-_auto_assignment_demand(state, am), am.gpu_count, am.uid))
+            candidates.sort(key=lambda am: _auto_assignment_growth_key(state, am, strategy))
             grew = False
             for am in candidates:
                 next_count = am.gpu_count + 1
@@ -1595,10 +1743,12 @@ def _grow_auto_assignments(state: PlannerState):
                 break
 
 
-def auto_select_models(state: PlannerState):
+def auto_select_models(state: PlannerState, strategy: Optional[str] = None):
     if not state.gpus:
         raise ValueError("Add a GPU pool before auto-selecting models.")
 
+    strategy = normalize_auto_strategy(strategy or getattr(state, "auto_strategy", DEFAULT_AUTO_MODEL_STRATEGY))
+    state.auto_strategy = strategy
     original_models = list(state.models)
     state.models = []
     projects = [project for project in state.projects if _active_project_demand(project) > 0]
@@ -1620,6 +1770,10 @@ def auto_select_models(state: PlannerState):
     )
 
     for project in ordered_projects:
+        if strategy in {"coverage", "lean"} and any(
+            _model_serves_project(MODELS[am.model_key], project) for am in state.models
+        ):
+            continue
         candidates = []
         for model in MODELS.values():
             if model.hidden or model.key in selected_keys or model.key in state.auto_excluded or not _model_serves_project(model, project):
@@ -1628,23 +1782,15 @@ def auto_select_models(state: PlannerState):
             if placement is None:
                 continue
             _, gpu_count, prec = placement
-            value = _auto_model_value(model, [project])
-            value_density = _auto_model_value_density(model, [project], gpu_count)
             candidates.append((
-                -value_density,
-                -value,
-                -effective_quality(model),
-                model.active_params / max(model.token_efficiency, 1e-6),
-                gpu_count,
-                model.total_params,
-                PRECISIONS.index(prec),
+                _auto_candidate_key(model, projects if strategy == "coverage" else [project], gpu_count, prec, strategy),
                 model,
                 placement,
             ))
         if not candidates:
             continue
 
-        _, _, _, _, _, _, _, model, placement = min(candidates)
+        _, model, placement = min(candidates)
         gp, gpu_count, prec = placement
         state.models.append(ModelAssignment(_next_uid(), model.key, gp.uid, gpu_count, 1, 1, prec))
         selected_keys.add(model.key)
@@ -1654,8 +1800,9 @@ def auto_select_models(state: PlannerState):
         state.models = original_models
         raise ValueError("No eligible model fits the configured GPU pools and use-case SLOs.")
 
-    _seed_empty_auto_pools(state, projects)
-    _grow_auto_assignments(state)
+    if strategy != "lean":
+        _seed_empty_auto_pools(state, projects, strategy)
+        _grow_auto_assignments(state, strategy)
     state.auto_mode = True
 
 
@@ -1664,25 +1811,16 @@ def auto_exclude_model(state: PlannerState, model_uid: int):
     if am is None:
         return
     model_key = am.model_key
+    state.models = [m for m in state.models if m.uid != model_uid]
     if model_key in state.auto_excluded:
         return
     state.auto_excluded.append(model_key)
-    try:
-        auto_select_models(state)
-    except ValueError:
-        state.auto_excluded.remove(model_key)
-        state.auto_mode = True
 
 
 def auto_reallow_model(state: PlannerState, model_key: str):
     if model_key not in state.auto_excluded:
         return
     state.auto_excluded = [k for k in state.auto_excluded if k != model_key]
-    try:
-        auto_select_models(state)
-    except ValueError:
-        state.auto_excluded.append(model_key)
-        state.auto_mode = True
 
 
 def remove_model(state: PlannerState, model_uid: int):
@@ -1832,6 +1970,7 @@ def get_state(session_id: str) -> PlannerState:
         s.auto_excluded = []
     if not hasattr(s, "auto_mode"):
         s.auto_mode = False
+    s.auto_strategy = normalize_auto_strategy(getattr(s, "auto_strategy", DEFAULT_AUTO_MODEL_STRATEGY))
     normalize_projects(s)
     return s
 
@@ -1848,6 +1987,7 @@ def get_compare_state(session_id: str) -> Optional[PlannerState]:
             state.auto_excluded = []
         if not hasattr(state, "auto_mode"):
             state.auto_mode = False
+        state.auto_strategy = normalize_auto_strategy(getattr(state, "auto_strategy", DEFAULT_AUTO_MODEL_STRATEGY))
         normalize_projects(state)
     return state
 

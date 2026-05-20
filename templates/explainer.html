@@ -211,6 +211,30 @@
     valid strategy maximizes peak throughput.
   </p>
 
+  <h3>Auto strategies</h3>
+  <p>
+    <kbd>Auto</kbd> replaces the panel's model set with models that fit the configured GPU pools,
+    active use cases, capability gates, quality floors, and success-rate SLOs. The selector next
+    to the button changes what the greedy fit optimizes after those hard gates are applied.
+  </p>
+  <dl class="kv">
+    <dt>Best value / GPU</dt>
+    <dd>Default. Ranks candidates by WTP-weighted routed workload value per assigned GPU, then
+      allocates spare GPUs to the demand-heavy assignments.</dd>
+    <dt>Most use cases</dt>
+    <dd>Prefers models that can serve the broadest set of active use cases and capability
+      requirements, even if a narrower model is cheaper for one workload.</dd>
+    <dt>Highest quality</dt>
+    <dd>Prefers higher confidence-adjusted model quality and success-rate margin once the model
+      already clears fit, capability, quality-floor, and SLO gates.</dd>
+    <dt>Fewest GPUs</dt>
+    <dd>Chooses the smallest viable model set and does not fill unused pool capacity. Use it when
+      idle GPUs should stay available for other work.</dd>
+    <dt>Most throughput</dt>
+    <dd>Prefers low active-parameter and token-efficient models after quality gates are met, then
+      fills spare capacity toward high-demand assignments.</dd>
+  </dl>
+
   <h3>Per-model controls</h3>
   <dl class="kv">
     <dt>Precision</dt>

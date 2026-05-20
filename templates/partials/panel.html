@@ -138,9 +138,20 @@
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;">
     <h2 style="margin:0;">Models</h2>
     <div style="display:flex;align-items:center;gap:4px;">
+      <select id="auto-strategy-{{ panel }}" class="auto-strategy-select" name="strategy"
+              title="Automatic model-selection strategy"
+              {{ 'disabled' if state.gpus|length == 0 else '' }}>
+        {% for key, label, desc in AUTO_MODEL_STRATEGIES %}
+        <option value="{{ key }}"
+                title="{{ desc }}"
+                {{ 'selected' if state.auto_strategy == key else '' }}>{{ label }}</option>
+        {% endfor %}
+      </select>
       <button class="ghost sm"
+              type="button"
               hx-post="/model/auto"
               hx-target="#main-content"
+              hx-include="#auto-strategy-{{ panel }}"
               hx-vals='{"panel":"{{ panel }}"}'
               title="Replace this panel's model set with an automatic fit for the configured hardware and use cases."
               {{ 'disabled' if state.gpus|length == 0 else '' }}>Auto</button>

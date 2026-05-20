@@ -50,6 +50,8 @@ from calc import (
     valid_strategies,
 )
 from state import (
+    AUTO_MODEL_STRATEGIES,
+    AUTO_MODEL_STRATEGY_LABELS,
     PlannerState,
     VISIBLE_PLOT_MODES,
     add_gpu,
@@ -74,6 +76,7 @@ from state import (
     remove_use_case_def,
     retune_models,
     normalize_plot_mode,
+    normalize_auto_strategy,
     replace_project_set,
     replace_use_case_defs,
     serialize_project_set,
@@ -391,6 +394,7 @@ def _template_context() -> dict:
         "PRECISIONS": PRECISIONS,
         "PRECISION_LABELS": PRECISION_LABELS,
         "PRECISION_DESCRIPTIONS": PRECISION_DESCRIPTIONS,
+        "AUTO_MODEL_STRATEGIES": AUTO_MODEL_STRATEGIES,
         "models_by_category": models_by_category,
         "gpu_cards_by_vendor": gpu_cards_by_vendor,
         "gpus_by_vendor": gpus_by_vendor,
@@ -489,6 +493,7 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
         "Deployment",
         f"- GPUs: {sum(g.count for g in state.gpus)} total, {sum(m.gpu_count for m in state.models)} assigned",
         f"- Auto model selection: {'on' if state.auto_mode else 'off'}",
+        f"- Auto strategy: {AUTO_MODEL_STRATEGY_LABELS.get(getattr(state, 'auto_strategy', ''), AUTO_MODEL_STRATEGY_LABELS['balanced'])}",
         f"- gpu_mem_util: {state.mu:.2f}",
         f"- Profiled non-KV runtime memory: {state.profiled_non_kv_gb:g} GB/GPU",
         f"- Prefix hit rate: {state.prefix_hit_rate * 100:.0f}%",
@@ -858,7 +863,10 @@ def model_auto():
         s = _request_state()
         if s is None:
             return _htmx_response()
-        auto_select_models(s)
+        strategy = normalize_auto_strategy(
+            request.form.get("strategy") or request.form.get("auto_strategy") or getattr(s, "auto_strategy", None)
+        )
+        auto_select_models(s, strategy)
         return _tracked_htmx_response("model_auto", s)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
