@@ -332,6 +332,7 @@ GPUS: dict[str, GPU] = {
     "B300": GPU("B300", "B300 Blackwell Ultra 288GB SXM", "nv", 288e9, 8e12, 2.25e15, 4.5e15, 1.8e12, 8),
     "A6000": GPU("A6000", "RTX A6000 48GB", "nv", 48e9, 768e9, 154.85e12, 154.85e12, 112.5e9, 2),
     "A4000": GPU("A4000", "RTX A4000 16GB", "nv", 16e9, 448e9, 76.7e12, 76.7e12, 64e9, 1),
+    "A2000_MOBILE": GPU("A2000_MOBILE", "RTX A2000 Laptop GPU 8GB", "nv", 8e9, 192e9, 37.5e12, 37.5e12, 64e9, 1),
     "JETSON_AGX_THOR": GPU("JETSON_AGX_THOR", "Jetson AGX Thor 128GB", "nv", 128e9, 273e9, 258.75e12, 517.5e12, 25e9, 1),
     "MI250X": GPU("MI250X", "MI250X 128GB", "amd", 128e9, 3.2e12, 383e12, 383e12, 800e9, 8),
     "MI300X": GPU("MI300X", "MI300X 192GB", "amd", 192e9, 5.3e12, 1307e12, 2615e12, 896e9, 8),
@@ -375,7 +376,7 @@ for _k, _fp4 in GPU_FP4_FLOPS.items():
 GPU_TDP_WATTS = {
     "A100": 400, "A100_40": 250, "H100": 700, "H200": 700, "L40S": 350, "L4": 72,
     "RTXPRO6000_BSE": 600, "DGX_SPARK": 140, "GB200": 1200, "B200": 1000, "B300": 1200,
-    "A6000": 300, "A4000": 140, "JETSON_AGX_THOR": 130,
+    "A6000": 300, "A4000": 140, "A2000_MOBILE": 95, "JETSON_AGX_THOR": 130,
     "MI250X": 560, "MI300X": 750, "MI325X": 1000, "MI350X": 1000, "MI355X": 1400, "MI400": 1500,
     "Gaudi3": 900, "CrescentIsland": 300, "ArcProB60": 200, "ArcProB50": 70,
     "MAC_MINI_M4_PRO": 140, "MAC_STUDIO_M4_MAX": 270, "MAC_STUDIO_M3_ULTRA": 480,
@@ -492,6 +493,15 @@ GPU_CARDS: list[GPUCard] = [
         "16 GB GDDR6",
         "Entry workstation GPU for lightweight inference and development",
         (GPUPlannerOption("Add", "A4000"),),
+    ),
+    GPUCard(
+        "RTX A2000 Laptop GPU",
+        "NVIDIA",
+        "Ampere",
+        "up to 8 GB GDDR6",
+        "Mobile workstation GPU for lightweight local inference and development",
+        (GPUPlannerOption("Add", "A2000_MOBILE"),),
+        "Planner uses the top-bin 8GB/192GB/s/95W mobile profile and dense half of the published tensor peak; OEM configs also include 4GB and lower-TGP variants.",
     ),
     GPUCard(
         "DGX Spark",
