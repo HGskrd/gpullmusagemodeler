@@ -100,15 +100,6 @@
 
     <div class="pc-row" title="Starting scale only. The calculator card keeps the organization's actual selected scale independent from this definition.">
       <span class="T">Start scale</span>
-      <input type="range" min="{{ scale_kind.min }}" max="{{ scale_max }}" step="{{ scale_kind.step }}"
-             name="value"
-             value="{{ preset.scale_value }}"
-             hx-post="/use-cases/definition/set"
-             hx-target="#useCaseLibrary"
-             hx-trigger="change"
-             hx-vals='{"key":"{{ key }}","field":"scale_value"}'
-             data-live-target="#def-scale-{{ key }}"
-             data-live-decimals="{{ scale_dec }}" />
       <span class="val">
         <input type="text" class="val-input" inputmode="decimal"
                id="def-scale-{{ key }}"
@@ -125,14 +116,6 @@
 
     <div class="pc-row" title="Task hardness on a 0-3000 ELO scale.">
       <span class="T">Difficulty</span>
-      <input type="range" min="0" max="3000" step="10"
-             name="value"
-             value="{{ (preset.difficulty * 3000)|round|int }}"
-             hx-post="/use-cases/definition/set"
-             hx-target="#useCaseLibrary"
-             hx-trigger="change"
-             hx-vals='{"key":"{{ key }}","field":"difficulty_elo"}'
-             data-live-target="#def-diff-{{ key }}" />
       <span class="val">
         <input type="text" class="val-input" inputmode="numeric"
                id="def-diff-{{ key }}"
@@ -148,14 +131,6 @@
 
     <div class="pc-row" title="Success-rate floor required for eligible models.">
       <span class="T">Quality SLO</span>
-      <input type="range" min="50" max="100" step="5"
-             name="value"
-             value="{{ (preset.min_success_rate * 100)|round|int }}"
-             hx-post="/use-cases/definition/set"
-             hx-target="#useCaseLibrary"
-             hx-trigger="change"
-             hx-vals='{"key":"{{ key }}","field":"min_success_rate_pct"}'
-             data-live-target="#def-slo-{{ key }}" />
       <span class="val">
         <input type="text" class="val-input" inputmode="numeric"
                id="def-slo-{{ key }}"
@@ -171,14 +146,6 @@
 
     <div class="pc-row" title="Absolute effective-quality floor; proxy/uncertain model scores are discounted before this gate.">
       <span class="T">Quality floor</span>
-      <input type="range" min="0" max="100" step="1"
-             name="value"
-             value="{{ (preset.quality_floor * 100)|round|int }}"
-             hx-post="/use-cases/definition/set"
-             hx-target="#useCaseLibrary"
-             hx-trigger="change"
-             hx-vals='{"key":"{{ key }}","field":"quality_floor_pct"}'
-             data-live-target="#def-qfloor-{{ key }}" />
       <span class="val">
         <input type="text" class="val-input" inputmode="numeric"
                id="def-qfloor-{{ key }}"
@@ -194,16 +161,6 @@
 
     <div class="pc-row" title="Willingness-to-pay ceiling in dollars per million tokens.">
       <span class="T">WTP ceiling</span>
-      <input type="range" min="0" max="2500" step="5"
-             name="value"
-             value="{{ (preset.wtp_per_m * 100)|round|int }}"
-             hx-post="/use-cases/definition/set"
-             hx-target="#useCaseLibrary"
-             hx-trigger="change"
-             hx-vals='{"key":"{{ key }}","field":"wtp_per_m_cents"}'
-             data-live-target="#def-wtp-{{ key }}"
-             data-live-scale="0.01"
-             data-live-decimals="2" />
       <span class="val" style="gap:1px;">
         <span class="T">$</span>
         <input type="text" class="val-input" inputmode="decimal"
@@ -278,14 +235,6 @@
       <summary class="T" style="cursor:pointer;user-select:none;font-size:10px;">Latent demand economics</summary>
       <div class="pc-row" style="margin-top:3px;">
         <span class="T">Seed pool</span>
-        <input type="range" min="0" max="20000" step="50"
-               name="value"
-               value="{{ (preset.get('latent_jobs_day', 0) / 1e6)|round|int }}"
-               hx-post="/use-cases/definition/set"
-               hx-target="#useCaseLibrary"
-               hx-trigger="change"
-               hx-vals='{"key":"{{ key }}","field":"latent_jobs_day_m"}'
-               data-live-target="#def-latent-{{ key }}" />
         <span class="val">
           <input type="text" class="val-input" inputmode="numeric"
                  id="def-latent-{{ key }}"
@@ -300,16 +249,6 @@
       </div>
       <div class="pc-row">
         <span class="T">Unlock at</span>
-        <input type="range" min="0" max="2000" step="5"
-               name="value"
-               value="{{ (preset.get('unlock_price_per_m', 0) * 100)|round|int }}"
-               hx-post="/use-cases/definition/set"
-               hx-target="#useCaseLibrary"
-               hx-trigger="change"
-               hx-vals='{"key":"{{ key }}","field":"unlock_price_per_m_cents"}'
-               data-live-target="#def-unlock-{{ key }}"
-               data-live-scale="0.01"
-               data-live-decimals="2" />
         <span class="val" style="gap:1px;">
           <span class="T">$</span>
           <input type="text" class="val-input" inputmode="decimal"

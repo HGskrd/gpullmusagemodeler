@@ -3,7 +3,7 @@
   <div class="T" style="font-weight:500;margin-bottom:3px;">GPU count</div>
   <div class="flex gpu-count-sel" style="gap:2px;">
     {% for n in [1, 2, 4, 6, 8, 16] %}
-    <button data-gcnt="{{ n }}" class="sm {{ 'selected' if n == 8 else '' }}"
+    <button type="button" data-gcnt="{{ n }}" class="sm {{ 'selected' if n == 8 else '' }}"
             style="min-width:24px;">{{ n }}</button>
     {% endfor %}
   </div>

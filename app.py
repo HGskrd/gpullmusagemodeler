@@ -805,8 +805,15 @@ def gpu_qty():
         if s is None:
             return _htmx_response()
         uid = int(request.form.get("uid"))
-        delta = int(request.form.get("delta"))
-        change_gpu_qty(s, uid, delta)
+        if "count" in request.form:
+            gp = s.find_gpu(uid)
+            if gp is None:
+                return jsonify({"error": "GPU pool not found"}), 404
+            count = max(0, int(float(request.form.get("count") or 0)))
+            change_gpu_qty(s, uid, count - gp.count)
+        else:
+            delta = int(request.form.get("delta"))
+            change_gpu_qty(s, uid, delta)
         return _tracked_htmx_response("gpu_qty", s)
     except Exception as e:
         return jsonify({"error": str(e)}), 500

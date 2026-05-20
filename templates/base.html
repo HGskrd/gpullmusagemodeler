@@ -12,22 +12,17 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
+<div class="topbar">
   <div>
     <h1>vLLM multi-model planner</h1>
     <p class="T">Roofline throughput estimates · continuous batching · profiled non-KV anchored KV capacity</p>
   </div>
   <div class="flex" style="gap:6px;">
-    <a href="{{ url_for('use_cases') }}"
-       style="font-family:var(--sans);font-size:10px;font-weight:500;background:var(--bg2);border:1px solid var(--b1);border-radius:var(--r);padding:3px 8px;color:var(--fg0);text-decoration:none;white-space:nowrap;"
-       title="Detailed explanation of the built-in use-case presets">
-      Use cases
-    </a>
-    <a href="{{ url_for('explainer') }}"
-       style="font-family:var(--sans);font-size:10px;font-weight:500;background:var(--bg2);border:1px solid var(--b1);border-radius:var(--r);padding:3px 8px;color:var(--fg0);text-decoration:none;white-space:nowrap;"
-       title="What this calculator does and how to use it">
-      📘 User guide
-    </a>
+    <nav class="app-tabs" aria-label="Primary">
+      <a href="{{ url_for('index') }}" class="on">Calculator</a>
+      <a href="{{ url_for('explainer') }}" title="What this calculator does and how to use it">User guide</a>
+      <a href="{{ url_for('use_cases') }}" title="Detailed explanation of the built-in use-case presets">Use cases</a>
+    </nav>
     <div class="flex" id="compareControls" style="gap:6px;">
       {% include "partials/compare_controls.html" %}
     </div>
@@ -709,7 +704,10 @@ function togglePicker(btn, url) {
   pk.innerHTML = '<div style="padding:10px;text-align:center;" class="T">Loading...</div>';
   wrap.appendChild(pk);
   openPicker = pk;
-  fetch(withTabUrl(url), { headers: requestHeaders() }).then(r => r.text()).then(html => { replaceHtml(pk, html); });
+  fetch(withTabUrl(url), { headers: requestHeaders() }).then(r => r.text()).then(html => {
+    replaceHtml(pk, html);
+    syncGpuCountSelector(pk);
+  });
 }
 
 function postPartial(url, body) {
@@ -840,12 +838,26 @@ function copyProjectionReport(button) {
 
 /* GPU count selector in picker */
 window.selectedGpuCount = 8;
+function syncGpuCountSelector(root) {
+  const count = Number(window.selectedGpuCount ?? 8) || 8;
+  const scope = root || document;
+  const groups = [];
+  if (scope.classList && scope.classList.contains('gpu-count-sel')) groups.push(scope);
+  scope.querySelectorAll?.('.gpu-count-sel').forEach(group => groups.push(group));
+  groups.forEach(group => {
+    group.querySelectorAll('[data-gcnt]').forEach(button => {
+      const selected = Number(button.dataset.gcnt) === count;
+      button.classList.toggle('selected', selected);
+      button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+    });
+  });
+}
+
 document.addEventListener('click', e => {
   const gcb = e.target.closest('[data-gcnt]');
   if (gcb) {
-    window.selectedGpuCount = parseInt(gcb.dataset.gcnt);
-    gcb.closest('.gpu-count-sel').querySelectorAll('button').forEach(b => b.classList.remove('selected'));
-    gcb.classList.add('selected');
+    window.selectedGpuCount = parseInt(gcb.dataset.gcnt, 10);
+    syncGpuCountSelector(gcb.closest('.gpu-count-sel'));
   }
 });
 

@@ -7,22 +7,13 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 <script src="https://unpkg.com/htmx.org@2.0.4"></script>
 <style>
-  body.docs-body { max-width: 1120px; padding: 18px; }
+  body.docs-body { max-width: 1400px; padding: 12px; }
   .docs-hdr {
     display: flex; align-items: baseline; justify-content: space-between;
     gap: 10px; flex-wrap: wrap; margin-bottom: 10px;
   }
   .docs-hdr h1 { font-size: 16px; }
   .docs-hdr .sub { font-size: 10px; color: var(--fg2); }
-  .docs-tabs { display: flex; gap: 6px; align-items: center; }
-  .docs-tabs a {
-    font-family: var(--sans); font-size: 10px; font-weight: 500;
-    background: var(--bg2); border: 1px solid var(--b1); border-radius: var(--r);
-    padding: 4px 10px; color: var(--fg0); text-decoration: none;
-    transition: background .08s;
-  }
-  .docs-tabs a:hover { background: var(--bg3); }
-  .docs-tabs a.on { background: var(--fg0); color: var(--bg0); border-color: var(--fg0); }
   .toc {
     display: flex; flex-wrap: wrap; gap: 4px 10px;
     padding: 8px 10px; background: var(--bg1); border: 1px solid var(--b0);
@@ -151,8 +142,8 @@
     <h1>vLLM multi-model planner &middot; use cases</h1>
     <div class="sub">Edit reusable use-case kinds here; set organization scale in the calculator.</div>
   </div>
-  <nav class="docs-tabs">
-    <a href="{{ url_for('index') }}">&larr; Calculator</a>
+  <nav class="app-tabs" aria-label="Primary">
+    <a href="{{ url_for('index') }}">Calculator</a>
     <a href="{{ url_for('explainer') }}">User guide</a>
     <a href="{{ url_for('use_cases') }}" class="on">Use cases</a>
   </nav>

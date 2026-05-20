@@ -31,15 +31,6 @@
         <span class="T">{{ scale_cfg.unit }}</span>
       </div>
     </div>
-    <input type="range" min="{{ scale_cfg.min }}" max="{{ scale_cfg.max }}" step="{{ scale_cfg.step }}"
-           name="value"
-           value="{{ scale_cfg.value }}"
-           hx-post="/project/set"
-           hx-target="#main-content"
-           hx-trigger="change"
-           hx-vals='{"panel":"{{ panel }}","uid":"{{ proj.uid }}","field":"scale_value"}'
-           data-live-target="#proj-demand-val-{{ proj.uid }}-{{ panel }}"
-           data-live-decimals="{{ scale_cfg.decimals }}" />
   </div>
   <div class="T" style="margin-top:1px;">
     {{ scale_cfg.model_label }} scale · {{ proj.tokens_day|fmt_num }} tokens/day equivalent
