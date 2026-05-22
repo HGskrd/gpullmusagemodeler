@@ -321,6 +321,7 @@ GPUS: dict[str, GPU] = {
     # Ampere GPUs without native FP8 use BF16/FP16 tensor throughput for the FP8 planner path.
     "A100": GPU("A100", "A100 80GB SXM", "nv", 80e9, 2.039e12, 312e12, 312e12, 600e9, 8),
     "A100_40": GPU("A100_40", "A100 40GB PCIe", "nv", 40e9, 1.555e12, 156e12, 156e12, 64e9, 8),
+    "A10": GPU("A10", "A10 24GB PCIe", "nv", 24e9, 600e9, 125e12, 125e12, 64e9, 8),
     "H100": GPU("H100", "H100 80GB SXM", "nv", 80e9, 3.35e12, 989e12, 1979e12, 900e9, 8),
     "H200": GPU("H200", "H200 141GB SXM", "nv", 141e9, 4.8e12, 989e12, 1979e12, 900e9, 8),
     "L40S": GPU("L40S", "L40S 48GB", "nv", 48e9, 864e9, 362.05e12, 733e12, 64e9, 8),
@@ -374,7 +375,7 @@ for _k, _fp4 in GPU_FP4_FLOPS.items():
 # Published board TDPs (watts). Used with a utilization factor to estimate per-task energy.
 # Sources: vendor product pages; Mac figures use whole-system measured peak.
 GPU_TDP_WATTS = {
-    "A100": 400, "A100_40": 250, "H100": 700, "H200": 700, "L40S": 350, "L4": 72,
+    "A100": 400, "A100_40": 250, "A10": 150, "H100": 700, "H200": 700, "L40S": 350, "L4": 72,
     "RTXPRO6000_BSE": 600, "DGX_SPARK": 140, "GB200": 1200, "B200": 1000, "B300": 1200,
     "A6000": 300, "A4000": 140, "A2000_MOBILE": 95, "JETSON_AGX_THOR": 130,
     "MI250X": 560, "MI300X": 750, "MI325X": 1000, "MI350X": 1000, "MI355X": 1400, "MI400": 1500,
@@ -449,6 +450,15 @@ GPU_CARDS: list[GPUCard] = [
         "Lower-cost Ampere option, PCIe slot-in",
         (GPUPlannerOption("Add", "A100_40"),),
         "Calibrated A100 40 GB PCIe planner profile.",
+    ),
+    GPUCard(
+        "A10",
+        "NVIDIA",
+        "Ampere",
+        "24 GB GDDR6",
+        "Mainstream enterprise inference, vGPU, graphics, and video workloads",
+        (GPUPlannerOption("Add", "A10"),),
+        "Uses NVIDIA's dense BF16/FP16 tensor peak with the 24GB GDDR6 and PCIe Gen4 profile.",
     ),
     GPUCard(
         "L40S",

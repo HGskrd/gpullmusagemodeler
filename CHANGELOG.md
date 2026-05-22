@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2026-05-22
+
+### Added
+
+- Added an NVIDIA A10 GPU catalog entry with planner specs, picker metadata, TDP data, and regression coverage.
+
 ## 2026-05-20
 
 ### Added
