@@ -39,10 +39,12 @@ from data import (
 from calc import (
     avg_dist,
     chart_processing_pareto,
+    chart_realtime_capacity,
     chart_user_pareto,
     compute_revenue_projection,
     get_decode_bs,
     get_processing_pareto_bs,
+    get_realtime_bs,
     dist_percentile,
     effective_prefill_length,
     normalize_dist,
@@ -1372,6 +1374,13 @@ def chart_data():
             datasets = chart_processing_pareto(sa, batch_sizes)
             if sb:
                 datasets += chart_processing_pareto(sb, batch_sizes, " (B)")
+            return jsonify({"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]})
+
+        if mode == "realtime":
+            batch_sizes = get_realtime_bs(states)
+            datasets = chart_realtime_capacity(sa, batch_sizes)
+            if sb:
+                datasets += chart_realtime_capacity(sb, batch_sizes, " (B)")
             return jsonify({"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]})
 
         batch_sizes = get_decode_bs(states)

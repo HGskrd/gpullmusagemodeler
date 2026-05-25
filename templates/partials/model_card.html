@@ -13,7 +13,8 @@
             hx-post="/model/prec" hx-target="#main-content" hx-trigger="change" hx-include="this"
             hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}'>
       {% for prec in PRECISIONS %}
-      <option value="{{ prec }}" {{ 'selected' if am.prec == prec else '' }}>{{ PRECISION_LABELS[prec] }}</option>
+      {% set opt_profile = info.quant_profiles_by_precision.get(prec) %}
+      <option value="{{ prec }}" {{ 'selected' if am.prec == prec else '' }}>{{ PRECISION_LABELS[prec] }}{% if opt_profile %} · LUT{% endif %}</option>
       {% endfor %}
     </select>
   </div>
@@ -21,13 +22,37 @@
   <div class="T" style="margin-bottom:3px;">
     {{ "%.1f"|format(m.weight_gb(am.prec)) }} GB weights{% if info.mixed_weight_precision %} · ~{{ "%.2f"|format(info.weight_bpp) }} B/param avg{% endif %}{{ ' · MLA KV' if m.is_mla else '' }}{% if m.attention_label %} · {{ m.attention_label }}{% endif %}
   </div>
+  {% if info.quant_profile %}
+  <div class="T" style="margin-bottom:3px;" title="{{ info.quant_profile.notes }}{% if info.quant_profile.storage_summary %} Storage: {{ info.quant_profile.storage_summary }}.{% endif %}">
+    {{ info.quant_profile.label }} LUT · {{ info.quant_profile.source_repo }}{% if info.quant_profile.source_kind != 'exact' %} · {{ info.quant_profile.source_kind }}{% endif %} · {{ info.quant_profile.compute_summary }} · KV {{ info.quant_profile.kv_cache_format }}
+  </div>
+  {% elif info.quant_profiles_by_precision.get('nvfp4') %}
+  {% set nvfp4_profile = info.quant_profiles_by_precision.get('nvfp4') %}
+  <div class="T" style="margin-bottom:3px;" title="Select NVFP4 to use this offline artifact LUT. {{ nvfp4_profile.notes }}{% if nvfp4_profile.storage_summary %} Storage: {{ nvfp4_profile.storage_summary }}.{% endif %}">
+    NVFP4 LUT available · {{ nvfp4_profile.source_repo }}{% if nvfp4_profile.source_kind != 'exact' %} · {{ nvfp4_profile.source_kind }}{% endif %}
+  </div>
+  {% endif %}
   {% for alert in info.precision_alerts %}
   <div class="warn">⚠ {{ alert }}</div>
   {% endfor %}
+  {% if info.realtime %}
+  <div class="T" style="margin-bottom:3px;" title="{{ info.realtime.profile.note }} Source: {{ info.realtime.profile.source }}.">
+    {{ info.realtime.profile.label }} · target {{ info.realtime.profile.target_delay_ms }} ms · {{ "%.1f"|format(info.realtime.profile.tokens_per_second) }} tok/s per stream · independent of use-case mix
+  </div>
+  <div class="T" style="margin-bottom:3px;">
+    {% if info.realtime.max_users > 0 %}
+      ~{{ info.realtime.max_users|fmt_num }} realtime users{% if info.realtime.sample %} · {{ "%.2f"|format(info.realtime.sample.realtime_factor) }}× headroom at that load{% endif %}
+    {% else %}
+      No realtime stream capacity at the selected topology.
+    {% endif %}
+  </div>
+  {% endif %}
+  {% if not m.is_realtime_only %}
   <div class="T" style="margin-bottom:3px;display:flex;gap:6px;">
     <span class="tip" title="Confidence-adjusted routing quality. Raw Q {{ '%.2f'|format(m.quality) }} · benchmark confidence {{ '%.0f'|format(m.quality_confidence * 100) }}%.">Q&nbsp;{{ "%.2f"|format(effective_quality(m)) }}</span>
     <span class="tip" title="Token efficiency: 1.00× = 10M output tokens on AA's Intelligence Index reference; 0.50× = twice as verbose (thinks ~2× longer); 2.00× = half as many output tokens. Effective $/M scales the output side only, so long-prompt workloads are penalized less than pure generation workloads.">η&nbsp;{{ "%.2f"|format(m.token_efficiency) }}×</span>
   </div>
+  {% endif %}
   {% if m.is_moe %}
   <div class="T" style="margin-bottom:3px;">
     {{ "%.1f"|format(m.active_params / 1e9) }}B active · {{ "%.2f"|format(state.moe_imbalance) }}× expert imbalance

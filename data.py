@@ -29,6 +29,97 @@ class PrecisionSpec:
     description: str
 
 
+@dataclass(frozen=True)
+class NumberFormatSpec:
+    key: str
+    label: str
+    bytes_per_elem: float
+    description: str
+
+
+NUMBER_FORMAT_SPECS: dict[str, NumberFormatSpec] = {
+    "BF16": NumberFormatSpec("BF16", "BF16", 2.0, "Brain floating point 16-bit tensor."),
+    "F32": NumberFormatSpec("F32", "FP32", 4.0, "Float32 tensor, usually tiny global scale auxiliaries."),
+    "F8_E4M3": NumberFormatSpec("F8_E4M3", "FP8 E4M3", 1.0, "FP8 E4M3 scale or activation tensor."),
+    "U8": NumberFormatSpec("U8", "Packed FP4", 1.0, "Unsigned byte storage for packed FP4 payloads."),
+}
+
+
+def _storage_bytes(format_counts: dict[str, int]) -> float:
+    total = 0.0
+    for fmt, elems in format_counts.items():
+        spec = NUMBER_FORMAT_SPECS.get(fmt)
+        if spec is None:
+            continue
+        total += elems * spec.bytes_per_elem
+    return total
+
+
+@dataclass(frozen=True)
+class QuantizationProfile:
+    """Offline-captured model artifact profile.
+
+    Counts are safetensors storage element counts, not logical parameter counts:
+    U8 entries are already packed FP4 bytes, while F8_E4M3 entries are scale tensors.
+    """
+
+    precision_key: str
+    label: str
+    source_repo: str
+    source_revision: str
+    source_downloads: int
+    captured_at: str
+    source_kind: str
+    quant_algo: str
+    kv_cache_format: str
+    kv_cache_bytes_per_elem: float
+    group_size: int | None
+    storage_format_counts: dict[str, int]
+    compute_precision_shares: dict[str, float]
+    quantized: tuple[str, ...]
+    retained: tuple[str, ...]
+    total_weight_bytes_override: float | None = None
+    active_weight_bytes_per_param_override: float | None = None
+    notes: str = ""
+
+    @property
+    def total_weight_bytes(self) -> float:
+        if self.total_weight_bytes_override is not None:
+            return self.total_weight_bytes_override
+        return _storage_bytes(self.storage_format_counts)
+
+    def weight_bytes_per_param(self, total_params: float) -> float:
+        return self.total_weight_bytes / max(float(total_params), 1.0)
+
+    def active_weight_bytes_per_param(self, total_params: float) -> float:
+        if self.active_weight_bytes_per_param_override is not None:
+            return self.active_weight_bytes_per_param_override
+        return self.weight_bytes_per_param(total_params)
+
+    @property
+    def source_label(self) -> str:
+        if self.source_kind == "exact":
+            return f"HF {self.source_repo}"
+        return f"HF family proxy {self.source_repo}"
+
+    @property
+    def storage_summary(self) -> str:
+        parts = []
+        for fmt, count in sorted(self.storage_format_counts.items()):
+            spec = NUMBER_FORMAT_SPECS.get(fmt)
+            label = spec.label if spec else fmt
+            parts.append(f"{label} {count / 1e9:.2f}B")
+        return " · ".join(parts)
+
+    @property
+    def compute_summary(self) -> str:
+        parts = []
+        for prec, share in self.compute_precision_shares.items():
+            label = PRECISION_SPECS[prec].label if prec in PRECISION_SPECS else prec.upper()
+            parts.append(f"{label} {share * 100:.0f}%")
+        return " / ".join(parts)
+
+
 PRECISION_SPECS: dict[str, PrecisionSpec] = {
     "bf16": PrecisionSpec(
         "bf16",
@@ -134,6 +225,17 @@ class GPUCard:
     note: str | None = None
 
 
+@dataclass(frozen=True)
+class RealtimeProfile:
+    label: str
+    tokens_per_second: float
+    audio_ms_per_token: float
+    target_delay_ms: int
+    state_tokens: int
+    source: str
+    note: str
+
+
 # Capability flags. Projects can require one or more; models must supply them to be eligible.
 # Kept deliberately coarse — the planner isn't a model quality benchmark, it's a capacity model.
 MODEL_CAPABILITIES: tuple[str, ...] = ("tools", "ctx_128k", "images", "reasoning")
@@ -165,7 +267,7 @@ class Model:
     mla_kv_dim: int = 0
     mla_rope_dim: int = 0
     mla_tp_supported: bool = False
-    kv_layers: int = 0
+    kv_layers: int = -1
     bf16_weight_bytes_per_param: float = 2.0
     fp8_weight_bytes_per_param: float = 1.0
     hidden: bool = False
@@ -178,7 +280,7 @@ class Model:
     quality_confidence: float = 1.0
     token_efficiency: float = 1.0
     hidden_dim: int = 0
-    attention_layers: int = 0
+    attention_layers: int = -1
     local_attention_layers: int = 0
     local_attention_window: int = 0
     local_attention_heads: int = 0
@@ -190,10 +292,18 @@ class Model:
     linear_attention_conv_kernel: int = 0
     attention_query_heads: int = 0
     attention_label: str = ""
+    capabilities_override: frozenset[str] | None = None
+    realtime_profile: RealtimeProfile | None = None
 
     @property
     def capabilities(self) -> frozenset[str]:
+        if self.capabilities_override is not None:
+            return self.capabilities_override | self.extra_capabilities
         return DEFAULT_MODEL_CAPABILITIES | self.extra_capabilities
+
+    @property
+    def is_realtime_only(self) -> bool:
+        return self.realtime_profile is not None
 
     @property
     def size_label(self) -> str:
@@ -217,11 +327,11 @@ class Model:
 
     @property
     def attention_layer_count(self) -> int:
-        return self.attention_layers or self.layers
+        return self.layers if self.attention_layers < 0 else self.attention_layers
 
     @property
     def kv_layer_count(self) -> int:
-        return self.kv_layers or self.attention_layer_count
+        return self.attention_layer_count if self.kv_layers < 0 else self.kv_layers
 
     @property
     def local_attention_head_count(self) -> int:
@@ -257,6 +367,9 @@ class Model:
 
     def weight_bytes_per_param(self, prec: str) -> float:
         prec = normalize_precision(prec)
+        profile = get_quantization_profile(self.key, prec)
+        if profile is not None:
+            return profile.weight_bytes_per_param(self.total_params)
         if prec == "bf16":
             return self.bf16_weight_bytes_per_param
         if prec == "fp8":
@@ -267,6 +380,8 @@ class Model:
         return PRECISION_SPECS[prec].effective_weight_bytes_per_param + retained_bpp
 
     def uses_mixed_weight_precision(self, prec: str) -> bool:
+        if get_quantization_profile(self.key, prec) is not None:
+            return True
         return not math.isclose(self.weight_bytes_per_param(prec), bytes_per_param(prec), rel_tol=1e-9, abs_tol=1e-9)
 
     def weight_bytes(self, prec: str) -> float:
@@ -276,8 +391,21 @@ class Model:
         return self.weight_bytes(prec) / 1e9
 
     def active_weight_bytes(self, prec: str) -> float:
+        profile = get_quantization_profile(self.key, prec)
+        if profile is not None:
+            params = self.active_params if self.is_moe else self.total_params
+            return params * profile.active_weight_bytes_per_param(self.total_params)
         params = self.active_params if self.is_moe else self.total_params
         return params * self.weight_bytes_per_param(prec)
+
+    def kv_cache_bytes_per_elem(self, prec: str) -> float:
+        profile = get_quantization_profile(self.key, prec)
+        if profile is not None:
+            return profile.kv_cache_bytes_per_elem
+        return kv_cache_bytes_per_elem(prec)
+
+    def quantization_profile(self, prec: str) -> QuantizationProfile | None:
+        return get_quantization_profile(self.key, prec)
 
 
 AA_INTELLIGENCE_INDEX_MIN = 7.0
@@ -327,13 +455,23 @@ GPUS: dict[str, GPU] = {
     "L40S": GPU("L40S", "L40S 48GB", "nv", 48e9, 864e9, 362.05e12, 733e12, 64e9, 8),
     "L4": GPU("L4", "L4 24GB", "nv", 24e9, 300e9, 121e12, 242.5e12, 64e9, 8),
     "RTXPRO6000_BSE": GPU("RTXPRO6000_BSE", "RTX PRO 6000 Blackwell Server Edition 96GB", "nv", 96e9, 1.597e12, 1e15, 2e15, 128e9, 8),
+    "RTXPRO6000_BW_WS": GPU("RTXPRO6000_BW_WS", "RTX PRO 6000 Blackwell Workstation 96GB", "nv", 96e9, 1.792e12, 1e15, 2e15, 128e9, 4),
+    "RTXPRO5000_BW_72": GPU("RTXPRO5000_BW_72", "RTX PRO 5000 Blackwell 72GB", "nv", 72e9, 1.344e12, 535.5e12, 1071e12, 128e9, 4),
+    "RTX6000_ADA": GPU("RTX6000_ADA", "RTX 6000 Ada Generation 48GB", "nv", 48e9, 960e9, 364.25e12, 728.5e12, 64e9, 4),
+    "RTX5090": GPU("RTX5090", "GeForce RTX 5090 32GB", "nv", 32e9, 1.792e12, 838e12, 1676e12, 128e9, 1),
+    "RTX4090": GPU("RTX4090", "GeForce RTX 4090 24GB", "nv", 24e9, 1.008e12, 330.25e12, 660.5e12, 64e9, 1),
+    "RTX3090": GPU("RTX3090", "GeForce RTX 3090 24GB", "nv", 24e9, 936e9, 142e12, 142e12, 64e9, 1),
     "DGX_SPARK": GPU("DGX_SPARK", "DGX Spark GB10 128GB", "nv", 128e9, 273e9, 125e12, 250e12, 25e9, 1),
     "GB200": GPU("GB200", "GB200 Grace Blackwell 186GB/GPU", "nv", 186e9, 8e12, 2.5e15, 5e15, 3.6e12, 72),
     "B200": GPU("B200", "B200 180GB SXM", "nv", 180e9, 8e12, 2.25e15, 4.5e15, 1.8e12, 8),
     "B300": GPU("B300", "B300 Blackwell Ultra 288GB SXM", "nv", 288e9, 8e12, 2.25e15, 4.5e15, 1.8e12, 8),
+    "A40": GPU("A40", "A40 48GB", "nv", 48e9, 696e9, 149.7e12, 149.7e12, 112.5e9, 2),
+    "A30": GPU("A30", "A30 24GB", "nv", 24e9, 933e9, 165e12, 165e12, 200e9, 2),
     "A6000": GPU("A6000", "RTX A6000 48GB", "nv", 48e9, 768e9, 154.85e12, 154.85e12, 112.5e9, 2),
     "A4000": GPU("A4000", "RTX A4000 16GB", "nv", 16e9, 448e9, 76.7e12, 76.7e12, 64e9, 1),
     "A2000_MOBILE": GPU("A2000_MOBILE", "RTX A2000 Laptop GPU 8GB", "nv", 8e9, 192e9, 37.5e12, 37.5e12, 64e9, 1),
+    "T4": GPU("T4", "T4 16GB", "nv", 16e9, 320e9, 65e12, 65e12, 32e9, 8),
+    "V100": GPU("V100", "V100 32GB SXM2", "nv", 32e9, 900e9, 125e12, 125e12, 300e9, 8),
     "JETSON_AGX_THOR": GPU("JETSON_AGX_THOR", "Jetson AGX Thor 128GB", "nv", 128e9, 273e9, 258.75e12, 517.5e12, 25e9, 1),
     "MI250X": GPU("MI250X", "MI250X 128GB", "amd", 128e9, 3.2e12, 383e12, 383e12, 800e9, 8),
     "MI300X": GPU("MI300X", "MI300X 192GB", "amd", 192e9, 5.3e12, 1307e12, 2615e12, 896e9, 8),
@@ -341,10 +479,14 @@ GPUS: dict[str, GPU] = {
     "MI350X": GPU("MI350X", "MI350X 288GB", "amd", 288e9, 8e12, 2010e12, 4020e12, 1075.2e9, 8),
     "MI355X": GPU("MI355X", "MI355X 288GB", "amd", 288e9, 8e12, 2512e12, 5037e12, 1075.2e9, 8),
     "MI400": GPU("MI400", "MI400 Series Preview 432GB", "amd", 432e9, 19.6e12, 10e15, 20e15, 260e12 / 72.0, 72),
+    "RadeonProW7900": GPU("RadeonProW7900", "Radeon PRO W7900 48GB", "amd", 48e9, 864e9, 123e12, 123e12, 64e9, 1),
+    "RadeonAIProR9700": GPU("RadeonAIProR9700", "Radeon AI PRO R9700 32GB", "amd", 32e9, 640e9, 96e12, 96e12, 128e9, 1),
     # Intel does not publish dense BF16/FP8 peak figures for these public pages, so the planner
     # uses transparent proxy rooflines derived from the nearest available official disclosures.
+    "Gaudi2": GPU("Gaudi2", "Gaudi 2 96GB", "intel", 96e9, 2.45e12, 432e12, 865e12, 300e9, 8),
     "Gaudi3": GPU("Gaudi3", "Gaudi 3 128GB", "intel", 128e9, 3.7e12, 1.3e15, 2.6e15, 900e9, 4),
     "CrescentIsland": GPU("CrescentIsland", "Crescent Island Preview 160GB", "intel", 160e9, 1.0e12, 183.5e12, 367e12, 128e9, 8),
+    "ArcProB70": GPU("ArcProB70", "Arc Pro B70 32GB", "intel", 32e9, 608e9, 183.5e12, 367e12, 128e9, 8),
     "ArcProB60": GPU("ArcProB60", "Arc Pro B60 24GB", "intel", 24e9, 456e9, 98.5e12, 197e12, 64e9, 8),
     "ArcProB50": GPU("ArcProB50", "Arc Pro B50 16GB", "intel", 16e9, 224e9, 85e12, 170e12, 64e9, 8),
     # Apple publishes peak unified-memory bandwidth and GPU-core counts, but not dense BF16/FP8
@@ -359,6 +501,9 @@ GPUS: dict[str, GPU] = {
 GPU_FP4_FLOPS = {
     # Native dense FP4 tensor paths. Sparse marketing figures are intentionally not used.
     "RTXPRO6000_BSE": 4e15,
+    "RTXPRO6000_BW_WS": 4e15,
+    "RTXPRO5000_BW_72": 2142e12,
+    "RTX5090": 3352e12,
     "DGX_SPARK": 500e12,
     "GB200": 10e15,
     "B200": 9e15,
@@ -376,10 +521,12 @@ for _k, _fp4 in GPU_FP4_FLOPS.items():
 # Sources: vendor product pages; Mac figures use whole-system measured peak.
 GPU_TDP_WATTS = {
     "A100": 400, "A100_40": 250, "A10": 150, "H100": 700, "H200": 700, "L40S": 350, "L4": 72,
-    "RTXPRO6000_BSE": 600, "DGX_SPARK": 140, "GB200": 1200, "B200": 1000, "B300": 1200,
-    "A6000": 300, "A4000": 140, "A2000_MOBILE": 95, "JETSON_AGX_THOR": 130,
+    "RTXPRO6000_BSE": 600, "RTXPRO6000_BW_WS": 600, "RTXPRO5000_BW_72": 300, "RTX6000_ADA": 300,
+    "RTX5090": 575, "RTX4090": 450, "RTX3090": 350, "DGX_SPARK": 140, "GB200": 1200, "B200": 1000, "B300": 1200,
+    "A40": 300, "A30": 165, "A6000": 300, "A4000": 140, "A2000_MOBILE": 95, "T4": 70, "V100": 300, "JETSON_AGX_THOR": 130,
     "MI250X": 560, "MI300X": 750, "MI325X": 1000, "MI350X": 1000, "MI355X": 1400, "MI400": 1500,
-    "Gaudi3": 900, "CrescentIsland": 300, "ArcProB60": 200, "ArcProB50": 70,
+    "RadeonProW7900": 295, "RadeonAIProR9700": 300,
+    "Gaudi2": 600, "Gaudi3": 900, "CrescentIsland": 300, "ArcProB70": 230, "ArcProB60": 200, "ArcProB50": 70,
     "MAC_MINI_M4_PRO": 140, "MAC_STUDIO_M4_MAX": 270, "MAC_STUDIO_M3_ULTRA": 480,
 }
 for _k, _w in GPU_TDP_WATTS.items():
@@ -452,6 +599,33 @@ GPU_CARDS: list[GPUCard] = [
         "Calibrated A100 40 GB PCIe planner profile.",
     ),
     GPUCard(
+        "V100 32GB SXM2",
+        "NVIDIA",
+        "Volta",
+        "32 GB HBM2",
+        "Legacy NVLink-connected training and budget inference nodes",
+        (GPUPlannerOption("Add", "V100"),),
+        "Uses NVIDIA's 32GB SXM2 tensor and NVLink profile; FP8 planner path falls back to FP16 tensor throughput.",
+    ),
+    GPUCard(
+        "A40",
+        "NVIDIA",
+        "Ampere",
+        "48 GB GDDR6 ECC",
+        "Data center visual compute, vGPU, and large-memory inference",
+        (GPUPlannerOption("Add", "A40"),),
+        "Uses NVIDIA's dense BF16/FP16 tensor peak with the 48GB GDDR6 and 2-way NVLink profile.",
+    ),
+    GPUCard(
+        "A30",
+        "NVIDIA",
+        "Ampere",
+        "24 GB HBM2",
+        "Mainstream data center training/inference with MIG and NVLink",
+        (GPUPlannerOption("Add", "A30"),),
+        "Uses NVIDIA's dense BF16/FP16 tensor peak; FP8 planner path falls back to Ampere tensor throughput.",
+    ),
+    GPUCard(
         "A10",
         "NVIDIA",
         "Ampere",
@@ -479,6 +653,15 @@ GPU_CARDS: list[GPUCard] = [
         "Uses the public NVIDIA L4 dense tensor and memory specs.",
     ),
     GPUCard(
+        "T4",
+        "NVIDIA",
+        "Turing",
+        "16 GB GDDR6",
+        "Low-power legacy cloud inference and video workloads",
+        (GPUPlannerOption("Add", "T4"),),
+        "Uses NVIDIA's FP16 tensor peak as the planner proxy; BF16/FP8 are not native on Turing.",
+    ),
+    GPUCard(
         "RTX PRO 6000 Blackwell Server Edition",
         "NVIDIA",
         "Blackwell",
@@ -486,6 +669,60 @@ GPU_CARDS: list[GPUCard] = [
         "Graphics-intensive AI, virtual workstations (GCP)",
         (GPUPlannerOption("Add", "RTXPRO6000_BSE"),),
         "Planner uses the NVIDIA Server Edition memory and tensor figures; modeled as an 8-GPU PCIe server topology.",
+    ),
+    GPUCard(
+        "RTX PRO 6000 Blackwell Workstation Edition",
+        "NVIDIA",
+        "Blackwell",
+        "96 GB GDDR7 ECC",
+        "High-end local AI, rendering, and workstation model serving",
+        (GPUPlannerOption("Add", "RTXPRO6000_BW_WS"),),
+        "Uses the workstation 96GB/1.792TB/s profile with Blackwell FP4 tensor support; modeled as a 4-GPU PCIe workstation topology.",
+    ),
+    GPUCard(
+        "RTX PRO 5000 Blackwell 72GB",
+        "NVIDIA",
+        "Blackwell",
+        "72 GB GDDR7 ECC",
+        "Large local inference and agentic AI workstations below RTX PRO 6000",
+        (GPUPlannerOption("Add", "RTXPRO5000_BW_72"),),
+        "Uses the 72GB RTX PRO 5000 memory profile and published Blackwell AI throughput ratio.",
+    ),
+    GPUCard(
+        "RTX 6000 Ada Generation",
+        "NVIDIA",
+        "Ada Lovelace",
+        "48 GB GDDR6 ECC",
+        "Professional workstation AI, rendering, simulation, and visualization",
+        (GPUPlannerOption("Add", "RTX6000_ADA"),),
+        "Uses the dense half of NVIDIA's effective sparse FP8 tensor figure and the public 960GB/s memory spec.",
+    ),
+    GPUCard(
+        "GeForce RTX 5090",
+        "NVIDIA",
+        "Blackwell",
+        "32 GB GDDR7",
+        "Prosumer/local AI inference, experimentation, and high-end desktop workloads",
+        (GPUPlannerOption("Add", "RTX5090"),),
+        "Uses the 32GB/1.792TB/s Founders Edition memory profile and Blackwell FP4 AI throughput ratio; modeled as a single-GPU desktop card.",
+    ),
+    GPUCard(
+        "GeForce RTX 4090",
+        "NVIDIA",
+        "Ada Lovelace",
+        "24 GB GDDR6X",
+        "Common local inference/development baseline",
+        (GPUPlannerOption("Add", "RTX4090"),),
+        "Uses the 24GB/1.008TB/s Founders Edition memory profile and dense Ada tensor proxy.",
+    ),
+    GPUCard(
+        "GeForce RTX 3090",
+        "NVIDIA",
+        "Ampere",
+        "24 GB GDDR6X",
+        "Common local inference/development baseline with broad used-market availability",
+        (GPUPlannerOption("Add", "RTX3090"),),
+        "Uses the 24GB/936GB/s Founders Edition memory profile; FP8 planner path falls back to the Ampere FP16 tensor proxy.",
     ),
     GPUCard(
         "RTX A6000",
@@ -575,6 +812,24 @@ GPU_CARDS: list[GPUCard] = [
         (GPUPlannerOption("Add", "MI250X"),),
         "Planner models the full MI250X accelerator at 128GB; the 64GB figure commonly refers to one GCD.",
     ),
+    GPUCard(
+        "Radeon AI PRO R9700",
+        "AMD",
+        "RDNA 4",
+        "32 GB GDDR6",
+        "Affordable local AI workstation and multi-GPU inference builds",
+        (GPUPlannerOption("Add", "RadeonAIProR9700"),),
+        "Uses AMD's public 32GB/640GB/s profile; BF16/FP8 planner paths use the published FP16 matrix throughput proxy.",
+    ),
+    GPUCard(
+        "Radeon PRO W7900",
+        "AMD",
+        "RDNA 3",
+        "48 GB GDDR6",
+        "Large-memory workstation graphics, visualization, and local inference",
+        (GPUPlannerOption("Add", "RadeonProW7900"),),
+        "Uses AMD's public 48GB profile and FP16 matrix throughput as the planner proxy.",
+    ),
     # ── Intel ────────────────────────────────────────────────────────────────
     GPUCard(
         "Gaudi 3",
@@ -586,6 +841,15 @@ GPU_CARDS: list[GPUCard] = [
         "Uses Intel's public 128GB/3.7TB/s Gaudi 3 card specs with a provisional BF16/FP8 roofline.",
     ),
     GPUCard(
+        "Gaudi 2",
+        "Intel",
+        "Gaudi",
+        "96 GB HBM2e",
+        "Prior-generation AI training/inference accelerator with Ethernet scale-out",
+        (GPUPlannerOption("Add", "Gaudi2"),),
+        "Uses Intel's 96GB/2.45TB/s Gaudi 2 profile and published BF16/FP8 matrix throughput.",
+    ),
+    GPUCard(
         "GPU Crescent Island",
         "Intel",
         "Xe3P",
@@ -593,6 +857,15 @@ GPU_CARDS: list[GPUCard] = [
         "Inference & tokens-as-a-service, air-cooled (announced Oct 2025)",
         (GPUPlannerOption("Add Preview", "CrescentIsland"),),
         "Preview proxy profile: Intel has announced memory capacity, but not a full public roofline yet.",
+    ),
+    GPUCard(
+        "Arc Pro B70",
+        "Intel",
+        "Xe2",
+        "32 GB GDDR6",
+        "High-memory local AI workstation GPU",
+        (GPUPlannerOption("Add", "ArcProB70"),),
+        "Uses public Intel 32GB/608GB/s specs; BF16/FP8 planner rooflines are inferred from Intel's published INT8 XMX throughput.",
     ),
     GPUCard(
         "Arc Pro B60",
@@ -652,6 +925,58 @@ GPU_CARDS: list[GPUCard] = [
     ),
 ]
 
+
+RWKV7_G1_HEAD_DIM = 64
+RWKV7_G1_CONTEXT = 8192
+RWKV7_G1_BASE_CAPABILITIES = frozenset({"reasoning"})
+RWKV7_G1_TOOL_CAPABILITIES = frozenset({"tools", "reasoning"})
+VOXTRAL_REALTIME_PROFILE = RealtimeProfile(
+    label="Realtime ASR",
+    tokens_per_second=12.5,
+    audio_ms_per_token=80.0,
+    target_delay_ms=480,
+    state_tokens=8192,
+    source="mistralai/Voxtral-Mini-4B-Realtime-2602",
+    note="Realtime stream demand uses 6 delay tokens over 480 ms, i.e. 12.5 streaming tokens/sec.",
+)
+
+
+def _rwkv7_g1_model(
+    key: str,
+    name: str,
+    color: str,
+    params: float,
+    layers: int,
+    hidden_dim: int,
+    capabilities: frozenset[str],
+) -> Model:
+    heads = hidden_dim // RWKV7_G1_HEAD_DIM
+    return Model(
+        key,
+        name,
+        "RWKV",
+        color,
+        params,
+        params,
+        False,
+        layers,
+        heads,
+        0,
+        RWKV7_G1_HEAD_DIM,
+        False,
+        kv_layers=0,
+        hidden_dim=hidden_dim,
+        attention_layers=0,
+        linear_attention_layers=layers,
+        linear_attention_heads=heads,
+        linear_attention_head_dim=RWKV7_G1_HEAD_DIM,
+        linear_attention_k_heads=heads,
+        linear_attention_k_head_dim=RWKV7_G1_HEAD_DIM,
+        attention_label=f"RWKV recurrent state, ctx {RWKV7_G1_CONTEXT // 1024}k",
+        capabilities_override=capabilities,
+    )
+
+
 MODELS: dict[str, Model] = {
     "l8": Model("l8", "Llama 3.1 8B", "Meta", "#22976B", 8e9, 8e9, False, 32, 32, 8, 128, False),
     "l70": Model("l70", "Llama 3.1 70B", "Meta", "#2B7A78", 70.6e9, 70.6e9, False, 80, 64, 8, 128, False),
@@ -660,6 +985,61 @@ MODELS: dict[str, Model] = {
     "ge4": Model("ge4", "Gemma 4 E4B", "Gemma", "#6FA84A", 4e9, 4e9, False, 34, 24, 8, 128, False),
     "g26": Model("g26", "Gemma 4 26B-A4B", "Gemma", "#8AB85C", 26e9, 4e9, True, 48, 32, 8, 128, False),
     "g31": Model("g31", "Gemma 4 31B", "Gemma", "#A2C96E", 31e9, 31e9, False, 48, 40, 8, 128, False),
+
+    "rwkv7-g1d-01b": _rwkv7_g1_model(
+        "rwkv7-g1d-01b",
+        "RWKV7-G1D 0.1B",
+        "#0F766E",
+        0.1e9,
+        12,
+        768,
+        RWKV7_G1_BASE_CAPABILITIES,
+    ),
+    "rwkv7-g1d-04b": _rwkv7_g1_model(
+        "rwkv7-g1d-04b",
+        "RWKV7-G1D 0.4B",
+        "#13806F",
+        0.4e9,
+        24,
+        1024,
+        RWKV7_G1_BASE_CAPABILITIES,
+    ),
+    "rwkv7-g1f-15b": _rwkv7_g1_model(
+        "rwkv7-g1f-15b",
+        "RWKV7-G1F 1.5B",
+        "#168A70",
+        1.5e9,
+        24,
+        2048,
+        RWKV7_G1_TOOL_CAPABILITIES,
+    ),
+    "rwkv7-g1f-29b": _rwkv7_g1_model(
+        "rwkv7-g1f-29b",
+        "RWKV7-G1F 2.9B",
+        "#1D9470",
+        2.9e9,
+        32,
+        2560,
+        RWKV7_G1_TOOL_CAPABILITIES,
+    ),
+    "rwkv7-g1g-72b": _rwkv7_g1_model(
+        "rwkv7-g1g-72b",
+        "RWKV7-G1G 7.2B",
+        "#259E6F",
+        7.2e9,
+        32,
+        4096,
+        RWKV7_G1_TOOL_CAPABILITIES,
+    ),
+    "rwkv7-g1g-133b": _rwkv7_g1_model(
+        "rwkv7-g1g-133b",
+        "RWKV7-G1G 13.3B",
+        "#2EA86E",
+        13.3e9,
+        61,
+        4096,
+        RWKV7_G1_TOOL_CAPABILITIES,
+    ),
 
     "q08": Model("q08", "Qwen 3.5 0.8B", "Qwen", "#0E8F66", 0.8e9, 0.8e9, False, 24, 16, 4, 64, False),
     "q2": Model("q2", "Qwen 3.5 2B", "Qwen", "#15986D", 2e9, 2e9, False, 28, 16, 4, 128, False),
@@ -722,6 +1102,26 @@ MODELS: dict[str, Model] = {
         linear_attention_k_head_dim=128,
         linear_attention_conv_kernel=4,
         attention_label="20 KDA + 7 MLA",
+    ),
+
+    "command-a-plus-05-2026": Model(
+        "command-a-plus-05-2026",
+        "Command A+ 05-2026",
+        "Cohere",
+        "#0F766E",
+        218e9,
+        25e9,
+        True,
+        32,
+        128,
+        8,
+        128,
+        False,
+        hidden_dim=4096,
+        local_attention_layers=24,
+        local_attention_window=4096,
+        local_attention_heads=128,
+        attention_label="24 SWA 4k + 8 global",
     ),
 
     "minimax25": Model("minimax25", "MiniMax M2.5 229B-A10B", "MiniMax", "#2C6D9B", 229e9, 10e9, True, 62, 48, 8, 128, False),
@@ -791,6 +1191,26 @@ MODELS: dict[str, Model] = {
     "cs22": Model("cs22", "Codestral 22B", "Mistral", "#d4882e", 22e9, 22e9, False, 56, 32, 8, 128, False),
     "ms24": Model("ms24", "Mistral Small 3.1 24B", "Mistral", "#b87530", 24e9, 24e9, False, 40, 32, 8, 128, False),
     "ms32": Model("ms32", "Mistral Small 3.2 24B", "Mistral", "#C18438", 24e9, 24e9, False, 40, 32, 8, 128, False),
+    "voxtral-realtime-mini-4b": Model(
+        "voxtral-realtime-mini-4b",
+        "Voxtral Mini Realtime 4B",
+        "Audio",
+        "#DE7A24",
+        4e9,
+        4e9,
+        False,
+        26,
+        32,
+        8,
+        128,
+        False,
+        hidden_dim=3072,
+        local_attention_layers=26,
+        local_attention_window=8192,
+        attention_label="Realtime ASR · 8k SWA",
+        capabilities_override=frozenset(),
+        realtime_profile=VOXTRAL_REALTIME_PROFILE,
+    ),
     # Mistral does not publish a parameter count for Medium 3.1; keep a hidden
     # legacy entry so older saved states continue to resolve cleanly.
     "mm31": Model("mm31", "Mistral Medium 3.1 (legacy)", "Mistral", "#AD6A2C", 24e9, 24e9, False, 40, 32, 8, 128, False, hidden=True),
@@ -889,13 +1309,262 @@ MODELS: dict[str, Model] = {
     "cr13": Model("cr13", "Croissant 1.3B", "Croissant", "#dda050", 1.3e9, 1.3e9, False, 22, 16, 4, 96, False),
 }
 
+
+QUANTIZATION_CAPTURED_AT = "2026-05-22"
+
+
+def _nvfp4_profile(
+    *,
+    model_key: str,
+    source_repo: str,
+    source_revision: str,
+    source_downloads: int,
+    source_kind: str = "exact",
+    storage_format_counts: dict[str, int] | None = None,
+    compute_precision_shares: dict[str, float] | None = None,
+    quantized: tuple[str, ...] = (),
+    retained: tuple[str, ...] = (),
+    total_weight_bytes_override: float | None = None,
+    notes: str = "",
+) -> tuple[tuple[str, str], QuantizationProfile]:
+    return (
+        (model_key, "nvfp4"),
+        QuantizationProfile(
+            precision_key="nvfp4",
+            label="NVFP4",
+            source_repo=source_repo,
+            source_revision=source_revision,
+            source_downloads=source_downloads,
+            captured_at=QUANTIZATION_CAPTURED_AT,
+            source_kind=source_kind,
+            quant_algo="NVFP4",
+            kv_cache_format="FP8",
+            kv_cache_bytes_per_elem=1.0,
+            group_size=16,
+            storage_format_counts=storage_format_counts or {},
+            compute_precision_shares=compute_precision_shares or {"nvfp4": 1.0},
+            quantized=quantized,
+            retained=retained,
+            total_weight_bytes_override=total_weight_bytes_override,
+            notes=notes,
+        ),
+    )
+
+
+MODEL_QUANTIZATION_PROFILES: dict[tuple[str, str], QuantizationProfile] = dict([
+    _nvfp4_profile(
+        model_key="g31",
+        source_repo="nvidia/Gemma-4-31B-IT-NVFP4",
+        source_revision="e5ef03afa233c35cb000323ff098d4291e1dd07c",
+        source_downloads=2_281_570,
+        storage_format_counts={
+            "BF16": 10_464_098_156,
+            "U8": 10_404_495_360,
+            "F8_E4M3": 1_300_561_920,
+            "F32": 360,
+        },
+        compute_precision_shares={"nvfp4": 0.62, "bf16": 0.38},
+        quantized=("language MLP weights: packed FP4 payload + FP8 scales",),
+        retained=("language self-attention BF16", "embeddings BF16", "vision tower BF16", "lm_head BF16"),
+        notes="HF quant config excludes every language self-attention block, the vision tower, embed_vision, and lm_head.",
+    ),
+    _nvfp4_profile(
+        model_key="g26",
+        source_repo="nvidia/Gemma-4-26B-A4B-NVFP4",
+        source_revision="a19cfe00be84568a6867111c9a68c9c44fdcffe6",
+        source_downloads=923_412,
+        storage_format_counts={
+            "BF16": 2_967_950_926,
+            "U8": 11_418_992_640,
+            "F8_E4M3": 1_427_374_080,
+        },
+        compute_precision_shares={"nvfp4": 0.72, "bf16": 0.28},
+        quantized=("later language MoE/MLP tensors: packed FP4 payload + FP8 scales",),
+        retained=("early language layers BF16", "routers BF16", "vision tower BF16", "lm_head BF16"),
+        notes="HF quant config excludes language layers 0-29 plus routers/self-attention, vision tower, embed_vision, and lm_head.",
+    ),
+    _nvfp4_profile(
+        model_key="q35",
+        source_repo="txn545/Qwen3.5-35B-A3B-NVFP4",
+        source_revision="63ffbd1d5ca18043b67ea5302238afe3929fddb2",
+        source_downloads=26_399,
+        storage_format_counts={
+            "F32": 61_700,
+            "BF16": 3_613_738_864,
+            "F8_E4M3": 2_021_130_240,
+            "U8": 16_169_041_920,
+        },
+        compute_precision_shares={"nvfp4": 0.82, "bf16": 0.18},
+        quantized=("MoE expert weights: packed FP4 payload + FP8 scales", "selected self-attention layers"),
+        retained=("linear attention BF16", "router gates BF16", "embeddings BF16", "vision modules BF16", "lm_head BF16"),
+        notes="Top exact Qwen3.5-35B-A3B NVFP4 artifact by HF downloads when captured.",
+    ),
+    _nvfp4_profile(
+        model_key="q122",
+        source_repo="Sehyo/Qwen3.5-122B-A10B-NVFP4",
+        source_revision="56a6bdda33285ba2d5688e4f71f6c714649497b4",
+        source_downloads=198_104,
+        storage_format_counts={
+            "F32": 74_112,
+            "BF16": 7_725_676_784,
+            "F8_E4M3": 7_335_051_264,
+            "U8": 58_680_410_112,
+        },
+        compute_precision_shares={"nvfp4": 0.84, "bf16": 0.16},
+        quantized=("Linear MoE/expert tensors: packed FP4 payload + FP8 scales",),
+        retained=("linear attention BF16", "router gates BF16", "visual modules BF16", "lm_head BF16"),
+        notes="Recipe targets Linear and ignores lm_head, router gates, shared expert gates, linear attention, and visual modules.",
+    ),
+    _nvfp4_profile(
+        model_key="q397",
+        source_repo="Sehyo/Qwen3.5-122B-A10B-NVFP4",
+        source_revision="56a6bdda33285ba2d5688e4f71f6c714649497b4",
+        source_downloads=198_104,
+        source_kind="family",
+        total_weight_bytes_override=265_101_993_628,
+        compute_precision_shares={"nvfp4": 0.84, "bf16": 0.16},
+        quantized=("Qwen3.5 MoE Linear tensors by family proxy",),
+        retained=("linear attention BF16", "router gates BF16", "visual modules BF16", "lm_head BF16"),
+        notes="Family proxy until the larger Qwen3.5-397B safetensors headers are captured locally.",
+    ),
+    _nvfp4_profile(
+        model_key="k25",
+        source_repo="nvidia/Kimi-K2.5-NVFP4",
+        source_revision="0fd0a5e6879298d3476e3b61852a79792a35ae3d",
+        source_downloads=1_227_250,
+        total_weight_bytes_override=590_850_735_131,
+        compute_precision_shares={"nvfp4": 0.80, "fp8": 0.10, "bf16": 0.10},
+        quantized=("MoE experts NVFP4", "selected dense projections FP8"),
+        retained=("self-attention BF16", "vision/projector modules BF16", "lm_head BF16"),
+        notes="HF quant config is mixed precision with NVFP4 experts and FP8 dense projections; bytes use repository storage.",
+    ),
+    _nvfp4_profile(
+        model_key="minimax25",
+        source_repo="nvidia/MiniMax-M2.5-NVFP4",
+        source_revision="b6220d658389629b9d507d4b2bb314f41fea7898",
+        source_downloads=137_435,
+        storage_format_counts={
+            "BF16": 1_278_796_288,
+            "F32": 2_730_491_904,
+            "F8_E4M3": 14_042_529_792,
+            "U8": 112_340_238_336,
+        },
+        compute_precision_shares={"nvfp4": 0.86, "bf16": 0.14},
+        quantized=("MoE/feed-forward weights: packed FP4 payload + FP8 scales",),
+        retained=("self-attention BF16", "MoE gates BF16", "lm_head BF16"),
+    ),
+    _nvfp4_profile(
+        model_key="minimax27",
+        source_repo="nvidia/MiniMax-M2.7-NVFP4",
+        source_revision="e79701cb1f9dce8fe5395b9ed2b20170beebecde",
+        source_downloads=195_984,
+        storage_format_counts={
+            "BF16": 1_278_796_288,
+            "F32": 2_730_491_904,
+            "F8_E4M3": 14_042_529_792,
+            "U8": 112_340_238_336,
+        },
+        compute_precision_shares={"nvfp4": 0.86, "bf16": 0.14},
+        quantized=("MoE/feed-forward weights: packed FP4 payload + FP8 scales",),
+        retained=("self-attention BF16", "MoE gates BF16", "lm_head BF16"),
+    ),
+    _nvfp4_profile(
+        model_key="nem3s",
+        source_repo="nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4",
+        source_revision="4f0cf9daaeb7a4d5e23f80a00e7ed15f0e03caf6",
+        source_downloads=1_017_905,
+        storage_format_counts={
+            "F32": 20_992,
+            "BF16": 6_020_553_728,
+            "F8_E4M3": 11_873_353_728,
+            "U8": 56_382_455_808,
+        },
+        compute_precision_shares={"nvfp4": 0.82, "fp8": 0.08, "bf16": 0.10},
+        quantized=("latent-MoE experts NVFP4", "some dense mixer projections FP8"),
+        retained=("attention and routing-sensitive tensors BF16",),
+        notes="HF quant config is mixed precision and KV cache FP8.",
+    ),
+    _nvfp4_profile(
+        model_key="nem3n",
+        source_repo="nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4",
+        source_revision="ce1b118ae66ec705d02c241525192832eb045fd3",
+        source_downloads=532_640,
+        storage_format_counts={
+            "F32": 7_916_416,
+            "BF16": 1_078_212_032,
+            "F8_E4M3": 1_905_738_240,
+            "U8": 15_245_905_920,
+        },
+        compute_precision_shares={"nvfp4": 0.82, "bf16": 0.18},
+        quantized=("latent-MoE experts NVFP4",),
+        retained=("routing-sensitive and attention tensors BF16",),
+    ),
+    _nvfp4_profile(
+        model_key="nem3no",
+        source_repo="nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4",
+        source_revision="dc5f0b0bfddf8b6e0f5891475be9af05b80126fe",
+        source_downloads=1_281_803,
+        storage_format_counts={
+            "F32": 7_916_416,
+            "BF16": 2_217_567_168,
+            "F8_E4M3": 3_251_232_768,
+            "U8": 14_687_404_032,
+        },
+        compute_precision_shares={"nvfp4": 0.76, "bf16": 0.24},
+        quantized=("language latent-MoE experts NVFP4",),
+        retained=("omni/multimodal towers BF16", "routing-sensitive and attention tensors BF16"),
+    ),
+    _nvfp4_profile(
+        model_key="glm5",
+        source_repo="nvidia/GLM-5-NVFP4",
+        source_revision="dc54ff55a7e9e71b85db953d8bc22eca894b44c6",
+        source_downloads=107_715,
+        storage_format_counts={
+            "BF16": 25_577_755_904,
+            "U8": 364_143_181_824,
+            "F8_E4M3": 45_517_897_728,
+            "F32": 19_456,
+        },
+        compute_precision_shares={"nvfp4": 0.84, "bf16": 0.16},
+        quantized=("GLM MoE expert tensors NVFP4",),
+        retained=("dense/routing-sensitive tensors BF16",),
+    ),
+    _nvfp4_profile(
+        model_key="glm51",
+        source_repo="nvidia/GLM-5-NVFP4",
+        source_revision="dc54ff55a7e9e71b85db953d8bc22eca894b44c6",
+        source_downloads=107_715,
+        source_kind="family",
+        storage_format_counts={
+            "BF16": 25_577_755_904,
+            "U8": 364_143_181_824,
+            "F8_E4M3": 45_517_897_728,
+            "F32": 19_456,
+        },
+        compute_precision_shares={"nvfp4": 0.84, "bf16": 0.16},
+        quantized=("GLM MoE expert tensors NVFP4 by family proxy",),
+        retained=("dense/routing-sensitive tensors BF16",),
+    ),
+])
+
+
+def get_quantization_profile(model_key: str, prec: str) -> QuantizationProfile | None:
+    return MODEL_QUANTIZATION_PROFILES.get((model_key, normalize_precision(prec)))
+
+
 # Capability overrides. Vision-enabled and reasoning-first models deviate from the default
 # (tools + ctx_128k). Kept conservative — annotate models with well-documented support.
-_VISION_MODELS = ("ge4", "g26", "g31", "ms24", "ms32", "mistral-medium-3.5-preview", "minimax25", "minimax27", "nem3no", "mimo-v2.5")
+_VISION_MODELS = (
+    "ge4", "g26", "g31",
+    "command-a-plus-05-2026",
+    "ms24", "ms32", "mistral-medium-3.5-preview",
+    "minimax25", "minimax27", "nem3no", "mimo-v2.5",
+)
 _REASONING_MODELS = (
     "q35", "q122", "q397",
     "glm45", "glm45a", "glm46", "glm47", "glm47f", "glm5", "glm51",
     "k25", "ds3", "deepseek-v4-pro", "deepseek-v4-flash",
+    "command-a-plus-05-2026",
     "mistral-medium-3.5-preview", "ml3",
     "minimax25", "minimax27",
     "nem3s", "nem3n", "nem3no",
@@ -920,6 +1589,12 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "ge4": (15.0, 7.9),
     "g26": (27.0, 14.0),
     "g31": (32.0, 7.1),
+    "rwkv7-g1d-01b": (7.0, 60.0),     # Low-confidence size proxy until AA publishes RWKV7-G1 rows.
+    "rwkv7-g1d-04b": (8.0, 70.0),
+    "rwkv7-g1f-15b": (11.0, 90.0),
+    "rwkv7-g1f-29b": (14.0, 105.0),
+    "rwkv7-g1g-72b": (19.0, 120.0),
+    "rwkv7-g1g-133b": (22.0, 130.0),
     "q08": (11.0, 230.0),
     "q2": (16.0, 390.0),
     "q4": (27.0, 240.0),
@@ -936,6 +1611,7 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "glm5": (50.0, 110.0),
     "glm51": (51.0, 110.0),
     "kimi-linear-48b": (37.0, 100.0),  # Proxy from Qwen 3.5 35B-A3B until AA publishes Kimi Linear.
+    "command-a-plus-05-2026": (37.0, 66.0),
     "minimax25": (42.0, 56.0),
     "minimax27": (50.0, 87.0),
     "nem3s": (36.0, 110.0),
@@ -975,6 +1651,12 @@ for _k, (_score, _verbosity_m) in AA_MODEL_METRICS.items():
 # are discounted by effective_quality(). This is intentionally conservative for models
 # whose public benchmark coverage is missing or weak.
 AA_MODEL_QUALITY_CONFIDENCE: dict[str, float] = {
+    "rwkv7-g1d-01b": 0.35,
+    "rwkv7-g1d-04b": 0.35,
+    "rwkv7-g1f-15b": 0.35,
+    "rwkv7-g1f-29b": 0.35,
+    "rwkv7-g1g-72b": 0.35,
+    "rwkv7-g1g-133b": 0.35,
     "kimi-linear-48b": 0.55,
     "nem3no": 0.65,
     "mx87": 0.70,

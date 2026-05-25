@@ -482,6 +482,54 @@ function renderChart(data) {
     });
     return;
   }
+
+  if (data.mode === 'realtime') {
+    chart.setOption({
+      ...baseOption(theme, paramsArr => {
+        if (!Array.isArray(paramsArr) || !paramsArr.length) return '';
+        const xVal = Number(paramsArr[0].axisValue ?? paramsArr[0].data?.value?.[0]);
+        let html = axisHeader(theme, 'Concurrent streams', fmtBatch(xVal));
+        [...paramsArr]
+          .sort((a, b) => (b.data?.raw?.y ?? -Infinity) - (a.data?.raw?.y ?? -Infinity))
+          .forEach(p => {
+            const raw = p.data?.raw;
+            const ok = raw?.y != null && Number(raw.y) >= 1;
+            const yStr = raw?.y != null ? `${Number(raw.y).toFixed(2)}× real-time` : 'OOM';
+            const detail = raw?.y != null
+              ? ` <span style="color:${theme.tc};font-size:10px;">max ${fmtBatch(Number(raw.max_users || 0))} users · ${Number(raw.per_user_tps || 0).toFixed(1)} tok/s/user · ${Number(raw.step_ms || 0).toFixed(1)}ms step</span>`
+              : '';
+            html += `<div style="display:flex;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
+              `<span style="display:inline-block;width:10px;height:2.5px;border-radius:2px;background:${p.color};flex-shrink:0;"></span>` +
+              `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px;color:${theme.text};">${p.seriesName}</span>` +
+              `<span style="margin-left:4px;text-align:right;font-weight:600;color:${raw?.y == null ? 'var(--red)' : (ok ? theme.text : 'var(--amber)')};">${yStr}${detail}</span>` +
+              `</div>`;
+          });
+        return html;
+      }, 'axis'),
+      xAxis: axisCommon(theme, 'Concurrent realtime users', v => fmtBatch(Number(v)), {
+        type: 'log',
+        min: 1,
+        max: data.x_max,
+        nameGap: 30,
+      }),
+      yAxis: axisCommon(theme, 'Real-time factor', v => v >= 10 ? v.toFixed(0) + '×' : v.toFixed(2) + '×', {
+        type: 'log',
+        min: 0.1,
+        nameGap: 54,
+      }),
+      series: datasets.map((ds, idx) => ({
+        ...makeSeries(ds, true),
+        markLine: idx === 0 ? {
+          silent: true,
+          symbol: 'none',
+          label: { color: theme.tc, formatter: '1× realtime' },
+          lineStyle: { color: theme.tc, width: 1, type: 'dashed', opacity: 0.55 },
+          data: [{ yAxis: 1 }],
+        } : undefined,
+      })),
+    });
+    return;
+  }
 }
 
 /* Internal-market hourly utilization charts (one ECharts instance per panel). */

@@ -36,6 +36,8 @@ from calc import (
     compute_decode,
     compute_memory,
     compute_prefill,
+    compute_realtime_capacity,
+    compute_realtime_max_users,
     default_strategy,
     effective_prefill_length,
     gpu_supports_mxfp4,
@@ -66,6 +68,7 @@ ALLOWED_PROJECT_KINDS = frozenset(p["key"] for p in PROJECT_PRESETS) | {"custom"
 VISIBLE_PLOT_MODES = (
     ("userpareto", "User Pareto"),
     ("processingpareto", "Processing Pareto"),
+    ("realtime", "Realtime ASR"),
 )
 DEFAULT_PLOT_MODE = VISIBLE_PLOT_MODES[0][0]
 ALLOWED_PLOT_MODES = frozenset(mode for mode, _ in VISIBLE_PLOT_MODES)
@@ -1482,6 +1485,8 @@ def add_model(state: PlannerState, model_key: str):
 
 
 def _model_serves_project(model: Model, project: Project) -> bool:
+    if getattr(model, "is_realtime_only", False):
+        return False
     return (
         project.requires <= model.capabilities
         and effective_quality(model) + 1e-9 >= float(getattr(project, "quality_floor", 0.0))
@@ -2039,9 +2044,24 @@ def _precision_alerts(prec: str, gpu: Optional[GPU]) -> list[str]:
     return []
 
 
+def _quantization_profile_alerts(model: Model, prec: str) -> list[str]:
+    profile = model.quantization_profile(prec)
+    if profile is None:
+        return []
+    if profile.source_kind == "family":
+        return [f"{profile.label} uses a family proxy from {profile.source_repo}; exact artifact tensor headers are not pinned yet."]
+    return []
+
+
 def _build_model_info(state: PlannerState, am: ModelAssignment, gpu_pool: Optional[GpuPool], prefill_mem, decode_mem) -> dict:
     model = MODELS[am.model_key]
     gpu = gpu_pool.gpu if gpu_pool else None
+    quant_profiles_by_precision = {
+        prec: profile
+        for prec in PRECISIONS
+        if (profile := model.quantization_profile(prec)) is not None
+    }
+    quant_profile = model.quantization_profile(am.prec)
 
     strats: list[tuple[int, int, int]] = []
     recommended_label = ""
@@ -2058,6 +2078,9 @@ def _build_model_info(state: PlannerState, am: ModelAssignment, gpu_pool: Option
     avg_in = avg_dist(state.in_dist, INPUT_BUCKETS)
     avg_out = avg_dist(state.out_dist, OUTPUT_BUCKETS)
     avg_seq = avg_in + avg_out / 2.0
+    realtime_profile = getattr(model, "realtime_profile", None)
+    if realtime_profile is not None:
+        avg_seq = float(realtime_profile.state_tokens)
 
     decode_max_slots = 0
     if decode_mem and avg_seq > 0:
@@ -2111,6 +2134,33 @@ def _build_model_info(state: PlannerState, am: ModelAssignment, gpu_pool: Option
     mem = decode_mem
     prefill_kv_gb = f"{prefill_mem.kv_budget / 1e9:.0f}" if prefill_mem else "0"
     decode_kv_gb = f"{decode_mem.kv_budget / 1e9:.0f}" if decode_mem else "0"
+    realtime = None
+    if realtime_profile is not None and gpu and am.gpu_count > 0 and decode_mem is not None:
+        max_realtime_users = compute_realtime_max_users(
+            model,
+            (am.tp, am.pp, am.dp),
+            gpu,
+            state.mu,
+            state.profiled_non_kv_gb,
+            am.prec,
+            state.decode_efficiency,
+        )
+        sample_users = max(max_realtime_users, 1)
+        sample = compute_realtime_capacity(
+            model,
+            (am.tp, am.pp, am.dp),
+            sample_users,
+            gpu,
+            state.mu,
+            state.profiled_non_kv_gb,
+            am.prec,
+            state.decode_efficiency,
+        )
+        realtime = {
+            "profile": realtime_profile,
+            "max_users": max_realtime_users,
+            "sample": sample,
+        }
 
     return {
         "am": am,
@@ -2133,6 +2183,9 @@ def _build_model_info(state: PlannerState, am: ModelAssignment, gpu_pool: Option
         "prefill_probe_len": prefill_probe_len,
         "max_avail": max_avail,
         "weight_bpp": model.weight_bytes_per_param(am.prec),
+        "quant_profiles_by_precision": quant_profiles_by_precision,
+        "quant_profile": quant_profile,
+        "realtime": realtime,
         "mixed_weight_precision": model.uses_mixed_weight_precision(am.prec),
         "fits": mem is not None,
         "decode_fits": decode_mem is not None,
@@ -2147,7 +2200,7 @@ def _build_model_info(state: PlannerState, am: ModelAssignment, gpu_pool: Option
         "alt_min_gpu_count": alt_min_gpu_count,
         "alt_pool_min_gpu_count": alt_pool_min_gpu_count,
         "comm_summary": _comm_summary(am.tp, am.pp),
-        "precision_alerts": _precision_alerts(am.prec, gpu),
+        "precision_alerts": _precision_alerts(am.prec, gpu) + _quantization_profile_alerts(model, am.prec),
         "alerts": _comm_alerts(model, am.tp, am.pp, am.dp, gpu, avg_seq, state.decode_efficiency),
         "prefill_comm_summary": _comm_summary(am.prefill_tp, am.prefill_pp),
         "decode_comm_summary": _comm_summary(am.tp, am.pp),

@@ -21,7 +21,6 @@ from data import (
     TASK_PRESETS,
     DAY_SHAPES,
     DEFAULT_COUNTRY,
-    kv_cache_bytes_per_elem,
     normalize_precision,
     carbon_intensity_avg,
     corpo_cloud_models,
@@ -43,12 +42,26 @@ USER_EXP_SWEEP = [
     1, 2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024,
 ]
 USER_EXP_FRACTIONS = [0.50, 0.75, 0.90, 0.95]
+REALTIME_USER_SWEEP = [
+    1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192, 12288, 16384,
+]
+MAX_REALTIME_USERS = 262_144
 UNBOUNDED_BATCH = 1_000_000_000
 LONG_CTX_DCP_SEQ = 32768
 BATCH_AXIS_HEADROOM = 0.12
 PROCESSING_PARETO_COLORS = ["#3266ad", "#1D9E75", "#BA7517", "#7F77DD", "#D85A30", "#A32D2D"]
 NIGHT_HOURS = frozenset({22, 23, 0, 1, 2, 3, 4, 5})
-NVIDIA_FP4_GPU_KEYS = frozenset({"RTXPRO6000_BSE", "DGX_SPARK", "GB200", "B200", "B300", "JETSON_AGX_THOR"})
+NVIDIA_FP4_GPU_KEYS = frozenset({
+    "RTXPRO6000_BSE",
+    "RTXPRO6000_BW_WS",
+    "RTXPRO5000_BW_72",
+    "RTX5090",
+    "DGX_SPARK",
+    "GB200",
+    "B200",
+    "B300",
+    "JETSON_AGX_THOR",
+})
 MXFP4_GPU_KEYS = NVIDIA_FP4_GPU_KEYS | frozenset({"MI350X", "MI355X", "MI400"})
 
 
@@ -108,6 +121,17 @@ class UserExperienceResult:
 
 
 @dataclass
+class RealtimeCapacityResult:
+    users: int
+    realtime_factor: float
+    per_user_tps: float
+    total_tps: int
+    step_ms: float
+    max_slots: int
+    required_tps: float
+
+
+@dataclass
 class DeploymentPeakResult:
     tps: int
     rps: float
@@ -147,7 +171,7 @@ def strategy_label(tp: int, pp: int, dp: int) -> str:
 
 
 def kv_bytes_per_token(m: Model, prec: str) -> float:
-    bpe = kv_cache_bytes_per_elem(prec)
+    bpe = m.kv_cache_bytes_per_elem(prec)
     kv_layers = m.kv_layer_count
     if m.is_mla:
         return kv_layers * (m.mla_kv_dim + m.mla_rope_dim) * 2 * bpe
@@ -166,7 +190,7 @@ def _local_context_tokens(m: Model, seq_len: float) -> float:
 
 
 def _kv_bytes_per_layer(m: Model, prec: str) -> float:
-    bpe = kv_cache_bytes_per_elem(prec)
+    bpe = m.kv_cache_bytes_per_elem(prec)
     if m.is_mla:
         return (m.mla_kv_dim + m.mla_rope_dim) * 2 * bpe
     return 2 * m.kv_heads * m.head_dim * bpe
@@ -177,7 +201,7 @@ def linear_attention_state_bytes(m: Model, prec: str) -> float:
     if layers <= 0:
         return 0.0
 
-    bpe = kv_cache_bytes_per_elem(prec)
+    bpe = m.kv_cache_bytes_per_elem(prec)
     heads = m.linear_attention_head_count
     head_dim = m.linear_attention_head_size
     k_heads = m.linear_attention_k_head_count
@@ -256,6 +280,20 @@ def gpu_flops(g: GPU, prec: str) -> float:
     # matmul path usually pays dequant/packing overhead and cannot claim FP4 peak.
     fallback = g.fp8 if g.fp8 > 0 else g.bf16
     return fallback * (0.75 if prec == "mxfp4" else 0.65)
+
+
+def model_gpu_flops(g: GPU, m: Model, prec: str) -> float:
+    profile = m.quantization_profile(prec)
+    if profile is None or not profile.compute_precision_shares:
+        return gpu_flops(g, prec)
+
+    denom = 0.0
+    for profile_prec, share in profile.compute_precision_shares.items():
+        share = max(float(share), 0.0)
+        if share <= 0:
+            continue
+        denom += share / max(gpu_flops(g, profile_prec), 1e-9)
+    return (1.0 / denom) if denom > 0 else gpu_flops(g, prec)
 
 
 def normalize_dist(dist: list[int]) -> list[float]:
@@ -549,7 +587,7 @@ def _decode_step_time(
 
     wf = 2 * m.active_params * pr / pp
     af = _decode_attention_work(m, pr, avg_seq, pp)
-    ct = (wf + af) / (gpu_flops(g, prec) * tp * eff.comp_eff)
+    ct = (wf + af) / (model_gpu_flops(g, m, prec) * tp * eff.comp_eff)
 
     comm = communication_breakdown(m, tp, pp, pr, avg_seq, g, eff)
     step = (max(bt, ct) + comm.total) * (1 + eff.overhead + paged_oh)
@@ -671,7 +709,7 @@ def compute_prefill(
     ffn = 2 * m.active_params * pr * seq_len / pp
     att = _prefill_attention_work(m, pr, seq_len, pp)
     tf = ffn + att
-    ct = tf / (gpu_flops(g, prec) * tp * eff.comp_eff)
+    ct = tf / (model_gpu_flops(g, m, prec) * tp * eff.comp_eff)
 
     aw = _active_weight_bytes(m, prec)
     mt = (aw / (tp * pp)) / (g.effective_bw * eff.bw_eff)
@@ -875,6 +913,92 @@ def compute_user_experience(
     )
 
 
+def compute_realtime_capacity(
+    m: Model,
+    decode_strat: tuple[int, int, int],
+    users: int,
+    g: GPU,
+    mu: float,
+    profiled_non_kv_gb: float,
+    prec: str,
+    eff: EfficiencyParams,
+) -> Optional[RealtimeCapacityResult]:
+    profile = getattr(m, "realtime_profile", None)
+    if profile is None or users <= 0:
+        return None
+
+    tp, pp, dp = decode_strat
+    state_tokens = max(float(profile.state_tokens), 1.0)
+    result = _compute_decode_core(
+        m,
+        tp,
+        pp,
+        users,
+        dp,
+        g,
+        mu,
+        profiled_non_kv_gb,
+        prec,
+        state_tokens,
+        0.0,
+        eff,
+        paged_oh=fixed_paged_oh(state_tokens, eff, 0.5),
+    )
+    if result is None:
+        return None
+
+    required_tps = max(float(profile.tokens_per_second), 1e-9)
+    per_user_tps = result.tps / max(float(users), 1.0)
+    realtime_factor = per_user_tps / required_tps
+    return RealtimeCapacityResult(
+        users=users,
+        realtime_factor=round(realtime_factor * 1000) / 1000,
+        per_user_tps=round(per_user_tps * 100) / 100,
+        total_tps=result.tps,
+        step_ms=result.step_ms,
+        max_slots=result.max_slots,
+        required_tps=required_tps,
+    )
+
+
+def compute_realtime_max_users(
+    m: Model,
+    decode_strat: tuple[int, int, int],
+    g: GPU,
+    mu: float,
+    profiled_non_kv_gb: float,
+    prec: str,
+    eff: EfficiencyParams,
+) -> int:
+    if getattr(m, "realtime_profile", None) is None:
+        return 0
+
+    best = 0
+    high = 1
+    while high <= MAX_REALTIME_USERS:
+        result = compute_realtime_capacity(m, decode_strat, high, g, mu, profiled_non_kv_gb, prec, eff)
+        if result is not None and result.realtime_factor >= 1.0:
+            best = high
+            high *= 2
+            continue
+        break
+
+    if high > MAX_REALTIME_USERS:
+        return MAX_REALTIME_USERS
+
+    lo = best + 1
+    hi = max(best, high - 1)
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        result = compute_realtime_capacity(m, decode_strat, mid, g, mu, profiled_non_kv_gb, prec, eff)
+        if result is not None and result.realtime_factor >= 1.0:
+            best = mid
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return best
+
+
 def _label(am, model: Model, panel_suffix: str = "", include_prefill: bool = False) -> str:
     decode_label = strategy_label(am.tp, am.pp, am.dp)
     if include_prefill:
@@ -940,6 +1064,34 @@ def get_decode_bs(states: Optional[list] = None) -> list[int]:
                 )
             )
     return _batch_axis_sweep(capacities, BATCH_SIZES)
+
+
+def get_realtime_bs(states: Optional[list] = None) -> list[int]:
+    if not states:
+        return list(REALTIME_USER_SWEEP)
+
+    from state import get_deployed
+
+    capacities = []
+    for state in states:
+        for am in get_deployed(state, phase="decode"):
+            if getattr(am.model, "realtime_profile", None) is None:
+                continue
+            gpu = am.gpu_spec
+            if gpu is None:
+                continue
+            capacities.append(
+                compute_realtime_max_users(
+                    am.model,
+                    (am.tp, am.pp, am.dp),
+                    gpu,
+                    state.mu,
+                    state.profiled_non_kv_gb,
+                    am.prec,
+                    state.decode_efficiency,
+                )
+            )
+    return _batch_axis_sweep(capacities, REALTIME_USER_SWEEP)
 
 
 def get_data_bs(states: Optional[list] = None) -> list[int]:
@@ -1476,6 +1628,78 @@ def chart_user_experience(state, panel_suffix: str = "") -> list[dict]:
     return datasets
 
 
+def chart_realtime_capacity(state, batch_sizes: Optional[list[int]] = None, panel_suffix: str = "") -> list[dict]:
+    datasets = []
+    is_b = panel_suffix != ""
+    batch_sizes = batch_sizes or REALTIME_USER_SWEEP
+
+    for am, gpu in _iter_resolved_models(state):
+        model = am.model
+        profile = getattr(model, "realtime_profile", None)
+        if profile is None:
+            continue
+
+        max_users = compute_realtime_max_users(
+            model,
+            (am.tp, am.pp, am.dp),
+            gpu,
+            state.mu,
+            state.profiled_non_kv_gb,
+            am.prec,
+            state.decode_efficiency,
+        )
+        pts = []
+        for users in batch_sizes:
+            result = compute_realtime_capacity(
+                model,
+                (am.tp, am.pp, am.dp),
+                users,
+                gpu,
+                state.mu,
+                state.profiled_non_kv_gb,
+                am.prec,
+                state.decode_efficiency,
+            )
+            if result is None:
+                pts.append({
+                    "x": users,
+                    "y": None,
+                    "users": users,
+                    "max_users": max_users,
+                    "required_tps": profile.tokens_per_second,
+                    "target_delay_ms": profile.target_delay_ms,
+                })
+                continue
+
+            pts.append({
+                "x": users,
+                "y": result.realtime_factor,
+                "users": users,
+                "max_users": max_users,
+                "per_user_tps": result.per_user_tps,
+                "required_tps": result.required_tps,
+                "total_tps": result.total_tps,
+                "step_ms": result.step_ms,
+                "max_slots": result.max_slots,
+                "target_delay_ms": profile.target_delay_ms,
+            })
+        if pts:
+            datasets.append({
+                "label": _label(am, model, panel_suffix),
+                "data": pts,
+                "borderColor": model.color,
+                "backgroundColor": model.color + "12",
+                "borderWidth": 1.5 if is_b else 2,
+                "borderDash": [5, 3] if is_b else [],
+                "fill": False,
+                "tension": 0.3,
+                "pointRadius": 2.5,
+                "spanGaps": False,
+                "_isRealtime": True,
+            })
+    return datasets
+
+
 def compute_stats_data(state) -> dict:
     il, ol = state.task_il, state.task_ol
     batch_sizes = get_data_bs([state])
@@ -1778,6 +2002,8 @@ def _build_model_supply(state, profile, prefix_hit_rate, peak_factor_eff) -> lis
     task_ol = int(getattr(state, "task_ol", profile["out_len"]))
     supply = []
     for am, gpu in _iter_resolved_models(state):
+        if getattr(am.model, "is_realtime_only", False):
+            continue
         cap = compute_data_capacity(
             am.model,
             (am.prefill_tp, am.prefill_pp, am.prefill_dp),
