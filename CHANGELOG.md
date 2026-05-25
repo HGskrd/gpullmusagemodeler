@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2026-05-25
+
+### Added
+
+- Added Docker and Docker Compose deployment support for running the planner on `0.0.0.0:5014` with persistent instance storage.
+- Added environment-based host, port, debug, secret-key, and admin-password configuration examples.
+
+### Changed
+
+- Updated setup documentation to use the `HGskrd/gpullmusagemodeler` repository URL and document both Docker and non-Docker launch paths.
+- Updated the Flask entrypoint to read host, port, and debug settings from environment variables.
+
 ## 2026-05-22
 
 ### Added

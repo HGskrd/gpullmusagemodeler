@@ -1495,5 +1495,15 @@ def log2int(n):
     return int(math.log2(n)) if n > 0 else 0
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 if __name__ == "__main__":
-    app.run(debug=True, port=5014)
+    host = os.environ.get("HOST") or os.environ.get("FLASK_RUN_HOST") or "0.0.0.0"
+    port = int(os.environ.get("PORT") or os.environ.get("FLASK_RUN_PORT") or "5014")
+    debug = _env_bool("FLASK_DEBUG", _env_bool("DEBUG", False))
+    app.run(host=host, port=port, debug=debug)

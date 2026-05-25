@@ -1,0 +1,17 @@
+services:
+  planner:
+    build: .
+    image: gpullmusagemodeler:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      HOST: ${HOST:-0.0.0.0}
+      PORT: ${PORT:-5014}
+    ports:
+      - "${PORT:-5014}:${PORT:-5014}"
+    volumes:
+      - planner-instance:/app/instance
+
+volumes:
+  planner-instance:
