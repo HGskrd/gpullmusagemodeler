@@ -1,8 +1,9 @@
 {# Single model card #}
-<div class="card" style="position:relative;">
+<div class="card" style="position:relative;" data-fast-card>
   <button class="ghost sm" style="position:absolute;top:3px;right:3px;color:var(--red);padding:1px 4px;"
           hx-post="{{ '/model/auto-exclude' if state.auto_mode else '/model/remove' }}"
           hx-target="#main-content"
+          data-fast-remove
           hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}'>✕</button>
 
   <div style="display:flex;align-items:center;gap:4px;margin-bottom:4px;">

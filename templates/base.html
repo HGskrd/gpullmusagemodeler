@@ -57,6 +57,10 @@
 let chart = null;
 let lastChartData = null;
 const colorSchemeQuery = matchMedia('(prefers-color-scheme:dark)');
+const FAST_HTMX_MS = 10;
+if (window.htmx) {
+  htmx.config.defaultSettleDelay = FAST_HTMX_MS;
+}
 
 /* Keep page scroll stable across HTMX swaps of #main-content.
  * Without this, replacing the whole config section re-anchors the scroll
@@ -336,6 +340,26 @@ function showToast(message) {
   toast.hidden = false;
   clearTimeout(showToast._timer);
   showToast._timer = setTimeout(() => { toast.hidden = true; }, 3200);
+}
+
+function markFastRemove(source) {
+  const trigger = source?.closest?.('[data-fast-remove]');
+  const card = trigger?.closest?.('[data-fast-card]');
+  if (!card) return;
+  card.dataset.fastRemoving = 'true';
+  card.dataset.fastDisplay = card.style.display || '';
+  card.style.display = 'none';
+  card.style.pointerEvents = 'none';
+}
+
+function restoreFastRemove(source) {
+  const trigger = source?.closest?.('[data-fast-remove]');
+  const card = trigger?.closest?.('[data-fast-card]');
+  if (!card || card.dataset.fastRemoving !== 'true') return;
+  delete card.dataset.fastRemoving;
+  card.style.display = card.dataset.fastDisplay || '';
+  delete card.dataset.fastDisplay;
+  card.style.pointerEvents = '';
 }
 
 function applyOobSwaps(fragment) {
@@ -918,6 +942,12 @@ document.body.addEventListener('htmx:configRequest', e => {
   e.detail.headers['X-Tab-ID'] = currentTabId();
 });
 
+document.body.addEventListener('htmx:beforeRequest', e => {
+  const source = e.detail.elt;
+  if (source?.closest?.('.picker')) closePicker();
+  markFastRemove(source);
+});
+
 document.body.addEventListener('htmx:beforeSwap', e => {
   if (e.detail.target && e.detail.target.id === 'main-content') {
     rememberScroll();
@@ -934,12 +964,21 @@ document.body.addEventListener('htmx:afterSwap', e => {
 });
 
 document.body.addEventListener('htmx:responseError', e => {
+  restoreFastRemove(e.detail.elt);
   let message = `Request failed (${e.detail.xhr.status})`;
   try {
     const data = JSON.parse(e.detail.xhr.responseText);
     if (data && data.error) message = data.error;
   } catch {}
   showToast(message);
+});
+
+document.body.addEventListener('htmx:sendError', e => {
+  restoreFastRemove(e.detail.elt);
+});
+
+document.body.addEventListener('htmx:timeout', e => {
+  restoreFastRemove(e.detail.elt);
 });
 
 function onColorSchemeChange() {

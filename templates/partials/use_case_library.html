@@ -23,10 +23,11 @@
   {% set scale_kind = preset.scale_kind %}
   {% set scale_max = [scale_kind.max, preset.scale_value]|max %}
   {% set scale_dec = scale_decimals(scale_kind) %}
-  <section class="panel def-card" id="{{ key }}">
+  <section class="panel def-card" id="{{ key }}" data-fast-card>
     <button class="ghost sm" style="position:absolute;top:7px;right:7px;color:var(--red);padding:1px 5px;"
             hx-post="/use-cases/definition/remove"
             hx-target="#useCaseLibrary"
+            data-fast-remove
             hx-vals='{"key":"{{ key }}"}'>x</button>
 
     <div class="usecase-head" style="padding-right:24px;">

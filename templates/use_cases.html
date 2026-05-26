@@ -164,6 +164,10 @@
 
 <script>
 const TAB_STORAGE_KEY = 'planner_tab_id';
+const FAST_HTMX_MS = 10;
+if (window.htmx) {
+  htmx.config.defaultSettleDelay = FAST_HTMX_MS;
+}
 
 function currentTabId() {
   try { return window.sessionStorage.getItem(TAB_STORAGE_KEY) || 'default'; }
@@ -231,6 +235,26 @@ function replaceLibrary(html) {
   bindLiveSliders(target);
 }
 
+function markFastRemove(source) {
+  const trigger = source?.closest?.('[data-fast-remove]');
+  const card = trigger?.closest?.('[data-fast-card]');
+  if (!card) return;
+  card.dataset.fastRemoving = 'true';
+  card.dataset.fastDisplay = card.style.display || '';
+  card.style.display = 'none';
+  card.style.pointerEvents = 'none';
+}
+
+function restoreFastRemove(source) {
+  const trigger = source?.closest?.('[data-fast-remove]');
+  const card = trigger?.closest?.('[data-fast-card]');
+  if (!card || card.dataset.fastRemoving !== 'true') return;
+  delete card.dataset.fastRemoving;
+  card.style.display = card.dataset.fastDisplay || '';
+  delete card.dataset.fastDisplay;
+  card.style.pointerEvents = '';
+}
+
 function exportUseCaseLibrary() {
   fetch('/use-cases/export', { headers: requestHeaders() })
     .then(async r => {
@@ -269,17 +293,30 @@ document.body.addEventListener('htmx:configRequest', e => {
   e.detail.headers['X-Tab-ID'] = currentTabId();
 });
 
+document.body.addEventListener('htmx:beforeRequest', e => {
+  markFastRemove(e.detail.elt);
+});
+
 document.body.addEventListener('htmx:afterSwap', e => {
   bindLiveSliders(e.detail.target || document);
 });
 
 document.body.addEventListener('htmx:responseError', e => {
+  restoreFastRemove(e.detail.elt);
   let message = `Request failed (${e.detail.xhr.status})`;
   try {
     const data = JSON.parse(e.detail.xhr.responseText);
     if (data && data.error) message = data.error;
   } catch {}
   showToast(message);
+});
+
+document.body.addEventListener('htmx:sendError', e => {
+  restoreFastRemove(e.detail.elt);
+});
+
+document.body.addEventListener('htmx:timeout', e => {
+  restoreFastRemove(e.detail.elt);
 });
 
 document.addEventListener('DOMContentLoaded', () => {

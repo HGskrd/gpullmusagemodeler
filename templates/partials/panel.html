@@ -20,7 +20,7 @@
         <input type="number" min="0" step="1" name="count" value="{{ gp.count }}"
                aria-label="GPU count for {{ GPUS[gp.gpu_type].name }}"
                hx-post="/gpu/qty" hx-target="#main-content"
-               hx-trigger="input changed delay:150ms, keyup[key=='Enter']"
+               hx-trigger="input changed delay:10ms, keyup[key=='Enter']"
                hx-vals='{"panel":"{{ panel }}","uid":"{{ gp.uid }}"}' />
         <button type="button" hx-post="/gpu/qty" hx-target="#main-content" hx-vals='{"panel":"{{ panel }}","uid":"{{ gp.uid }}","delta":"1"}'>+</button>
       </div>
@@ -31,7 +31,7 @@
       <input type="number" min="0" max="100" step="0.01" name="value"
              style="width:72px;font-size:11px;"
              value="{{ "%.2f"|format(gp.cost_per_gpu_hour) }}"
-             hx-post="/gpu/cost" hx-target="#main-content" hx-trigger="input changed delay:250ms, keyup[key=='Enter']"
+             hx-post="/gpu/cost" hx-target="#main-content" hx-trigger="input changed delay:10ms, keyup[key=='Enter']"
              hx-vals='{"panel":"{{ panel }}","uid":"{{ gp.uid }}"}' />
       {% if gp.cost_per_gpu_hour > 0 %}
       <span class="T" style="font-family:var(--mono);">{{ "%.0f"|format(gp.pool_cost_day) }}/day for {{ gp.count }} GPUs</span>

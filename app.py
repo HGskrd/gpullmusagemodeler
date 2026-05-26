@@ -816,7 +816,11 @@ def gpu_qty():
         else:
             delta = int(request.form.get("delta"))
             change_gpu_qty(s, uid, delta)
-        return _tracked_htmx_response("gpu_qty", s)
+        # GPU count edits can fire repeatedly while a user types or steps the
+        # control. Snapshot persistence rewrites the full admin JSON log and is
+        # much slower than the recalculation itself, so keep this hot path
+        # untracked.
+        return _htmx_response(s)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -843,7 +847,8 @@ def gpu_cost():
         uid = int(request.form.get("uid"))
         cost = float(request.form.get("value", 0))
         set_gpu_cost(s, uid, cost)
-        return _tracked_htmx_response("gpu_cost", s)
+        # Like GPU quantity, cost edits are high-frequency numeric updates.
+        return _htmx_response(s)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

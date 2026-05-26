@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2026-05-26
+
+### Changed
+
+- Reduced HTMX interaction delays for calculator controls and use-case library edits.
+- Made add/remove interactions feel immediate by closing pickers and hiding removed cards while requests are in flight.
+- Skipped admin snapshot persistence for high-frequency GPU quantity and cost edits, reducing GPU count update latency from roughly 800 ms to single-digit milliseconds locally.
+
 ## 2026-05-25
 
 ### Added
