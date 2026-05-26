@@ -78,14 +78,16 @@
 
   <div class="flex" style="margin-bottom:3px;gap:2px;">
     <span class="T" style="min-width:28px;">GPUs</span>
-    {% set limit = [info.max_avail, 16]|min %}
-    {% for i in range(0, limit + 1) %}
-      {% if i <= 8 or i % 2 == 0 or i == limit %}
+    {% for i in info.gpu_count_options %}
       <button class="sm" style="min-width:20px;padding:2px 3px;{{ 'background:var(--fg0);color:var(--bg0);border-color:var(--fg0);' if i == am.gpu_count else '' }}"
               hx-post="/model/count" hx-target="#main-content"
               hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}","count":"{{ i }}"}'>{{ i }}</button>
-      {% endif %}
     {% endfor %}
+    <input class="sm" type="number" min="0" max="{{ info.max_avail }}" step="1" value="{{ am.gpu_count }}"
+           style="width:54px;min-width:54px;padding:2px 4px;"
+           title="Assigned GPUs"
+           hx-post="/model/count" hx-target="#main-content" hx-trigger="change"
+           hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}' name="count" />
   </div>
 
   {% if am.gpu_count > 0 and info.strats|length > 0 %}

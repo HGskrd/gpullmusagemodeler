@@ -399,6 +399,26 @@ def _best_precision_need(needs: dict[str, float]) -> tuple[Optional[str], float]
     return min(finite, key=lambda item: (item[1], PRECISIONS.index(item[0])))
 
 
+def _gpu_count_options(max_avail: int, current_count: int, gpu: Optional[GPU]) -> list[int]:
+    max_count = max(0, int(max_avail or 0))
+    current = min(max(0, int(current_count or 0)), max_count)
+    options = {0, current, max_count}
+
+    options.update(range(1, min(max_count, 8) + 1))
+    options.update(range(10, min(max_count, 16) + 1, 2))
+
+    for count in (24, 32, 48, 64, 96, 128, 192, 256):
+        if count <= max_count:
+            options.add(count)
+
+    if gpu is not None:
+        node_size = max(int(getattr(gpu, "node_size", 1) or 1), 1)
+        for count in range(node_size, max_count + 1, node_size):
+            options.add(count)
+
+    return sorted(count for count in options if 0 <= count <= max_count)
+
+
 def _probe_batch_sizes(dp: int) -> list[int]:
     values = {max(1, dp)}
     while max(values) < 128:
@@ -2184,6 +2204,7 @@ def _build_model_info(state: PlannerState, am: ModelAssignment, gpu_pool: Option
         "prefill_max_batch": prefill_max_batch,
         "prefill_probe_len": prefill_probe_len,
         "max_avail": max_avail,
+        "gpu_count_options": _gpu_count_options(max_avail, am.gpu_count, gpu),
         "weight_bpp": model.weight_bytes_per_param(am.prec),
         "quant_profiles_by_precision": quant_profiles_by_precision,
         "quant_profile": quant_profile,

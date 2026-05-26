@@ -1,7 +1,7 @@
 import unittest
 
 from data import GPU_CARDS, GPUS
-from state import PlannerState, add_gpu, change_gpu_qty
+from state import PlannerState, add_gpu, add_model, change_gpu_qty, get_model_info, set_model_gpu_count
 
 
 class GPUCatalogTests(unittest.TestCase):
@@ -117,6 +117,19 @@ class GPUCatalogTests(unittest.TestCase):
 
         add_gpu(state, "B300", 1)
         self.assertEqual(state.gpus[0].count, 8)
+
+    def test_model_gpu_count_options_reach_full_nvl72_pool(self):
+        state = PlannerState()
+
+        add_gpu(state, "GB300", 8)
+        add_model(state, "q27")
+
+        info = get_model_info(state, state.models[0])
+        self.assertIn(72, info["gpu_count_options"])
+
+        set_model_gpu_count(state, state.models[0].uid, 72)
+        self.assertEqual(state.models[0].gpu_count, 72)
+        self.assertIn(72, get_model_info(state, state.models[0])["gpu_count_options"])
 
 
 if __name__ == "__main__":
