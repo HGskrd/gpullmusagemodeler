@@ -12,12 +12,18 @@
   <div class="cat">{{ vendor }}</div>
   {% for card in cards %}
     {% set opt = card.planner_options[0] if card.planner_options else none %}
+    {% set gpu = GPUS[opt.gpu_key] if opt else none %}
     <div class="item{% if not opt %} reference-only{% endif %}"
-         {% if opt %}onclick="addGpuFromPicker('{{ panel }}', '{{ opt.gpu_key }}')"
+         {% if opt %}onclick="addGpuFromPicker('{{ panel }}', '{{ opt.gpu_key }}', this)"
+         data-min-count="{{ gpu.min_count }}"
+         data-count-multiple="{{ gpu.count_multiple }}"
          {% else %}style="cursor:default;opacity:0.5;"{% endif %}
          title="{{ card.use_case }}{% if card.note %} · {{ card.note }}{% endif %}">
       <span>{{ card.name }}</span>
       <span class="T">{{ card.vram }} · {{ card.architecture }}</span>
+      {% if gpu and (gpu.min_count > 1 or gpu.count_multiple > 1) %}
+      <span class="T">Pool sizes snap to {% if gpu.min_count == gpu.count_multiple %}{{ gpu.count_multiple }}-GPU sets{% else %}min {{ gpu.min_count }}, multiple {{ gpu.count_multiple }}{% endif %}</span>
+      {% endif %}
     </div>
   {% endfor %}
 {% endfor %}

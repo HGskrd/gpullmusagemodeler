@@ -1409,7 +1409,7 @@ def projection_report():
 
 @app.route("/picker/gpu")
 def picker_gpu():
-    return render_template("partials/gpu_picker.html", panel=request.args.get("panel", "A"), gpu_cards_by_vendor=gpu_cards_by_vendor())
+    return render_template("partials/gpu_picker.html", panel=request.args.get("panel", "A"), gpu_cards_by_vendor=gpu_cards_by_vendor(), GPUS=GPUS)
 
 
 @app.route("/picker/model")

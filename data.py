@@ -185,6 +185,8 @@ class GPU:
     planner_bw: float | None = None  # bytes/s, optional sustained bandwidth proxy used by planner math
     fp4: float | None = None  # FLOP/s for native dense FP4/MXFP4/NVFP4 tensor paths, when available
     tdp_watts: float = 0.0  # published board TDP — used with a utilization factor for CO2 math
+    min_count: int = 1  # minimum pool size when this profile is only sold as a system/rack
+    count_multiple: int = 1  # pool sizes snap to this multiple for system/rack-only profiles
 
     @property
     def mem_gb(self) -> float:
@@ -234,6 +236,12 @@ class RealtimeProfile:
     state_tokens: int
     source: str
     note: str
+    audio_encoder_params: float = 0.0
+    audio_tokens_per_step: int = 1
+    audio_attention_layers: int = 0
+    audio_attention_heads: int = 0
+    audio_attention_head_dim: int = 0
+    audio_attention_window: int = 0
 
 
 # Capability flags. Projects can require one or more; models must supply them to be eligible.
@@ -462,9 +470,11 @@ GPUS: dict[str, GPU] = {
     "RTX4090": GPU("RTX4090", "GeForce RTX 4090 24GB", "nv", 24e9, 1.008e12, 330.25e12, 660.5e12, 64e9, 1),
     "RTX3090": GPU("RTX3090", "GeForce RTX 3090 24GB", "nv", 24e9, 936e9, 142e12, 142e12, 64e9, 1),
     "DGX_SPARK": GPU("DGX_SPARK", "DGX Spark GB10 128GB", "nv", 128e9, 273e9, 125e12, 250e12, 25e9, 1),
-    "GB200": GPU("GB200", "GB200 Grace Blackwell 186GB/GPU", "nv", 186e9, 8e12, 2.5e15, 5e15, 3.6e12, 72),
-    "B200": GPU("B200", "B200 180GB SXM", "nv", 180e9, 8e12, 2.25e15, 4.5e15, 1.8e12, 8),
-    "B300": GPU("B300", "B300 Blackwell Ultra 288GB SXM", "nv", 288e9, 8e12, 2.25e15, 4.5e15, 1.8e12, 8),
+    "GB200": GPU("GB200", "GB200 NVL72 Grace Blackwell 186GB/GPU", "nv", 186e9, 8e12, 2.5e15, 5e15, 3.6e12, 72, min_count=72, count_multiple=72),
+    "B200": GPU("B200", "B200 180GB HGX/DGX", "nv", 180e9, 8e12, 2.25e15, 4.5e15, 1.8e12, 8, min_count=8, count_multiple=8),
+    "B300": GPU("B300", "B300 Blackwell Ultra 288GB HGX/DGX", "nv", 288e9, 8e12, 2.5e15, 5e15, 1.8e12, 8, min_count=8, count_multiple=8),
+    "GB300": GPU("GB300", "GB300 NVL72 Blackwell Ultra 288GB/GPU", "nv", 288e9, 8e12, 2.5e15, 5e15, 3.6e12, 72, min_count=72, count_multiple=72),
+    "DGX_STATION_GB300": GPU("DGX_STATION_GB300", "DGX Station GB300 Blackwell Ultra 252GB", "nv", 252e9, 7.1e12, 2.5e15, 5e15, 100e9, 2),
     "A40": GPU("A40", "A40 48GB", "nv", 48e9, 696e9, 149.7e12, 149.7e12, 112.5e9, 2),
     "A30": GPU("A30", "A30 24GB", "nv", 24e9, 933e9, 165e12, 165e12, 200e9, 2),
     "A6000": GPU("A6000", "RTX A6000 48GB", "nv", 48e9, 768e9, 154.85e12, 154.85e12, 112.5e9, 2),
@@ -508,6 +518,8 @@ GPU_FP4_FLOPS = {
     "GB200": 10e15,
     "B200": 9e15,
     "B300": 15e15,
+    "GB300": 15e15,
+    "DGX_STATION_GB300": 15e15,
     "JETSON_AGX_THOR": 1035e12,
     "MI350X": 9.2e15,
     "MI355X": 10.1e15,
@@ -522,7 +534,8 @@ for _k, _fp4 in GPU_FP4_FLOPS.items():
 GPU_TDP_WATTS = {
     "A100": 400, "A100_40": 250, "A10": 150, "H100": 700, "H200": 700, "L40S": 350, "L4": 72,
     "RTXPRO6000_BSE": 600, "RTXPRO6000_BW_WS": 600, "RTXPRO5000_BW_72": 300, "RTX6000_ADA": 300,
-    "RTX5090": 575, "RTX4090": 450, "RTX3090": 350, "DGX_SPARK": 140, "GB200": 1200, "B200": 1000, "B300": 1200,
+    "RTX5090": 575, "RTX4090": 450, "RTX3090": 350, "DGX_SPARK": 140, "GB200": 1200, "B200": 1000, "B300": 1400,
+    "GB300": 1400, "DGX_STATION_GB300": 1600,
     "A40": 300, "A30": 165, "A6000": 300, "A4000": 140, "A2000_MOBILE": 95, "T4": 70, "V100": 300, "JETSON_AGX_THOR": 130,
     "MI250X": 560, "MI300X": 750, "MI325X": 1000, "MI350X": 1000, "MI355X": 1400, "MI400": 1500,
     "RadeonProW7900": 295, "RadeonAIProR9700": 300,
@@ -533,34 +546,73 @@ for _k, _w in GPU_TDP_WATTS.items():
     if _k in GPUS:
         GPUS[_k].tdp_watts = float(_w)
 
+
+def normalize_gpu_count(gpu_type: str, count: int, allow_zero: bool = False) -> int:
+    """Snap pool sizes to set-only hardware constraints."""
+    try:
+        normalized = int(count)
+    except (TypeError, ValueError):
+        normalized = 0
+    if allow_zero and normalized <= 0:
+        return 0
+
+    gpu = GPUS.get(gpu_type)
+    if gpu is None:
+        return max(normalized, 0)
+
+    normalized = max(normalized, max(int(gpu.min_count), 1))
+    multiple = max(int(gpu.count_multiple), 1)
+    if multiple > 1:
+        normalized = math.ceil(normalized / multiple) * multiple
+    return normalized
+
+
 GPU_CARDS: list[GPUCard] = [
     # ── NVIDIA: flagship Blackwell → Hopper → Ampere datacenter → Ada → professional → desktop ──
     GPUCard(
-        "GB200 (Grace + Blackwell)",
+        "GB300 NVL72",
+        "NVIDIA",
+        "Blackwell Ultra",
+        "72-GPU rack: 288 GB HBM3e/GPU",
+        "Rack-scale AI reasoning, training, and high-density inference",
+        (GPUPlannerOption("Add 72-GPU Rack", "GB300"),),
+        "Rack-only profile: models one Blackwell Ultra GPU inside the 72-GPU GB300 NVL72 domain. Pool sizes snap to multiples of 72; CPU LPDDR5X memory is not counted as GPU memory.",
+    ),
+    GPUCard(
+        "DGX Station GB300",
+        "NVIDIA",
+        "Blackwell Ultra",
+        "252 GB HBM3e + 496 GB LPDDR5X",
+        "Deskside AI development, local fine-tuning, and large-model inference",
+        (GPUPlannerOption("Add Station", "DGX_STATION_GB300"),),
+        "System-only GB300 desktop superchip profile. Planner capacity uses the 252GB GPU HBM pool; coherent CPU memory is noted but not counted for model weights or KV cache.",
+    ),
+    GPUCard(
+        "GB200 NVL72",
         "NVIDIA",
         "Blackwell",
-        "paired GPU config",
+        "72-GPU rack: 186 GB HBM3e/GPU",
         "AI supercomputing, large-model training",
-        (GPUPlannerOption("Add", "GB200"),),
-        "Modeled per Blackwell GPU inside the GB200 Grace Blackwell Superchip and 72-GPU NVLink domain.",
+        (GPUPlannerOption("Add 72-GPU Rack", "GB200"),),
+        "Rack-only profile: models one Blackwell GPU inside the 72-GPU GB200 NVL72 domain. Pool sizes snap to multiples of 72.",
     ),
     GPUCard(
         "B300 / Blackwell Ultra",
         "NVIDIA",
         "Blackwell Ultra",
-        "up to 288 GB HBM3e",
-        "Cutting-edge AI/HPC, limited early-access",
-        (GPUPlannerOption("Add", "B300"),),
-        "Uses the published HGX B300 dense roofline with the 288GB-per-GPU Blackwell Ultra memory profile.",
+        "8-GPU system: 288 GB HBM3e/GPU",
+        "HGX/DGX Blackwell Ultra systems and GB300 rack components",
+        (GPUPlannerOption("Add 8-GPU System", "B300"),),
+        "System-only profile for HGX/DGX B300 class servers. Pool sizes snap to multiples of 8; use GB300 NVL72 for the rack-scale Grace Blackwell Ultra domain.",
     ),
     GPUCard(
         "B200",
         "NVIDIA",
         "Blackwell",
-        "180 GB HBM3e",
+        "8-GPU system: 180 GB HBM3e/GPU",
         "AI training/inference, scaling beyond Hopper",
-        (GPUPlannerOption("Add", "B200"),),
-        "Uses the published HGX B200 dense roofline and 180GB HBM3e profile.",
+        (GPUPlannerOption("Add 8-GPU System", "B200"),),
+        "System-only profile for HGX/DGX B200 class servers. Pool sizes snap to multiples of 8.",
     ),
     GPUCard(
         "H200 SXM/PCIe",
@@ -937,7 +989,13 @@ VOXTRAL_REALTIME_PROFILE = RealtimeProfile(
     target_delay_ms=480,
     state_tokens=8192,
     source="mistralai/Voxtral-Mini-4B-Realtime-2602",
-    note="Realtime stream demand uses 6 delay tokens over 480 ms, i.e. 12.5 streaming tokens/sec.",
+    note="Realtime stream demand uses 6 delay tokens over 480 ms, i.e. 12.5 streaming ticks/sec. Each 80 ms tick also runs 4 causal audio-encoder tokens.",
+    audio_encoder_params=0.97e9,
+    audio_tokens_per_step=4,
+    audio_attention_layers=32,
+    audio_attention_heads=32,
+    audio_attention_head_dim=64,
+    audio_attention_window=750,
 )
 
 
@@ -1196,8 +1254,8 @@ MODELS: dict[str, Model] = {
         "Voxtral Mini Realtime 4B",
         "Audio",
         "#DE7A24",
-        4e9,
-        4e9,
+        4.37e9,
+        4.37e9,
         False,
         26,
         32,

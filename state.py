@@ -24,6 +24,7 @@ from data import (
     SCALE_MODELS,
     PRECISIONS,
     PRECISION_LABELS,
+    normalize_gpu_count,
     normalize_precision,
     effective_quality,
     model_success_rate,
@@ -1385,9 +1386,10 @@ def normalize_projects(state: PlannerState):
 
 
 def add_gpu(state: PlannerState, gpu_type: str, count: int = 8):
+    count = normalize_gpu_count(gpu_type, count)
     existing = next((g for g in state.gpus if g.gpu_type == gpu_type), None)
     if existing:
-        existing.count += count
+        existing.count = normalize_gpu_count(gpu_type, existing.count + count)
     else:
         state.gpus.append(GpuPool(_next_uid(), gpu_type, count))
 
@@ -1402,7 +1404,7 @@ def change_gpu_qty(state: PlannerState, gpu_uid: int, delta: int):
     if gp is None:
         return
 
-    new_count = max(0, gp.count + delta)
+    new_count = normalize_gpu_count(gp.gpu_type, gp.count + delta, allow_zero=True)
     used = state.used_gpu_for_pool(gpu_uid)
     if new_count < used:
         excess = used - new_count

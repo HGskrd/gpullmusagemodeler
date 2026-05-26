@@ -101,7 +101,7 @@ class ModelCatalogTests(unittest.TestCase):
 
         self.assertEqual(model.name, "Voxtral Mini Realtime 4B")
         self.assertEqual(model.cat, "Audio")
-        self.assertEqual(model.total_params, 4e9)
+        self.assertEqual(model.total_params, 4.37e9)
         self.assertEqual(model.layers, 26)
         self.assertEqual(model.num_heads, 32)
         self.assertEqual(model.kv_heads, 8)
@@ -116,6 +116,12 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertAlmostEqual(profile.audio_ms_per_token, 80.0)
         self.assertAlmostEqual(profile.tokens_per_second, 12.5)
         self.assertEqual(profile.state_tokens, 8192)
+        self.assertEqual(profile.audio_encoder_params, 0.97e9)
+        self.assertEqual(profile.audio_tokens_per_step, 4)
+        self.assertEqual(profile.audio_attention_layers, 32)
+        self.assertEqual(profile.audio_attention_heads, 32)
+        self.assertEqual(profile.audio_attention_head_dim, 64)
+        self.assertEqual(profile.audio_attention_window, 750)
 
 
 if __name__ == "__main__":

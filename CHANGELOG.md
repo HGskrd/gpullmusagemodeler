@@ -4,8 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## 2026-05-26
 
+### Added
+
+- Added NVIDIA GB300 NVL72 and DGX Station GB300 Blackwell Ultra hardware profiles, including FP4 throughput, TDP, picker cards, and catalog regression coverage.
+- Added set-only GPU pool sizing with `min_count` and `count_multiple` constraints so rack/system profiles snap to valid 72-GPU or 8-GPU deployments.
+- Added realtime audio-encoder workload metadata for Voxtral-style streaming audio models.
+
 ### Changed
 
+- Updated GB200, B200, and B300 catalog entries to distinguish rack-scale and HGX/DGX system-only profiles, including corrected B300 BF16/FP8 roofline and TDP assumptions.
+- Updated GPU picker and GPU count controls to show and enforce system/rack pool-size constraints.
+- Updated realtime capacity math to include extra causal audio-encoder work for Voxtral Mini Realtime 4B, and corrected its parameter count to 4.37B.
 - Reduced HTMX interaction delays for calculator controls and use-case library edits.
 - Made add/remove interactions feel immediate by closing pickers and hiding removed cards while requests are in flight.
 - Skipped admin snapshot persistence for high-frequency GPU quantity and cost edits, reducing GPU count update latency from roughly 800 ms to single-digit milliseconds locally.

@@ -9,22 +9,24 @@
   {% for gp in state.gpus %}
   {% set used = state.used_gpu_for_pool(gp.uid) %}
   {% set free = gp.count - used %}
-  <div class="card" style="margin-bottom:4px;">
+  {% set gpu = GPUS[gp.gpu_type] %}
+  {% set count_step = gpu.count_multiple if gpu.count_multiple > 1 else 1 %}
+  <div class="card" style="margin-bottom:4px;" data-fast-card>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;">
       <div style="flex:1;min-width:0;">
-        <div style="font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ GPUS[gp.gpu_type].name }}</div>
-        <div class="T">{{ "%.1f"|format(GPUS[gp.gpu_type].bw / 1e12) }} TB/s · {{ GPUS[gp.gpu_type].vendor_label }}{% if free < gp.count %} · <span style="color:var(--amber);">{{ free }}/{{ gp.count }} free</span>{% endif %}</div>
+        <div style="font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ gpu.name }}</div>
+        <div class="T">{{ "%.1f"|format(gpu.bw / 1e12) }} TB/s · {{ gpu.vendor_label }}{% if gpu.min_count > 1 or gpu.count_multiple > 1 %} · set {{ gpu.count_multiple }}{% endif %}{% if free < gp.count %} · <span style="color:var(--amber);">{{ free }}/{{ gp.count }} free</span>{% endif %}</div>
       </div>
       <div class="qty">
-        <button type="button" hx-post="/gpu/qty" hx-target="#main-content" hx-vals='{"panel":"{{ panel }}","uid":"{{ gp.uid }}","delta":"-1"}' {{ 'disabled' if gp.count <= 0 else '' }}>−</button>
-        <input type="number" min="0" step="1" name="count" value="{{ gp.count }}"
-               aria-label="GPU count for {{ GPUS[gp.gpu_type].name }}"
+        <button type="button" hx-post="/gpu/qty" hx-target="#main-content" hx-vals='{"panel":"{{ panel }}","uid":"{{ gp.uid }}","delta":"-{{ count_step }}"}' {{ 'disabled' if gp.count <= 0 else '' }}>−</button>
+        <input type="number" min="0" step="{{ count_step }}" name="count" value="{{ gp.count }}"
+               aria-label="GPU count for {{ gpu.name }}"
                hx-post="/gpu/qty" hx-target="#main-content"
                hx-trigger="input changed delay:10ms, keyup[key=='Enter']"
                hx-vals='{"panel":"{{ panel }}","uid":"{{ gp.uid }}"}' />
-        <button type="button" hx-post="/gpu/qty" hx-target="#main-content" hx-vals='{"panel":"{{ panel }}","uid":"{{ gp.uid }}","delta":"1"}'>+</button>
+        <button type="button" hx-post="/gpu/qty" hx-target="#main-content" hx-vals='{"panel":"{{ panel }}","uid":"{{ gp.uid }}","delta":"{{ count_step }}"}'>+</button>
       </div>
-      <button class="ghost sm" hx-post="/gpu/remove" hx-target="#main-content" hx-vals='{"panel":"{{ panel }}","uid":"{{ gp.uid }}"}' style="color:var(--red);padding:2px 4px;">✕</button>
+      <button class="ghost sm" hx-post="/gpu/remove" hx-target="#main-content" hx-vals='{"panel":"{{ panel }}","uid":"{{ gp.uid }}"}' data-fast-remove style="color:var(--red);padding:2px 4px;">✕</button>
     </div>
     <div style="display:flex;align-items:center;gap:4px;margin-top:4px;">
       <span class="T tip" style="white-space:nowrap;" title="Amortized total cost of ownership per GPU-hour: hardware capex spread over its useful life, plus power, cooling, datacenter, and ops.">TCO $/GPU·hr</span>

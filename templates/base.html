@@ -802,8 +802,17 @@ function postPartial(url, body) {
   });
 }
 
-function addGpuFromPicker(panel, gpuType) {
-  const count = Number(window.selectedGpuCount ?? 8) || 8;
+function normalizedPickerGpuCount(trigger) {
+  let count = Number(window.selectedGpuCount ?? 8) || 8;
+  const minCount = Number(trigger?.dataset?.minCount ?? 1) || 1;
+  const multiple = Number(trigger?.dataset?.countMultiple ?? 1) || 1;
+  count = Math.max(count, minCount);
+  if (multiple > 1) count = Math.ceil(count / multiple) * multiple;
+  return count;
+}
+
+function addGpuFromPicker(panel, gpuType, trigger) {
+  const count = normalizedPickerGpuCount(trigger);
   const body = `panel=${encodeURIComponent(panel)}&gpu_type=${encodeURIComponent(gpuType)}&count=${encodeURIComponent(count)}`;
   postPartial('/gpu/add', body)
     .then(html => {

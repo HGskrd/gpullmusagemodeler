@@ -60,6 +60,8 @@ NVIDIA_FP4_GPU_KEYS = frozenset({
     "GB200",
     "B200",
     "B300",
+    "GB300",
+    "DGX_STATION_GB300",
     "JETSON_AGX_THOR",
 })
 MXFP4_GPU_KEYS = NVIDIA_FP4_GPU_KEYS | frozenset({"MI350X", "MI355X", "MI400"})
@@ -244,6 +246,25 @@ def _decode_attention_work(m: Model, pr: int, avg_seq: float, pp: int) -> float:
     local_work = local_layers * local_width * _local_context_tokens(m, avg_seq)
     linear_work = _linear_attention_work(m, 1.0)
     return 2 * pr * (full_work + local_work + linear_work) / max(pp, 1)
+
+
+def _realtime_audio_encoder_work(profile, pr: int, pp: int) -> float:
+    audio_params = max(float(getattr(profile, "audio_encoder_params", 0.0)), 0.0)
+    audio_tokens = max(int(getattr(profile, "audio_tokens_per_step", 1)), 1)
+    pp = max(pp, 1)
+
+    # The normal decoder step already accounts for one full model pass. Voxtral
+    # realtime expands every streaming text tick into several causal audio
+    # encoder tokens, so add only those extra encoder-token passes here.
+    extra_token_passes = max(audio_tokens - 1, 0)
+    ffn_work = 2 * audio_params * extra_token_passes * pr / pp
+
+    layers = max(int(getattr(profile, "audio_attention_layers", 0)), 0)
+    heads = max(int(getattr(profile, "audio_attention_heads", 0)), 0)
+    head_dim = max(int(getattr(profile, "audio_attention_head_dim", 0)), 0)
+    window = max(int(getattr(profile, "audio_attention_window", 0)), audio_tokens)
+    attention_work = 2 * pr * layers * heads * head_dim * audio_tokens * window / pp
+    return ffn_work + attention_work
 
 
 def _prefill_attention_work(m: Model, pr: int, seq_len: int, pp: int) -> float:
@@ -578,6 +599,7 @@ def _decode_step_time(
     avg_seq: float,
     eff: EfficiencyParams,
     paged_oh: float = 0.0,
+    extra_flops: float = 0.0,
 ) -> float:
     aw = _active_weight_bytes(m, prec)
     wt = (aw / (tp * pp)) / (g.effective_bw * eff.bw_eff)
@@ -587,7 +609,7 @@ def _decode_step_time(
 
     wf = 2 * m.active_params * pr / pp
     af = _decode_attention_work(m, pr, avg_seq, pp)
-    ct = (wf + af) / (model_gpu_flops(g, m, prec) * tp * eff.comp_eff)
+    ct = (wf + af + max(extra_flops, 0.0)) / (model_gpu_flops(g, m, prec) * tp * eff.comp_eff)
 
     comm = communication_breakdown(m, tp, pp, pr, avg_seq, g, eff)
     step = (max(bt, ct) + comm.total) * (1 + eff.overhead + paged_oh)
@@ -608,6 +630,7 @@ def _compute_decode_core(
     avg_out: float,
     eff: EfficiencyParams,
     paged_oh: float = 0.0,
+    extra_flops: float = 0.0,
 ) -> Optional[DecodeResult]:
     mem = compute_memory(m, tp, pp, g, mu, profiled_non_kv_gb, prec, eff)
     if mem is None:
@@ -622,7 +645,7 @@ def _compute_decode_core(
     if pr > max_slots:
         return None
 
-    step = _decode_step_time(m, tp, pp, pr, g, prec, avg_seq, eff, paged_oh)
+    step = _decode_step_time(m, tp, pp, pr, g, prec, avg_seq, eff, paged_oh, extra_flops)
     return DecodeResult(
         tps=round(pr / step * dp),
         lat=round((step / pr) * 1e5) / 100,
@@ -929,6 +952,8 @@ def compute_realtime_capacity(
 
     tp, pp, dp = decode_strat
     state_tokens = max(float(profile.state_tokens), 1.0)
+    pr = math.ceil(users / max(dp, 1))
+    extra_flops = _realtime_audio_encoder_work(profile, pr, pp)
     result = _compute_decode_core(
         m,
         tp,
@@ -943,6 +968,7 @@ def compute_realtime_capacity(
         0.0,
         eff,
         paged_oh=fixed_paged_oh(state_tokens, eff, 0.5),
+        extra_flops=extra_flops,
     )
     if result is None:
         return None
