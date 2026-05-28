@@ -1,13 +1,45 @@
-{# Model picker dropdown - loaded via HTMX into picker element #}
-{% for cat, ms in models_by_category.items() %}
-  <div class="cat">{{ cat }}</div>
+{# Model picker dropdown - loaded via HTMX into picker element. One tab per
+   model kind (LLM / Embedding / ASR). Tab switches are HTMX GETs into the
+   existing picker so this partial stays declarative. #}
+<div class="model-picker-tabs tabs">
+  {% for kind_key, kind_label in MODEL_KINDS %}
+    {% set count = models_by_kind.get(kind_key, {}).values() | map('length') | sum %}
+    <button type="button"
+            class="sm {% if kind_key == active_kind %}on{% endif %}"
+            hx-get="/picker/model?panel={{ panel }}&kind={{ kind_key }}"
+            hx-target="closest .picker"
+            hx-swap="innerHTML"
+            {% if count == 0 %}disabled{% endif %}>
+      {{ kind_label }} <span class="T" style="margin-left:3px;">{{ count }}</span>
+    </button>
+  {% endfor %}
+</div>
+{% for cat, ms in models_by_kind.get(active_kind, {}).items() %}
+  <div class="cat cat-action">
+    <span>{{ cat }}</span>
+    <form class="picker-add-all-form"
+          hx-post="/model/add-many"
+          hx-target="#main-content"
+          hx-swap="innerHTML">
+      <input type="hidden" name="panel" value="{{ panel }}">
+      {% for m in ms %}
+      <input type="hidden" name="model_key" value="{{ m.key }}">
+      {% endfor %}
+      <button type="submit" class="ghost sm picker-add-all">
+        Add all
+      </button>
+    </form>
+  </div>
   {% for m in ms %}
-  <div class="item"
-       hx-post="/model/add" hx-target="#main-content"
-       hx-vals='{"panel":"{{ panel }}","model_key":"{{ m.key }}"}'>
+  <button type="button"
+          class="item"
+          hx-post="/model/add"
+          hx-target="#main-content"
+          hx-swap="innerHTML"
+          hx-vals='{"panel":"{{ panel }}","model_key":"{{ m.key }}"}'>
     <span class="dot" style="background:{{ m.color }};"></span>
     <span>{{ m.name }}</span>
     <span class="T">{{ m.size_label }}</span>
-  </div>
+  </button>
   {% endfor %}
 {% endfor %}

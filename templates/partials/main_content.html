@@ -22,10 +22,12 @@
     {% for am in state.models %}
       {% if am.gpu_count > 0 %}
         {% set m = MODELS[am.model_key] %}
-        {% set phase = 'P' if state.mode == 'data' else 'D' %}
-        {% set phase_tp = am.prefill_tp if state.mode == 'data' else am.tp %}
-        {% set phase_pp = am.prefill_pp if state.mode == 'data' else am.pp %}
-        {% set phase_dp = am.prefill_dp if state.mode == 'data' else am.dp %}
+        {% set is_embedding_workload = state.mode in ('embedding', 'embedquality') %}
+        {% set is_prefill_phase = state.mode == 'data' or is_embedding_workload %}
+        {% set phase = 'E' if is_embedding_workload and m.is_embedding_model else ('P' if is_prefill_phase else 'D') %}
+        {% set phase_tp = am.prefill_tp if is_prefill_phase else am.tp %}
+        {% set phase_pp = am.prefill_pp if is_prefill_phase else am.pp %}
+        {% set phase_dp = am.prefill_dp if is_prefill_phase else am.dp %}
         <span class="flex" style="gap:3px;">
           <span class="dot" style="background:{{ m.color }};width:5px;height:5px;{{ 'border:1px dashed var(--fg2);' if suffix else '' }}"></span>
           <span class="T">{{ m.name }} {{ phase }} {{ strategy_label(phase_tp, phase_pp, phase_dp) }} · {{ PRECISION_LABELS[am.prec] }}{{ suffix }}</span>

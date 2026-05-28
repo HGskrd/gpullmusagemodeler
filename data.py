@@ -242,6 +242,39 @@ class RealtimeProfile:
     audio_attention_heads: int = 0
     audio_attention_head_dim: int = 0
     audio_attention_window: int = 0
+    streaming: bool = True
+
+
+@dataclass(frozen=True)
+class EmbeddingProfile:
+    label: str
+    kind: str  # "single", "late", or "hybrid"
+    output_dim: int
+    max_sequence_length: int
+    source: str
+    note: str
+    late_interaction_dim: int = 0
+    query_length: int = 0
+    document_length: int = 0
+    vector_bytes_per_elem: float = 4.0
+    storage_format: str = "FP32"
+    pooling: str = ""
+
+    @property
+    def supports_single_vector(self) -> bool:
+        return self.kind in {"single", "hybrid"}
+
+    @property
+    def supports_late_interaction(self) -> bool:
+        return self.kind in {"late", "hybrid"}
+
+    @property
+    def mode_label(self) -> str:
+        if self.kind == "hybrid":
+            return "single-vector + late interaction"
+        if self.kind == "late":
+            return "late interaction"
+        return "single-vector"
 
 
 # Capability flags. Projects can require one or more; models must supply them to be eligible.
@@ -302,6 +335,7 @@ class Model:
     attention_label: str = ""
     capabilities_override: frozenset[str] | None = None
     realtime_profile: RealtimeProfile | None = None
+    embedding_profile: EmbeddingProfile | None = None
 
     @property
     def capabilities(self) -> frozenset[str]:
@@ -312,6 +346,10 @@ class Model:
     @property
     def is_realtime_only(self) -> bool:
         return self.realtime_profile is not None
+
+    @property
+    def is_embedding_model(self) -> bool:
+        return self.embedding_profile is not None
 
     @property
     def size_label(self) -> str:
@@ -997,6 +1035,372 @@ VOXTRAL_REALTIME_PROFILE = RealtimeProfile(
     audio_attention_head_dim=64,
     audio_attention_window=750,
 )
+MIMO_V25_ASR_PROFILE = RealtimeProfile(
+    label="ASR",
+    tokens_per_second=6.25,
+    audio_ms_per_token=160.0,
+    target_delay_ms=1600,
+    state_tokens=8192,
+    source="XiaomiMiMo/MiMo-V2.5-ASR + XiaomiMiMo/MiMo-Audio-Tokenizer",
+    note="ASR stream demand approximates MiMo-Audio-Tokenizer's 25 Hz RVQ stream after the 4-frame patch grouping used by the ASR model, i.e. 6.25 audio patches/sec. The companion tokenizer is modeled as extra audio work.",
+    audio_encoder_params=1.2e9,
+    audio_tokens_per_step=4,
+    audio_attention_layers=32,
+    audio_attention_heads=20,
+    audio_attention_head_dim=64,
+    audio_attention_window=25,
+)
+NEMOTRON_SPEECH_STREAMING_PROFILE = RealtimeProfile(
+    label="Streaming ASR",
+    tokens_per_second=1000.0 / 560.0,
+    audio_ms_per_token=560.0,
+    target_delay_ms=560,
+    state_tokens=70,
+    source="nvidia/nemotron-speech-streaming-en-0.6b",
+    note="Cache-aware FastConformer-RNNT profile uses the 560 ms streaming chunk setting; the cached left context is 70 80 ms frames.",
+)
+PARAKEET_UNIFIED_STREAMING_PROFILE = RealtimeProfile(
+    label="Streaming ASR",
+    tokens_per_second=1000.0 / 560.0,
+    audio_ms_per_token=560.0,
+    target_delay_ms=560,
+    state_tokens=70,
+    source="nvidia/parakeet-unified-en-0.6b",
+    note="Unified FastConformer-RNNT profile uses the published 0.56 s streaming latency point with 5.6 s left context.",
+)
+PARAKEET_REALTIME_EOU_PROFILE = RealtimeProfile(
+    label="Streaming ASR + EOU",
+    tokens_per_second=6.25,
+    audio_ms_per_token=160.0,
+    target_delay_ms=160,
+    state_tokens=70,
+    source="nvidia/parakeet_realtime_eou_120m-v1",
+    note="Voice-agent streaming profile uses the 160 ms setting from the model card and keeps the 70-frame cache-aware left context.",
+)
+MULTITALKER_PARAKEET_STREAMING_PROFILE = RealtimeProfile(
+    label="Streaming Multitalker ASR",
+    tokens_per_second=1000.0 / 1120.0,
+    audio_ms_per_token=1120.0,
+    target_delay_ms=1120,
+    state_tokens=70,
+    source="nvidia/multitalker-parakeet-streaming-0.6b-v1",
+    note="Multitalker profile uses the 1.12 s setting; NVIDIA documents one ASR model instance per active speaker, so planner users should scale assignments by target speaker count.",
+)
+KYUTAI_STT_1B_PROFILE = RealtimeProfile(
+    label="Streaming ASR",
+    tokens_per_second=12.5,
+    audio_ms_per_token=80.0,
+    target_delay_ms=500,
+    state_tokens=750,
+    source="kyutai/stt-1b-en_fr",
+    note="Kyutai delayed-streams profile uses the published 12.5 Hz Mimi frame rate, 32 audio tokens per frame, and 0.5 s text delay.",
+)
+KYUTAI_STT_2_6B_PROFILE = RealtimeProfile(
+    label="Streaming ASR",
+    tokens_per_second=12.5,
+    audio_ms_per_token=80.0,
+    target_delay_ms=2500,
+    state_tokens=375,
+    source="kyutai/stt-2.6b-en",
+    note="Kyutai delayed-streams profile uses the published 12.5 Hz Mimi frame rate and 2.5 s text delay; the Transformers config uses a 375-token sliding window.",
+)
+MOONSHINE_STREAMING_TINY_PROFILE = RealtimeProfile(
+    label="Streaming ASR",
+    tokens_per_second=12.5,
+    audio_ms_per_token=80.0,
+    target_delay_ms=80,
+    state_tokens=16,
+    source="UsefulSensors/moonshine-streaming-tiny",
+    note="Moonshine Streaming uses 50 Hz frontend features with stride-4 downsampling and bounded 16-frame encoder windows; the first/last layers add 80 ms lookahead.",
+)
+MOONSHINE_STREAMING_SMALL_PROFILE = RealtimeProfile(
+    label="Streaming ASR",
+    tokens_per_second=12.5,
+    audio_ms_per_token=80.0,
+    target_delay_ms=80,
+    state_tokens=16,
+    source="UsefulSensors/moonshine-streaming-small",
+    note="Moonshine Streaming uses 50 Hz frontend features with stride-4 downsampling and bounded 16-frame encoder windows; the first/last layers add 80 ms lookahead.",
+)
+MOONSHINE_STREAMING_MEDIUM_PROFILE = RealtimeProfile(
+    label="Streaming ASR",
+    tokens_per_second=12.5,
+    audio_ms_per_token=80.0,
+    target_delay_ms=80,
+    state_tokens=16,
+    source="UsefulSensors/moonshine-streaming-medium",
+    note="Moonshine Streaming uses 50 Hz frontend features with stride-4 downsampling and bounded 16-frame encoder windows; the first/last layers add 80 ms lookahead.",
+)
+FUN_ASR_NANO_PROFILE = RealtimeProfile(
+    label="Realtime ASR",
+    tokens_per_second=6.25,
+    audio_ms_per_token=160.0,
+    target_delay_ms=160,
+    state_tokens=8192,
+    source="FunAudioLLM/Fun-ASR-Nano-2512",
+    note="Fun-ASR-Nano is published as a low-latency realtime 800M ASR model; planner timing uses a conservative 160 ms streaming tick because no comparable chunk table is published.",
+)
+GRANITE_4_1B_SPEECH_PROFILE = RealtimeProfile(
+    label="Offline ASR",
+    tokens_per_second=1.0,
+    audio_ms_per_token=1000.0,
+    target_delay_ms=30000,
+    state_tokens=8192,
+    source="ibm-granite/granite-4.0-1b-speech",
+    note="Granite Speech is modeled as high-throughput chunked ASR rather than native streaming; one planner tick approximates one audio-second equivalent of chunk processing.",
+    streaming=False,
+)
+PARAKEET_TDT_06B_V3_PROFILE = RealtimeProfile(
+    label="Offline ASR",
+    tokens_per_second=1.0,
+    audio_ms_per_token=1000.0,
+    target_delay_ms=30000,
+    state_tokens=8192,
+    source="nvidia/parakeet-tdt-0.6b-v3",
+    note="Parakeet TDT v3 is modeled as high-throughput non-streaming ASR; one planner tick approximates one audio-second equivalent of chunk processing.",
+    streaming=False,
+)
+
+
+# ---------------------------------------------------------------------------
+# Published ASR quality: word error rate (WER) by language, in percent; lower
+# is better. Used by the "ASR Quality" plot (max streams vs WER). Capacity is
+# language-independent in this closed-form model, so each language is a separate
+# quality point at the same max-stream height.
+#
+# Sources:
+# - https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602
+#   FLEURS row for 480 ms streaming WER.
+# - https://mimo.xiaomi.com/mimo-v2-5-asr
+#   Xiaomi-published Open ASR English average. MiMo is documented as
+#   Chinese-English; no primary French WER was found.
+# - NVIDIA, Kyutai, Moonshine, IBM, and Hugging Face model cards / Open ASR
+#   leaderboard rows for the added open/self-hosted ASR models below.
+# - https://huggingface.co/datasets/Steveeeeeeen/multilingual_evals
+#   Hugging Face Open ASR multilingual CSV for French CoVoST/MLS/FLEURS rows
+#   where the catalog model has a current public result.
+# - https://arxiv.org/abs/2603.11243
+#   IBM Granite 4.0 Speech paper, CommonVoice French full-AR WER.
+# French rows are filled only when a source-backed French WER was found; models
+# that are English-only or have no published French table intentionally omit fr.
+# ---------------------------------------------------------------------------
+ASR_WER_LANGUAGES: tuple[str, ...] = ("en", "fr")
+ASR_WER_LANGUAGE_LABELS: dict[str, str] = {
+    "en": "English",
+    "fr": "French",
+}
+ASR_WER_LANGUAGE_SOURCES: dict[str, dict[str, str]] = {
+    "voxtral-realtime-mini-4b": {
+        "en": "Mistral FLEURS benchmark, 480 ms streaming delay, English WER.",
+        "fr": "Hugging Face Open ASR multilingual eval, French mean over CoVoST, MLS, and FLEURS.",
+    },
+    "mimo-v2.5-asr": {
+        "en": "Xiaomi MiMo General English Recognition Open ASR average WER.",
+    },
+    "nvidia-nemotron-speech-streaming-0.6b": {
+        "en": "NVIDIA comparison table, HuggingFace OpenASR average WER at 0.56 s streaming latency.",
+    },
+    "nvidia-parakeet-unified-0.6b": {
+        "en": "NVIDIA comparison table, HuggingFace OpenASR average WER at 0.56 s streaming latency.",
+    },
+    "nvidia-parakeet-realtime-eou-120m": {
+        "en": "NVIDIA model card, HuggingFace OpenASR average WER at 160 ms streaming setting.",
+    },
+    "nvidia-multitalker-parakeet-streaming-0.6b": {
+        "en": "NVIDIA model card, single-speaker-mode HuggingFace OpenASR average WER.",
+    },
+    "kyutai-stt-1b-en-fr": {
+        "en": "Placeholder: Kyutai publishes model latency and throughput, but no text WER table was found.",
+        "fr": "Placeholder: Kyutai publishes model latency and throughput, but no text WER table was found.",
+    },
+    "kyutai-stt-2.6b-en": {
+        "en": "Kyutai Hugging Face evaluation, HuggingFace OpenASR mean WER.",
+    },
+    "moonshine-streaming-tiny": {
+        "en": "Useful Sensors Moonshine Streaming model card, Open ASR average WER.",
+    },
+    "moonshine-streaming-small": {
+        "en": "Useful Sensors Moonshine Streaming model card, Open ASR average WER.",
+    },
+    "moonshine-streaming-medium": {
+        "en": "Useful Sensors Moonshine Streaming model card, Open ASR average WER.",
+    },
+    "fun-asr-nano-2512": {
+        "en": "Placeholder: FunAudioLLM publishes realtime capability and parameter count, but no comparable OpenASR WER was found.",
+    },
+    "granite-4.0-1b-speech": {
+        "en": "IBM Granite model card, HuggingFace OpenASR average WER.",
+        "fr": "IBM Granite 4.0 Speech paper, CommonVoice French full-AR WER.",
+    },
+    "nvidia-parakeet-tdt-0.6b-v3": {
+        "en": "NVIDIA model card, HuggingFace OpenASR average WER.",
+        "fr": "Hugging Face Open ASR multilingual eval, French mean over CoVoST, MLS, and FLEURS.",
+    },
+}
+PUBLISHED_ASR_WER: dict[str, dict[str, float]] = {
+    "voxtral-realtime-mini-4b": {
+        "en": 4.90,
+        "fr": 7.92,
+    },
+    "mimo-v2.5-asr": {
+        "en": 5.73,
+    },
+    "nvidia-nemotron-speech-streaming-0.6b": {
+        "en": 7.09,
+    },
+    "nvidia-parakeet-unified-0.6b": {
+        "en": 6.52,
+    },
+    "nvidia-parakeet-realtime-eou-120m": {
+        "en": 9.30,
+    },
+    "nvidia-multitalker-parakeet-streaming-0.6b": {
+        "en": 7.44,
+    },
+    "kyutai-stt-1b-en-fr": {
+        "en": 7.00,
+        "fr": 7.50,
+    },
+    "kyutai-stt-2.6b-en": {
+        "en": 6.40,
+    },
+    "moonshine-streaming-tiny": {
+        "en": 12.01,
+    },
+    "moonshine-streaming-small": {
+        "en": 7.84,
+    },
+    "moonshine-streaming-medium": {
+        "en": 6.65,
+    },
+    "fun-asr-nano-2512": {
+        "en": 7.00,
+    },
+    "granite-4.0-1b-speech": {
+        "en": 5.52,
+        "fr": 7.15,
+    },
+    "nvidia-parakeet-tdt-0.6b-v3": {
+        "en": 6.34,
+        "fr": 5.42,
+    },
+}
+ASR_WER_PLACEHOLDER: frozenset[str] = frozenset({
+    "kyutai-stt-1b-en-fr",
+    "fun-asr-nano-2512",
+})
+
+# Backward-compatible aliases for older chart/import names.
+ASR_WER_BENCHMARKS = ASR_WER_LANGUAGES
+ASR_WER_BENCHMARK_LABELS = ASR_WER_LANGUAGE_LABELS
+ASR_WER_BENCHMARK_SOURCES = ASR_WER_LANGUAGE_SOURCES
+STREAMING_WER_LANGUAGES = ASR_WER_LANGUAGES
+STREAMING_WER_LANGUAGE_LABELS = ASR_WER_LANGUAGE_LABELS
+STREAMING_ASR_WER = PUBLISHED_ASR_WER
+STREAMING_ASR_WER_PLACEHOLDER = ASR_WER_PLACEHOLDER
+
+
+# ---------------------------------------------------------------------------
+# Published embedding retrieval quality, in [0, 1]. Used by the "Embedding
+# Quality" plot (quality vs docs/s, one dot per model). Scores are published
+# average retrieval benchmarks converted from percent to [0, 1]. Source labels
+# name the exact benchmark because English-only, multilingual, dense, and
+# late-interaction models do not all publish the same aggregate or metric set.
+# ---------------------------------------------------------------------------
+EMBEDDING_QUALITY_SOURCES: dict[str, str] = {
+    "denseon": "LightOn DenseOn HF model card, BEIR average nDCG@10 table.",
+    "lateon": "LightOn LateOn HF model card, BEIR average nDCG@10 table.",
+    "bge-m3": "MTEB results repo, BGE-M3 MTEB(Multilingual, v2) retrieval average over the 18 pplx report tasks.",
+    "mxbai-embed-large-v1": "Mixedbread mxbai-embed-large-v1 HF model card, MTEB Retrieval (15) nDCG@10.",
+    "mxbai-embed-2d-large-v1": "Mixedbread mxbai-embed-large-v1 HF model card comparison table, MTEB Retrieval (15) nDCG@10.",
+    "mxbai-embed-xsmall-v1": "Mixedbread xsmall release blog, MTEB retrieval average nDCG@10.",
+    "deepset-mxbai-embed-de-large-v1": "Mixedbread/deepset German-English release blog, German retrieval benchmark average NDCG@10.",
+    "mxbai-edge-colbert-v0-17m": "Mixedbread mxbai-edge ColBERT HF model card, BEIR subset average nDCG@10.",
+    "mxbai-edge-colbert-v0-32m": "Mixedbread mxbai-edge ColBERT HF model card, BEIR subset average nDCG@10.",
+    "modernbert-embed-base": "Nomic ModernBERT Embed Base HF model card, MTEB Retrieval (15) nDCG@10.",
+    "kalm-mini-it-v15": "KaLM v1.5 HF model-index, MTEB English Retrieval (15) average nDCG@10.",
+    "pplx-embed-v1-0.6b": "Perplexity pplx-embed technical report, MTEB Multilingual v2 retrieval average nDCG@10, INT8.",
+    "pplx-embed-v1-4b": "Perplexity pplx-embed technical report, MTEB Multilingual v2 retrieval average nDCG@10, INT8.",
+    "pplx-embed-v1-late-0.6b": "Perplexity late-interaction HF model card, BEIR (15 tasks) average nDCG@10.",
+}
+PUBLISHED_EMBEDDING_QUALITY: dict[str, float] = {
+    "denseon":                 0.5620,
+    "lateon":                  0.5722,
+    "bge-m3":                  0.5288,
+    "mxbai-embed-large-v1":     0.5439,
+    "mxbai-embed-2d-large-v1":  0.5142,
+    "mxbai-embed-xsmall-v1":    0.4280,
+    "deepset-mxbai-embed-de-large-v1": 0.5170,
+    "mxbai-edge-colbert-v0-17m": 0.4900,
+    "mxbai-edge-colbert-v0-32m": 0.5210,
+    "modernbert-embed-base":   0.5289,
+    "kalm-mini-it-v15":        0.5165,
+    "pplx-embed-v1-0.6b":      0.6541,
+    "pplx-embed-v1-4b":        0.6966,
+    "pplx-embed-v1-late-0.6b": 0.5661,
+}
+EMBEDDING_QUALITY_PLACEHOLDER: frozenset[str] = frozenset()
+
+
+def _modernbert_embed_model(
+    key: str,
+    name: str,
+    color: str,
+    profile: EmbeddingProfile,
+) -> Model:
+    return Model(
+        key,
+        name,
+        "Embeddings",
+        color,
+        149e6,
+        149e6,
+        False,
+        22,
+        12,
+        12,
+        64,
+        False,
+        hidden_dim=768,
+        local_attention_layers=14,
+        local_attention_window=128,
+        attention_label="ModernBERT local/global encoder",
+        capabilities_override=frozenset(),
+        embedding_profile=profile,
+    )
+
+
+def _pplx_embed_model(
+    key: str,
+    name: str,
+    color: str,
+    params: float,
+    layers: int,
+    hidden_dim: int,
+    num_heads: int,
+    kv_heads: int,
+    output_dim: int,
+    profile: EmbeddingProfile,
+) -> Model:
+    return Model(
+        key,
+        name,
+        "Embeddings",
+        color,
+        params,
+        params,
+        False,
+        layers,
+        num_heads,
+        kv_heads,
+        128,
+        False,
+        hidden_dim=hidden_dim,
+        attention_query_heads=num_heads,
+        attention_label="bidirectional Qwen3 encoder",
+        capabilities_override=frozenset(),
+        embedding_profile=profile,
+    )
 
 
 def _rwkv7_g1_model(
@@ -1036,6 +1440,337 @@ def _rwkv7_g1_model(
 
 
 MODELS: dict[str, Model] = {
+    "denseon": _modernbert_embed_model(
+        "denseon",
+        "DenseOn",
+        "#0F766E",
+        EmbeddingProfile(
+            label="DenseOn",
+            kind="single",
+            output_dim=768,
+            max_sequence_length=8192,
+            source="lightonai/DenseOn",
+            note="ModernBERT-base dense retrieval model; single-vector counterpart to LateOn.",
+            pooling="CLS",
+        ),
+    ),
+    "lateon": _modernbert_embed_model(
+        "lateon",
+        "LateOn",
+        "#7C3AED",
+        EmbeddingProfile(
+            label="LateOn",
+            kind="late",
+            output_dim=128,
+            late_interaction_dim=128,
+            max_sequence_length=300,
+            query_length=32,
+            document_length=300,
+            source="lightonai/LateOn",
+            note="ModernBERT-base ColBERT model with MaxSim scoring; document length 300 and query length 32 in the model card.",
+            pooling="token vectors",
+        ),
+    ),
+    "bge-m3": Model(
+        "bge-m3",
+        "BGE-M3",
+        "Embeddings",
+        "#3266AD",
+        569e6,
+        569e6,
+        False,
+        24,
+        16,
+        16,
+        64,
+        False,
+        hidden_dim=1024,
+        attention_label="XLM-R encoder; dense/sparse/ColBERT heads",
+        capabilities_override=frozenset(),
+        embedding_profile=EmbeddingProfile(
+            label="BGE-M3",
+            kind="hybrid",
+            output_dim=1024,
+            late_interaction_dim=1024,
+            max_sequence_length=8192,
+            source="BAAI/bge-m3",
+            note="Unified dense, sparse lexical, and ColBERT-style multi-vector embedding model.",
+            pooling="CLS dense + token vectors",
+        ),
+    ),
+    "mxbai-embed-large-v1": Model(
+        "mxbai-embed-large-v1",
+        "MXBAI Embed Large v1",
+        "Embeddings",
+        "#B45309",
+        0.3e9,
+        0.3e9,
+        False,
+        24,
+        16,
+        16,
+        64,
+        False,
+        hidden_dim=1024,
+        attention_label="BERT-large encoder",
+        capabilities_override=frozenset(),
+        embedding_profile=EmbeddingProfile(
+            label="MXBAI Embed Large",
+            kind="single",
+            output_dim=1024,
+            max_sequence_length=512,
+            source="mixedbread-ai/mxbai-embed-large-v1",
+            note="English retrieval embedder with CLS pooling, Matryoshka truncation, and binary quantization support.",
+            pooling="CLS",
+        ),
+    ),
+    "mxbai-embed-2d-large-v1": Model(
+        "mxbai-embed-2d-large-v1",
+        "MXBAI Embed 2D Large v1",
+        "Embeddings",
+        "#9A3412",
+        0.3e9,
+        0.3e9,
+        False,
+        24,
+        16,
+        16,
+        64,
+        False,
+        hidden_dim=1024,
+        attention_label="BERT-large encoder with adaptive layers",
+        capabilities_override=frozenset(),
+        embedding_profile=EmbeddingProfile(
+            label="MXBAI Embed 2D Large",
+            kind="single",
+            output_dim=1024,
+            max_sequence_length=512,
+            source="mixedbread-ai/mxbai-embed-2d-large-v1",
+            note="2D Matryoshka English embedder with adaptive layer count and embedding dimension.",
+            pooling="CLS",
+        ),
+    ),
+    "mxbai-embed-xsmall-v1": Model(
+        "mxbai-embed-xsmall-v1",
+        "MXBAI Embed XSmall v1",
+        "Embeddings",
+        "#4D7C0F",
+        24.1e6,
+        24.1e6,
+        False,
+        6,
+        12,
+        12,
+        32,
+        False,
+        hidden_dim=384,
+        attention_label="MiniLM encoder",
+        capabilities_override=frozenset(),
+        embedding_profile=EmbeddingProfile(
+            label="MXBAI Embed XSmall",
+            kind="single",
+            output_dim=384,
+            max_sequence_length=4096,
+            source="mixedbread-ai/mxbai-embed-xsmall-v1",
+            note="Compact English retrieval embedder with long-context support, MRL, and binary quantization support.",
+            pooling="mean",
+        ),
+    ),
+    "deepset-mxbai-embed-de-large-v1": Model(
+        "deepset-mxbai-embed-de-large-v1",
+        "Deepset MXBAI Embed DE Large v1",
+        "Embeddings",
+        "#047857",
+        0.5e9,
+        0.5e9,
+        False,
+        24,
+        16,
+        16,
+        64,
+        False,
+        hidden_dim=1024,
+        attention_label="XLM-R encoder",
+        capabilities_override=frozenset(),
+        embedding_profile=EmbeddingProfile(
+            label="MXBAI Embed DE Large",
+            kind="single",
+            output_dim=1024,
+            max_sequence_length=512,
+            source="mixedbread-ai/deepset-mxbai-embed-de-large-v1",
+            note="German-English retrieval embedder initialized from multilingual-e5-large; query/passages require explicit prefixes.",
+            pooling="mean",
+        ),
+    ),
+    "mxbai-edge-colbert-v0-17m": Model(
+        "mxbai-edge-colbert-v0-17m",
+        "MXBAI Edge ColBERT v0 17M",
+        "Embeddings",
+        "#6D28D9",
+        16.8e6,
+        16.8e6,
+        False,
+        7,
+        4,
+        4,
+        64,
+        False,
+        hidden_dim=256,
+        local_attention_layers=4,
+        local_attention_window=128,
+        attention_label="Ettin/ModernBERT ColBERT, 3 global + 4 local",
+        capabilities_override=frozenset(),
+        embedding_profile=EmbeddingProfile(
+            label="MXBAI Edge ColBERT 17M",
+            kind="late",
+            output_dim=48,
+            late_interaction_dim=48,
+            max_sequence_length=32000,
+            query_length=32,
+            document_length=32000,
+            source="mixedbread-ai/mxbai-edge-colbert-v0-17m",
+            note="Lightweight ColBERT retriever with 48-d token vectors and documented 32k-token document support.",
+            pooling="token vectors",
+        ),
+    ),
+    "mxbai-edge-colbert-v0-32m": Model(
+        "mxbai-edge-colbert-v0-32m",
+        "MXBAI Edge ColBERT v0 32M",
+        "Embeddings",
+        "#4338CA",
+        31.9e6,
+        31.9e6,
+        False,
+        10,
+        6,
+        6,
+        64,
+        False,
+        hidden_dim=384,
+        local_attention_layers=6,
+        local_attention_window=128,
+        attention_label="Ettin/ModernBERT ColBERT, 4 global + 6 local",
+        capabilities_override=frozenset(),
+        embedding_profile=EmbeddingProfile(
+            label="MXBAI Edge ColBERT 32M",
+            kind="late",
+            output_dim=64,
+            late_interaction_dim=64,
+            max_sequence_length=32000,
+            query_length=32,
+            document_length=32000,
+            source="mixedbread-ai/mxbai-edge-colbert-v0-32m",
+            note="Lightweight ColBERT retriever with 64-d token vectors and documented 32k-token document support.",
+            pooling="token vectors",
+        ),
+    ),
+    "modernbert-embed-base": _modernbert_embed_model(
+        "modernbert-embed-base",
+        "ModernBERT Embed Base",
+        "#BA7517",
+        EmbeddingProfile(
+            label="ModernBERT Embed Base",
+            kind="single",
+            output_dim=768,
+            max_sequence_length=8192,
+            source="nomic-ai/modernbert-embed-base",
+            note="Nomic single-vector embedder with Matryoshka truncation support down to 256 dimensions.",
+            pooling="mean",
+        ),
+    ),
+    "kalm-mini-it-v15": Model(
+        "kalm-mini-it-v15",
+        "KaLM Mini Instruct v1.5",
+        "Embeddings",
+        "#D85A30",
+        494e6,
+        494e6,
+        False,
+        24,
+        14,
+        2,
+        64,
+        False,
+        hidden_dim=896,
+        attention_query_heads=14,
+        attention_label="Qwen2-0.5B embedding adapter",
+        capabilities_override=frozenset(),
+        embedding_profile=EmbeddingProfile(
+            label="KaLM Mini IT v1.5",
+            kind="single",
+            output_dim=896,
+            max_sequence_length=512,
+            source="HIT-TMG/KaLM-embedding-multilingual-mini-instruct-v1.5",
+            note="Multilingual Qwen2-0.5B-based instruct embedding model; model card examples set max_seq_length to 512.",
+            pooling="mean",
+        ),
+    ),
+    "pplx-embed-v1-0.6b": _pplx_embed_model(
+        "pplx-embed-v1-0.6b",
+        "PPLX Embed v1 0.6B",
+        "#0891B2",
+        0.6e9,
+        28,
+        1024,
+        16,
+        8,
+        1024,
+        EmbeddingProfile(
+            label="PPLX Embed v1 0.6B",
+            kind="single",
+            output_dim=1024,
+            max_sequence_length=32768,
+            source="perplexity-ai/pplx-embed-v1-0.6b",
+            note="Perplexity bidirectional Qwen3 embedder; supports Matryoshka dimensions 128-1024 and native INT8/BINARY embeddings.",
+            vector_bytes_per_elem=1.0,
+            storage_format="INT8",
+            pooling="mean",
+        ),
+    ),
+    "pplx-embed-v1-4b": _pplx_embed_model(
+        "pplx-embed-v1-4b",
+        "PPLX Embed v1 4B",
+        "#1D5276",
+        4.0e9,
+        36,
+        2560,
+        32,
+        8,
+        2560,
+        EmbeddingProfile(
+            label="PPLX Embed v1 4B",
+            kind="single",
+            output_dim=2560,
+            max_sequence_length=32768,
+            source="perplexity-ai/pplx-embed-v1-4b",
+            note="Perplexity bidirectional Qwen3 embedder; supports Matryoshka dimensions 128-2560 and native INT8/BINARY embeddings.",
+            vector_bytes_per_elem=1.0,
+            storage_format="INT8",
+            pooling="mean",
+        ),
+    ),
+    "pplx-embed-v1-late-0.6b": _pplx_embed_model(
+        "pplx-embed-v1-late-0.6b",
+        "PPLX Embed v1 Late 0.6B",
+        "#7F77DD",
+        0.6e9,
+        28,
+        1024,
+        16,
+        8,
+        128,
+        EmbeddingProfile(
+            label="PPLX Embed v1 Late 0.6B",
+            kind="late",
+            output_dim=128,
+            late_interaction_dim=128,
+            max_sequence_length=32768,
+            source="perplexity-ai/pplx-embed-v1-late-0.6b",
+            note="Token-level late-interaction model continued from PPLX Embed v1 0.6B and scored with MaxSim.",
+            pooling="token vectors",
+        ),
+    ),
+
     "l8": Model("l8", "Llama 3.1 8B", "Meta", "#22976B", 8e9, 8e9, False, 32, 32, 8, 128, False),
     "l70": Model("l70", "Llama 3.1 70B", "Meta", "#2B7A78", 70.6e9, 70.6e9, False, 80, 64, 8, 128, False),
 
@@ -1269,6 +2004,259 @@ MODELS: dict[str, Model] = {
         capabilities_override=frozenset(),
         realtime_profile=VOXTRAL_REALTIME_PROFILE,
     ),
+    "mimo-v2.5-asr": Model(
+        "mimo-v2.5-asr",
+        "MiMo-V2.5-ASR 8B",
+        "Audio",
+        "#B83280",
+        8.0e9,
+        8.0e9,
+        False,
+        36,
+        32,
+        8,
+        128,
+        False,
+        hidden_dim=4096,
+        attention_query_heads=32,
+        attention_label="ASR full attention 8k",
+        capabilities_override=frozenset(),
+        realtime_profile=MIMO_V25_ASR_PROFILE,
+    ),
+    "nvidia-nemotron-speech-streaming-0.6b": Model(
+        "nvidia-nemotron-speech-streaming-0.6b",
+        "NVIDIA Nemotron Speech Streaming 0.6B",
+        "Audio",
+        "#2563EB",
+        0.6e9,
+        0.6e9,
+        False,
+        24,
+        8,
+        8,
+        128,
+        False,
+        hidden_dim=1024,
+        local_attention_layers=24,
+        local_attention_window=70,
+        attention_label="Cache-aware FastConformer 70f",
+        capabilities_override=frozenset(),
+        realtime_profile=NEMOTRON_SPEECH_STREAMING_PROFILE,
+    ),
+    "nvidia-parakeet-unified-0.6b": Model(
+        "nvidia-parakeet-unified-0.6b",
+        "NVIDIA Parakeet Unified 0.6B",
+        "Audio",
+        "#0F766E",
+        0.6e9,
+        0.6e9,
+        False,
+        24,
+        8,
+        8,
+        128,
+        False,
+        hidden_dim=1024,
+        local_attention_layers=24,
+        local_attention_window=70,
+        attention_label="Unified FastConformer 70f",
+        capabilities_override=frozenset(),
+        realtime_profile=PARAKEET_UNIFIED_STREAMING_PROFILE,
+    ),
+    "nvidia-parakeet-realtime-eou-120m": Model(
+        "nvidia-parakeet-realtime-eou-120m",
+        "NVIDIA Parakeet Realtime EOU 120M",
+        "Audio",
+        "#CA8A04",
+        120e6,
+        120e6,
+        False,
+        17,
+        8,
+        8,
+        64,
+        False,
+        hidden_dim=512,
+        local_attention_layers=17,
+        local_attention_window=70,
+        attention_label="Cache-aware FastConformer 70f",
+        capabilities_override=frozenset(),
+        realtime_profile=PARAKEET_REALTIME_EOU_PROFILE,
+    ),
+    "nvidia-multitalker-parakeet-streaming-0.6b": Model(
+        "nvidia-multitalker-parakeet-streaming-0.6b",
+        "NVIDIA Multitalker Parakeet Streaming 0.6B",
+        "Audio",
+        "#7C3AED",
+        0.6e9,
+        0.6e9,
+        False,
+        24,
+        8,
+        8,
+        128,
+        False,
+        hidden_dim=1024,
+        local_attention_layers=24,
+        local_attention_window=70,
+        attention_label="Multi-instance FastConformer 70f",
+        capabilities_override=frozenset(),
+        realtime_profile=MULTITALKER_PARAKEET_STREAMING_PROFILE,
+    ),
+    "kyutai-stt-1b-en-fr": Model(
+        "kyutai-stt-1b-en-fr",
+        "Kyutai STT 1B EN/FR",
+        "Audio",
+        "#0891B2",
+        1.0e9,
+        1.0e9,
+        False,
+        16,
+        16,
+        16,
+        128,
+        False,
+        hidden_dim=2048,
+        local_attention_layers=16,
+        local_attention_window=750,
+        attention_label="Mimi delayed streams 750",
+        capabilities_override=frozenset(),
+        realtime_profile=KYUTAI_STT_1B_PROFILE,
+    ),
+    "kyutai-stt-2.6b-en": Model(
+        "kyutai-stt-2.6b-en",
+        "Kyutai STT 2.6B EN",
+        "Audio",
+        "#0284C7",
+        2.6e9,
+        2.6e9,
+        False,
+        48,
+        32,
+        32,
+        64,
+        False,
+        hidden_dim=2048,
+        local_attention_layers=48,
+        local_attention_window=375,
+        attention_label="Mimi delayed streams 375",
+        capabilities_override=frozenset(),
+        realtime_profile=KYUTAI_STT_2_6B_PROFILE,
+    ),
+    "moonshine-streaming-tiny": Model(
+        "moonshine-streaming-tiny",
+        "Moonshine Streaming Tiny 34M",
+        "Audio",
+        "#16A34A",
+        34e6,
+        34e6,
+        False,
+        12,
+        5,
+        5,
+        64,
+        False,
+        hidden_dim=320,
+        local_attention_layers=6,
+        local_attention_window=16,
+        attention_label="Streaming seq2seq 16f SWA",
+        capabilities_override=frozenset(),
+        realtime_profile=MOONSHINE_STREAMING_TINY_PROFILE,
+    ),
+    "moonshine-streaming-small": Model(
+        "moonshine-streaming-small",
+        "Moonshine Streaming Small 123M",
+        "Audio",
+        "#65A30D",
+        123e6,
+        123e6,
+        False,
+        20,
+        10,
+        10,
+        62,
+        False,
+        hidden_dim=620,
+        local_attention_layers=10,
+        local_attention_window=16,
+        attention_label="Streaming seq2seq 16f SWA",
+        capabilities_override=frozenset(),
+        realtime_profile=MOONSHINE_STREAMING_SMALL_PROFILE,
+    ),
+    "moonshine-streaming-medium": Model(
+        "moonshine-streaming-medium",
+        "Moonshine Streaming Medium 245M",
+        "Audio",
+        "#15803D",
+        245e6,
+        245e6,
+        False,
+        28,
+        12,
+        12,
+        64,
+        False,
+        hidden_dim=768,
+        local_attention_layers=14,
+        local_attention_window=16,
+        attention_label="Streaming seq2seq 16f SWA",
+        capabilities_override=frozenset(),
+        realtime_profile=MOONSHINE_STREAMING_MEDIUM_PROFILE,
+    ),
+    "fun-asr-nano-2512": Model(
+        "fun-asr-nano-2512",
+        "Fun-ASR-Nano 2512 800M",
+        "Audio",
+        "#DC2626",
+        800e6,
+        800e6,
+        False,
+        28,
+        16,
+        8,
+        128,
+        False,
+        hidden_dim=1024,
+        attention_label="Realtime ASR Qwen3-0.6B core",
+        capabilities_override=frozenset(),
+        realtime_profile=FUN_ASR_NANO_PROFILE,
+    ),
+    "granite-4.0-1b-speech": Model(
+        "granite-4.0-1b-speech",
+        "Granite 4.0 1B Speech",
+        "Audio",
+        "#475569",
+        1.0e9,
+        1.0e9,
+        False,
+        40,
+        16,
+        4,
+        128,
+        False,
+        hidden_dim=2048,
+        attention_label="Offline speech LLM 128k ctx",
+        capabilities_override=frozenset(),
+        realtime_profile=GRANITE_4_1B_SPEECH_PROFILE,
+    ),
+    "nvidia-parakeet-tdt-0.6b-v3": Model(
+        "nvidia-parakeet-tdt-0.6b-v3",
+        "NVIDIA Parakeet TDT 0.6B v3",
+        "Audio",
+        "#059669",
+        0.6e9,
+        0.6e9,
+        False,
+        24,
+        8,
+        8,
+        128,
+        False,
+        hidden_dim=1024,
+        attention_label="Offline FastConformer-TDT",
+        capabilities_override=frozenset(),
+        realtime_profile=PARAKEET_TDT_06B_V3_PROFILE,
+    ),
     # Mistral does not publish a parameter count for Medium 3.1; keep a hidden
     # legacy entry so older saved states continue to resolve cleanly.
     "mm31": Model("mm31", "Mistral Medium 3.1 (legacy)", "Mistral", "#AD6A2C", 24e9, 24e9, False, 40, 32, 8, 128, False, hidden=True),
@@ -1329,6 +2317,27 @@ MODELS: dict[str, Model] = {
         attention_label="Legacy proxy",
     ),
 
+    # Poolside has not published the Laguna M.1 config; keep the public 225B-A23B
+    # facts and use a conservative Laguna-family attention proxy for capacity math.
+    "laguna-m1": Model(
+        "laguna-m1",
+        "Laguna M.1 225B-A23B",
+        "Poolside",
+        "#0E7490",
+        225e9,
+        23e9,
+        True,
+        64,
+        64,
+        8,
+        128,
+        False,
+        hidden_dim=4096,
+        local_attention_layers=48,
+        local_attention_window=512,
+        local_attention_heads=64,
+        attention_label="16 global + 48 SWA 512 (proxy)",
+    ),
     "laguna-xs2": Model("laguna-xs2", "Laguna XS.2 33B-A3B", "Poolside", "#0891B2", 33e9, 3e9, True, 40, 48, 8, 128, False, hidden_dim=2048, local_attention_layers=30, local_attention_window=512, local_attention_heads=64, attention_label="10 global + 30 SWA 512"),
 
     "mimo-v2.5-pro": Model(
@@ -1626,7 +2635,7 @@ _REASONING_MODELS = (
     "mistral-medium-3.5-preview", "ml3",
     "minimax25", "minimax27",
     "nem3s", "nem3n", "nem3no",
-    "zaya1-8b", "zaya1-74b-preview", "laguna-xs2",
+    "zaya1-8b", "zaya1-74b-preview", "laguna-m1", "laguna-xs2",
     "mimo-v2.5-pro", "mimo-v2.5",
 )
 for _k in _VISION_MODELS:
@@ -1694,6 +2703,7 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "dv123": (22.0, 7.4),
     "zaya1-8b": (24.0, 140.0),       # Proxy from Nemotron 3 Nano reasoning until AA publishes ZAYA1-8B.
     "zaya1-74b-preview": (37.0, 100.0),  # Preview is pre-RL; proxy from Qwen 3.5 35B-A3B until AA publishes it.
+    "laguna-m1": (44.0, 95.0),       # Proxy from Qwen 3.5 397B-A17B adjusted against Poolside coding-agent benchmarks; no AA row found.
     "laguna-xs2": (37.0, 100.0),     # Proxy from Qwen 3.5 35B-A3B; no AA page for Laguna XS.2 found.
     "mimo-v2.5-pro": (54.0, 92.0),
     "mimo-v2.5": (49.0, 74.0),
@@ -1722,6 +2732,7 @@ AA_MODEL_QUALITY_CONFIDENCE: dict[str, float] = {
     "mistral-medium-3.5-preview": 0.70,
     "zaya1-8b": 0.45,
     "zaya1-74b-preview": 0.35,
+    "laguna-m1": 0.55,
     "laguna-xs2": 0.45,
     "cr13": 0.25,
 }
@@ -1756,6 +2767,16 @@ OUTPUT_BUCKETS = [
     Bucket(8192, "8k", "#D85A30"),
 ]
 
+EMBEDDING_DOC_BUCKETS = [
+    Bucket(32, "32", "#10825c"),
+    Bucket(128, "128", "#1D9E75"),
+    Bucket(256, "256", "#3266ad"),
+    Bucket(1024, "1k", "#7F77DD"),
+    Bucket(2048, "2k", "#BA7517"),
+    Bucket(8192, "8k", "#D85A30"),
+    Bucket(32768, "32k", "#A32D2D"),
+]
+
 BATCH_SIZES = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
 
 DIST_PRESETS = {
@@ -1764,6 +2785,13 @@ DIST_PRESETS = {
     "Long doc": {"in": [2, 5, 10, 15, 25, 25, 18], "out": [5, 15, 30, 30, 15, 5]},
     "Code": {"in": [8, 25, 30, 22, 10, 4, 1], "out": [10, 20, 35, 25, 8, 2]},
     "Classify": {"in": [5, 20, 40, 25, 8, 2, 0], "out": [80, 15, 4, 1, 0, 0]},
+}
+
+EMBEDDING_DOC_PRESETS = {
+    "Query": [90, 10, 0, 0, 0, 0, 0],
+    "Passage": [0, 10, 75, 15, 0, 0, 0],
+    "Doc": [0, 5, 15, 40, 30, 10, 0],
+    "Long doc": [0, 0, 2, 8, 15, 55, 20],
 }
 
 TASK_PRESETS = {
@@ -2192,6 +3220,37 @@ def models_by_category() -> dict[str, list[Model]]:
             continue
         cats.setdefault(m.cat, []).append(m)
     return cats
+
+
+# Three top-level kinds used by the model picker tabs. Order is the tab order;
+# the first non-empty kind is the default active tab.
+MODEL_KINDS: tuple[tuple[str, str], ...] = (
+    ("llm", "LLM"),
+    ("embedding", "Embedding"),
+    ("asr", "ASR"),
+)
+
+
+def _model_kind(m: Model) -> str:
+    if m.is_realtime_only:
+        return "asr"
+    if m.is_embedding_model:
+        return "embedding"
+    return "llm"
+
+
+def models_by_kind() -> dict[str, dict[str, list[Model]]]:
+    """Models grouped first by kind (LLM/Embedding/ASR) then by catalog cat.
+
+    Used by the model picker to render one tab per kind, preserving the
+    sub-grouping (e.g. Mistral / Qwen / DeepSeek inside LLM) within each tab.
+    """
+    out: dict[str, dict[str, list[Model]]] = {kind: {} for kind, _ in MODEL_KINDS}
+    for m in MODELS.values():
+        if m.hidden:
+            continue
+        out[_model_kind(m)].setdefault(m.cat, []).append(m)
+    return out
 
 
 def gpus_by_vendor() -> dict[str, list[GPU]]:

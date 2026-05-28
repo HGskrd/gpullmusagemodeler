@@ -15,12 +15,21 @@ from data import (
     CLOUD_MODELS,
     CORPO_CLOUD_DEFAULT,
     DIST_PRESETS,
+    EMBEDDING_DOC_BUCKETS,
     INPUT_BUCKETS,
     OUTPUT_BUCKETS,
     BATCH_SIZES,
     TASK_PRESETS,
     DAY_SHAPES,
     DEFAULT_COUNTRY,
+    ASR_WER_LANGUAGE_LABELS,
+    ASR_WER_LANGUAGE_SOURCES,
+    ASR_WER_LANGUAGES,
+    ASR_WER_PLACEHOLDER,
+    PUBLISHED_ASR_WER,
+    EMBEDDING_QUALITY_PLACEHOLDER,
+    EMBEDDING_QUALITY_SOURCES,
+    PUBLISHED_EMBEDDING_QUALITY,
     normalize_precision,
     carbon_intensity_avg,
     corpo_cloud_models,
@@ -38,6 +47,7 @@ MARGINAL_RECOMMENDATION_LIMIT = 5
 
 INTER_NODE_COLLECTIVE_BW = 25e9
 DATA_BATCH_SIZES = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]  # Fixed to match BATCH_SIZES
+EMBEDDING_BATCH_SIZES = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
 USER_EXP_SWEEP = [
     1, 2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024,
 ]
@@ -111,6 +121,33 @@ class DataResult:
     rps: float
     tps: int
     prefill_frac: float
+
+
+@dataclass
+class EmbeddingResult:
+    rps: float
+    tps: int
+    vectors_per_second: int
+    output_mb_s: float
+    service_time: float
+    max_batch: int
+    seq_len: int
+    vectors_per_input: float
+    p50_seq_len: int = 0
+    p90_seq_len: int = 0
+    p99_seq_len: int = 0
+    output_bytes_per_input: float = 0.0
+
+
+@dataclass(frozen=True)
+class EmbeddingDocStats:
+    mean_seq_len: float
+    p50_seq_len: int
+    p90_seq_len: int
+    p99_seq_len: int
+    mean_vectors_per_input: float
+    mean_output_bytes_per_input: float
+    mean_scratch_bytes_per_input: float
 
 
 @dataclass
@@ -337,8 +374,18 @@ def dist_percentile(dist: list[int], buckets: list[Bucket], pct: float) -> int:
     return buckets[-1].length if buckets else 0
 
 
+def _aligned_dist(dist: list[int], buckets: list[Bucket]) -> list[int]:
+    values = []
+    for i in range(len(buckets)):
+        raw = dist[i] if i < len(dist) else 0
+        values.append(max(int(raw or 0), 0))
+    if not any(values) and values:
+        values[0] = 1
+    return values
+
+
 def dist_stats(dist: list[int], buckets: list[Bucket]) -> tuple[float, float]:
-    weights = normalize_dist(dist)
+    weights = normalize_dist(_aligned_dist(dist, buckets))
     mean = sum(bucket.length * weights[i] for i, bucket in enumerate(buckets))
     var = sum(((bucket.length - mean) ** 2) * weights[i] for i, bucket in enumerate(buckets))
     return mean, math.sqrt(max(var, 0.0))
@@ -577,7 +624,11 @@ def communication_breakdown(
         tp_cross_node=tp > g.node_size,
         pp_cross_node_boundaries=pp_cross,
         ep_advisory=m.is_moe and (tp * pp > g.node_size),
-        dcp_advisory=avg_seq >= LONG_CTX_DCP_SEQ and (tp > 1 or kv_duplication_groups(m, tp) > 1),
+        dcp_advisory=(
+            getattr(m, "embedding_profile", None) is None
+            and avg_seq >= LONG_CTX_DCP_SEQ
+            and (tp > 1 or kv_duplication_groups(m, tp) > 1)
+        ),
     )
 
 
@@ -747,6 +798,261 @@ def compute_prefill(
         rps=rps,
         max_batch=max_per_replica * dp,
     )
+
+
+def embedding_sequence_length(m: Model, requested_seq_len: int) -> int:
+    profile = getattr(m, "embedding_profile", None)
+    if profile is None:
+        return 0
+    max_len = max(int(profile.max_sequence_length or 0), 1)
+    return max(1, min(max(int(requested_seq_len or 0), 1), max_len))
+
+
+def embedding_vectors_per_input(m: Model, seq_len: int) -> int:
+    profile = getattr(m, "embedding_profile", None)
+    if profile is None:
+        return 0
+    if profile.supports_late_interaction:
+        max_vectors = int(profile.document_length or profile.max_sequence_length or seq_len)
+        token_vectors = max(1, min(max(int(seq_len), 1), max_vectors))
+        return token_vectors + (1 if profile.supports_single_vector else 0)
+    return 1
+
+
+def embedding_output_bytes_per_input(m: Model, seq_len: int) -> float:
+    profile = getattr(m, "embedding_profile", None)
+    if profile is None:
+        return 0.0
+    vectors = embedding_vectors_per_input(m, seq_len)
+    dim = int(profile.late_interaction_dim or profile.output_dim) if profile.supports_late_interaction else int(profile.output_dim)
+    return vectors * max(dim, 1) * max(float(profile.vector_bytes_per_elem), 0.25)
+
+
+def _embedding_weighted_sequences(
+    m: Model,
+    doc_dist: list[int],
+    buckets: list[Bucket] = EMBEDDING_DOC_BUCKETS,
+) -> list[tuple[float, int, Bucket]]:
+    values = _aligned_dist(doc_dist, buckets)
+    weights = normalize_dist(values)
+    return [
+        (weights[i], embedding_sequence_length(m, bucket.length), bucket)
+        for i, bucket in enumerate(buckets)
+        if weights[i] > 0
+    ]
+
+
+def _embedding_percentile(weighted_sequences: list[tuple[float, int, Bucket]], pct: float) -> int:
+    pct = min(max(pct, 0.0), 1.0)
+    cdf = 0.0
+    for share, seq_len, _bucket in weighted_sequences:
+        cdf += share
+        if pct <= cdf + 1e-9:
+            return seq_len
+    return weighted_sequences[-1][1] if weighted_sequences else 0
+
+
+def embedding_doc_stats(
+    m: Model,
+    doc_dist: list[int],
+    buckets: list[Bucket] = EMBEDDING_DOC_BUCKETS,
+    prec: str = "bf16",
+) -> EmbeddingDocStats:
+    weighted = _embedding_weighted_sequences(m, doc_dist, buckets)
+    if not weighted:
+        return EmbeddingDocStats(0.0, 0, 0, 0, 0.0, 0.0, 0.0)
+
+    mean_seq = sum(share * seq for share, seq, _bucket in weighted)
+    mean_vectors = sum(share * embedding_vectors_per_input(m, seq) for share, seq, _bucket in weighted)
+    mean_output = sum(share * embedding_output_bytes_per_input(m, seq) for share, seq, _bucket in weighted)
+    mean_scratch = sum(share * embedding_scratch_bytes_per_input(m, seq, prec) for share, seq, _bucket in weighted)
+    return EmbeddingDocStats(
+        mean_seq_len=mean_seq,
+        p50_seq_len=_embedding_percentile(weighted, 0.50),
+        p90_seq_len=_embedding_percentile(weighted, 0.90),
+        p99_seq_len=_embedding_percentile(weighted, 0.99),
+        mean_vectors_per_input=mean_vectors,
+        mean_output_bytes_per_input=mean_output,
+        mean_scratch_bytes_per_input=mean_scratch,
+    )
+
+
+def embedding_scratch_bytes_per_input(m: Model, seq_len: int, prec: str) -> float:
+    """Approximate inference scratch for one encoder item.
+
+    Embedding inference does not reserve decode KV slots. The remaining memory after
+    weights is instead used as a batch-sized activation/output work buffer. Flash attention
+    keeps the attention side close to linear memory, so this intentionally models a compact
+    forward buffer instead of training-style saved activations.
+    """
+    hidden = max(m.hidden_size, m.attention_query_head_count * max(m.head_dim, 1), 1)
+    bpe = m.kv_cache_bytes_per_elem(prec)
+    activation = seq_len * hidden * bpe * 4.0
+    return activation + embedding_output_bytes_per_input(m, seq_len)
+
+
+def compute_embedding(
+    m: Model,
+    strat: tuple[int, int, int],
+    bs: int,
+    seq_len: int,
+    g: GPU,
+    mu: float,
+    profiled_non_kv_gb: float,
+    prec: str,
+    eff: EfficiencyParams,
+) -> Optional[EmbeddingResult]:
+    if getattr(m, "embedding_profile", None) is None:
+        return None
+
+    tp, pp, dp = strat
+    seq = embedding_sequence_length(m, seq_len)
+    mem = compute_memory(m, tp, pp, g, mu, profiled_non_kv_gb, prec, eff)
+    if mem is None:
+        return None
+
+    pr = math.ceil(bs / max(dp, 1))
+    scratch_per = embedding_scratch_bytes_per_input(m, seq, prec)
+    max_per_replica = int(mem.kv_budget / scratch_per) if scratch_per > 0 else UNBOUNDED_BATCH
+    if pr > max_per_replica:
+        return None
+
+    ffn = 2 * m.active_params * pr * seq / max(pp, 1)
+    att = _prefill_attention_work(m, pr, seq, pp)
+    ct = (ffn + att) / (model_gpu_flops(g, m, prec) * max(tp, 1) * eff.comp_eff)
+
+    aw = _active_weight_bytes(m, prec)
+    mt = (aw / (max(tp, 1) * max(pp, 1))) / (g.effective_bw * eff.bw_eff)
+    output_time = (embedding_output_bytes_per_input(m, seq) * pr) / (g.effective_bw * eff.bw_eff)
+    comm = communication_breakdown(m, tp, pp, pr * seq, seq, g, eff)
+
+    t = (max(ct, mt) + output_time + comm.total) * (1 + eff.overhead * 1.2 + fixed_paged_oh(seq, eff, 0.20))
+    if t <= 0:
+        return None
+
+    rps = bs / t
+    vectors_per_input = embedding_vectors_per_input(m, seq)
+    output_bytes = embedding_output_bytes_per_input(m, seq)
+    output_bps = rps * output_bytes
+    return EmbeddingResult(
+        rps=round(rps * 100) / 100,
+        tps=round(rps * seq),
+        vectors_per_second=round(rps * vectors_per_input),
+        output_mb_s=round((output_bps / 1e6) * 100) / 100,
+        service_time=t,
+        max_batch=max_per_replica * max(dp, 1),
+        seq_len=seq,
+        vectors_per_input=vectors_per_input,
+        p50_seq_len=seq,
+        p90_seq_len=seq,
+        p99_seq_len=seq,
+        output_bytes_per_input=output_bytes,
+    )
+
+
+def compute_embedding_distribution(
+    m: Model,
+    strat: tuple[int, int, int],
+    bs: int,
+    doc_dist: list[int],
+    buckets: list[Bucket],
+    g: GPU,
+    mu: float,
+    profiled_non_kv_gb: float,
+    prec: str,
+    eff: EfficiencyParams,
+) -> Optional[EmbeddingResult]:
+    if getattr(m, "embedding_profile", None) is None:
+        return None
+
+    tp, pp, dp = strat
+    stats = embedding_doc_stats(m, doc_dist, buckets, prec)
+    if stats.mean_seq_len <= 0:
+        return None
+
+    mem = compute_memory(m, tp, pp, g, mu, profiled_non_kv_gb, prec, eff)
+    if mem is None:
+        return None
+
+    pr = math.ceil(bs / max(dp, 1))
+    max_per_replica = int(mem.kv_budget / stats.mean_scratch_bytes_per_input) if stats.mean_scratch_bytes_per_input > 0 else UNBOUNDED_BATCH
+    if pr > max_per_replica:
+        return None
+
+    ffn = 2 * m.active_params * pr * stats.mean_seq_len / max(pp, 1)
+    att = sum(
+        share * _prefill_attention_work(m, pr, seq, pp)
+        for share, seq, _bucket in _embedding_weighted_sequences(m, doc_dist, buckets)
+    )
+    ct = (ffn + att) / (model_gpu_flops(g, m, prec) * max(tp, 1) * eff.comp_eff)
+
+    aw = _active_weight_bytes(m, prec)
+    mt = (aw / (max(tp, 1) * max(pp, 1))) / (g.effective_bw * eff.bw_eff)
+    output_time = (stats.mean_output_bytes_per_input * pr) / (g.effective_bw * eff.bw_eff)
+    comm = communication_breakdown(m, tp, pp, pr * stats.mean_seq_len, stats.mean_seq_len, g, eff)
+
+    t = (max(ct, mt) + output_time + comm.total) * (
+        1 + eff.overhead * 1.2 + fixed_paged_oh(stats.mean_seq_len, eff, 0.20)
+    )
+    if t <= 0:
+        return None
+
+    rps = bs / t
+    output_bps = rps * stats.mean_output_bytes_per_input
+    return EmbeddingResult(
+        rps=round(rps * 100) / 100,
+        tps=round(rps * stats.mean_seq_len),
+        vectors_per_second=round(rps * stats.mean_vectors_per_input),
+        output_mb_s=round((output_bps / 1e6) * 100) / 100,
+        service_time=t,
+        max_batch=max_per_replica * max(dp, 1),
+        seq_len=round(stats.mean_seq_len),
+        vectors_per_input=stats.mean_vectors_per_input,
+        p50_seq_len=stats.p50_seq_len,
+        p90_seq_len=stats.p90_seq_len,
+        p99_seq_len=stats.p99_seq_len,
+        output_bytes_per_input=stats.mean_output_bytes_per_input,
+    )
+
+
+def compute_embedding_capacity(
+    m: Model,
+    strat: tuple[int, int, int],
+    seq_len: int,
+    g: GPU,
+    mu: float,
+    profiled_non_kv_gb: float,
+    prec: str,
+    eff: EfficiencyParams,
+) -> int:
+    result = compute_embedding(m, strat, max(strat[2], 1), seq_len, g, mu, profiled_non_kv_gb, prec, eff)
+    return result.max_batch if result else 0
+
+
+def compute_embedding_distribution_capacity(
+    m: Model,
+    strat: tuple[int, int, int],
+    doc_dist: list[int],
+    buckets: list[Bucket],
+    g: GPU,
+    mu: float,
+    profiled_non_kv_gb: float,
+    prec: str,
+    eff: EfficiencyParams,
+) -> int:
+    result = compute_embedding_distribution(
+        m,
+        strat,
+        max(strat[2], 1),
+        doc_dist,
+        buckets,
+        g,
+        mu,
+        profiled_non_kv_gb,
+        prec,
+        eff,
+    )
+    return result.max_batch if result else 0
 
 
 def compute_data(
@@ -1051,6 +1357,18 @@ def _batch_axis_sweep(capacities: list[int], fallback: list[int]) -> list[int]:
     return sorted(sweep)
 
 
+def _embedding_doc_dist_for_state(state) -> list[int]:
+    dist = getattr(state, "embedding_doc_dist", None)
+    if isinstance(dist, list) and len(dist) == len(EMBEDDING_DOC_BUCKETS):
+        return dist
+
+    seq_len = max(int(getattr(state, "task_il", 2048) or 2048), 1)
+    nearest = min(range(len(EMBEDDING_DOC_BUCKETS)), key=lambda i: abs(EMBEDDING_DOC_BUCKETS[i].length - seq_len))
+    fallback = [0] * len(EMBEDDING_DOC_BUCKETS)
+    fallback[nearest] = 100
+    return fallback
+
+
 def _iter_resolved_models(state):
     for am in state.models:
         if am.gpu_count <= 0:
@@ -1059,6 +1377,13 @@ def _iter_resolved_models(state):
         if gp is None:
             continue
         yield am, gp.gpu
+
+
+def _is_decode_pareto_model(model: Model) -> bool:
+    return (
+        getattr(model, "embedding_profile", None) is None
+        and getattr(model, "realtime_profile", None) is None
+    )
 
 
 def get_decode_bs(states: Optional[list] = None) -> list[int]:
@@ -1071,6 +1396,8 @@ def get_decode_bs(states: Optional[list] = None) -> list[int]:
     for state in states:
         eff = state.decode_efficiency
         for am in get_deployed(state, phase="decode"):
+            if not _is_decode_pareto_model(am.model):
+                continue
             gpu = am.gpu_spec
             if gpu is None:
                 continue
@@ -1120,6 +1447,32 @@ def get_realtime_bs(states: Optional[list] = None) -> list[int]:
     return _batch_axis_sweep(capacities, REALTIME_USER_SWEEP)
 
 
+def get_embedding_bs(states: Optional[list] = None) -> list[int]:
+    if not states:
+        return list(EMBEDDING_BATCH_SIZES)
+
+    capacities = []
+    for state in states:
+        doc_dist = _embedding_doc_dist_for_state(state)
+        for am, gpu in _iter_resolved_models(state):
+            if getattr(am.model, "embedding_profile", None) is None:
+                continue
+            capacities.append(
+                compute_embedding_distribution_capacity(
+                    am.model,
+                    (am.prefill_tp, am.prefill_pp, am.prefill_dp),
+                    doc_dist,
+                    EMBEDDING_DOC_BUCKETS,
+                    gpu,
+                    state.mu,
+                    state.profiled_non_kv_gb,
+                    am.prec,
+                    state.prefill_efficiency,
+                )
+            )
+    return _batch_axis_sweep(capacities, EMBEDDING_BATCH_SIZES)
+
+
 def get_data_bs(states: Optional[list] = None) -> list[int]:
     if not states:
         return list(DATA_BATCH_SIZES)
@@ -1127,6 +1480,8 @@ def get_data_bs(states: Optional[list] = None) -> list[int]:
     capacities = []
     for state in states:
         for am, gpu in _iter_resolved_models(state):
+            if getattr(am.model, "embedding_profile", None) is not None:
+                continue
             capacities.append(
                 compute_data_capacity(
                     am.model,
@@ -1156,6 +1511,8 @@ def get_processing_pareto_bs(states: Optional[list] = None) -> list[int]:
             in_len = avg_dist(preset["in"], INPUT_BUCKETS)
             out_len = avg_dist(preset["out"], OUTPUT_BUCKETS)
             for am, gpu in _iter_resolved_models(state):
+                if getattr(am.model, "embedding_profile", None) is not None:
+                    continue
                 capacities.append(
                     compute_data_capacity(
                         am.model,
@@ -1268,6 +1625,8 @@ def chart_decode(state, batch_sizes: Optional[list[int]] = None, panel_suffix: s
 
     for am in get_deployed(state, phase="decode"):
         model = am.model
+        if not _is_decode_pareto_model(model):
+            continue
         gpu = am.gpu_spec
         if gpu is None:
             continue
@@ -1312,6 +1671,8 @@ def chart_pareto(state, panel_suffix: str = "") -> list[dict]:
 
     for am in get_deployed(state, phase="decode"):
         model = am.model
+        if not _is_decode_pareto_model(model):
+            continue
         gpu = am.gpu_spec
         if gpu is None:
             continue
@@ -1358,6 +1719,8 @@ def chart_user_pareto(state, batch_sizes: Optional[list[int]] = None, panel_suff
 
     for am in get_deployed(state, phase="decode"):
         model = am.model
+        if not _is_decode_pareto_model(model):
+            continue
         gpu = am.gpu_spec
         if gpu is None:
             continue
@@ -1414,6 +1777,8 @@ def chart_aggregate(state, batch_sizes: Optional[list[int]] = None, panel_suffix
         total = 0
         for am in deployed:
             model = am.model
+            if getattr(model, "embedding_profile", None) is not None:
+                continue
             gpu = am.gpu_spec
             if gpu is None:
                 continue
@@ -1450,6 +1815,8 @@ def chart_aggregate(state, batch_sizes: Optional[list[int]] = None, panel_suffix
 
     for am in deployed:
         model = am.model
+        if getattr(model, "embedding_profile", None) is not None:
+            continue
         gpu = am.gpu_spec
         if gpu is None:
             continue
@@ -1492,6 +1859,8 @@ def chart_data_processing(state, batch_sizes: Optional[list[int]] = None, panel_
 
     for am, gpu in _iter_resolved_models(state):
         model = am.model
+        if getattr(model, "embedding_profile", None) is not None:
+            continue
         pts = []
         for bs in batch_sizes:
             result = compute_data(
@@ -1528,6 +1897,8 @@ def chart_data_processing(state, batch_sizes: Optional[list[int]] = None, panel_
         total = 0
         for am, gpu in _iter_resolved_models(state):
             model = am.model
+            if getattr(model, "embedding_profile", None) is not None:
+                continue
             result = compute_data(
                 model,
                 (am.prefill_tp, am.prefill_pp, am.prefill_dp),
@@ -1561,6 +1932,186 @@ def chart_data_processing(state, batch_sizes: Optional[list[int]] = None, panel_
     return datasets
 
 
+def chart_embedding_throughput(state, batch_sizes: Optional[list[int]] = None, panel_suffix: str = "") -> list[dict]:
+    datasets = []
+    is_b = panel_suffix != ""
+    batch_sizes = batch_sizes or EMBEDDING_BATCH_SIZES
+    doc_dist = _embedding_doc_dist_for_state(state)
+
+    for am, gpu in _iter_resolved_models(state):
+        model = am.model
+        profile = getattr(model, "embedding_profile", None)
+        if profile is None:
+            continue
+
+        stats = embedding_doc_stats(model, doc_dist, EMBEDDING_DOC_BUCKETS, am.prec)
+        pts = []
+        for bs in batch_sizes:
+            result = compute_embedding_distribution(
+                model,
+                (am.prefill_tp, am.prefill_pp, am.prefill_dp),
+                bs,
+                doc_dist,
+                EMBEDDING_DOC_BUCKETS,
+                gpu,
+                state.mu,
+                state.profiled_non_kv_gb,
+                am.prec,
+                state.prefill_efficiency,
+            )
+            if result is None:
+                pts.append({
+                    "x": bs,
+                    "y": None,
+                    "seq_len": round(stats.mean_seq_len),
+                    "p50_seq_len": stats.p50_seq_len,
+                    "p90_seq_len": stats.p90_seq_len,
+                    "p99_seq_len": stats.p99_seq_len,
+                    "mode": profile.mode_label,
+                    "max_batch": 0,
+                })
+                continue
+            pts.append({
+                "x": bs,
+                "y": result.rps,
+                "rps": result.rps,
+                "tps": result.tps,
+                "vectors_per_second": result.vectors_per_second,
+                "vectors_per_input": result.vectors_per_input,
+                "output_mb_s": result.output_mb_s,
+                "seq_len": result.seq_len,
+                "p50_seq_len": result.p50_seq_len,
+                "p90_seq_len": result.p90_seq_len,
+                "p99_seq_len": result.p99_seq_len,
+                "mode": profile.mode_label,
+                "max_batch": result.max_batch,
+            })
+
+        datasets.append({
+            "label": _label(am, model, panel_suffix, include_prefill=True),
+            "data": pts,
+            "borderColor": model.color,
+            "backgroundColor": model.color + "12",
+            "borderWidth": 1.5 if is_b else 2,
+            "borderDash": [5, 3] if is_b else [],
+            "fill": False,
+            "tension": 0.3,
+            "pointRadius": 2.5,
+            "spanGaps": False,
+            "_isEmbedding": True,
+        })
+    return datasets
+
+
+def chart_embedding_quality(state, panel_suffix: str = "") -> list[dict]:
+    """Peak docs/s vs published retrieval quality, one dot per embedding model.
+
+    Each model emits a single point — x = peak docs/s (max over the standard
+    batch sweep at the current workload distribution), y = catalog quality in
+    [0, 1]. Bytes-per-doc and vec/s are attached to the point so the front-end
+    can encode storage cost via dot size and surface multi-vector blowup in the
+    tooltip. Quality is static catalog data; see PUBLISHED_EMBEDDING_QUALITY in
+    data.py.
+    """
+    datasets = []
+    is_b = panel_suffix != ""
+    doc_dist = _embedding_doc_dist_for_state(state)
+
+    for am, gpu in _iter_resolved_models(state):
+        model = am.model
+        profile = getattr(model, "embedding_profile", None)
+        if profile is None:
+            continue
+        quality = PUBLISHED_EMBEDDING_QUALITY.get(model.key)
+        if quality is None:
+            continue
+
+        stats = embedding_doc_stats(model, doc_dist, EMBEDDING_DOC_BUCKETS, am.prec)
+
+        best = None
+        for bs in EMBEDDING_BATCH_SIZES:
+            result = compute_embedding_distribution(
+                model,
+                (am.prefill_tp, am.prefill_pp, am.prefill_dp),
+                bs,
+                doc_dist,
+                EMBEDDING_DOC_BUCKETS,
+                gpu,
+                state.mu,
+                state.profiled_non_kv_gb,
+                am.prec,
+                state.prefill_efficiency,
+            )
+            if result is None:
+                continue
+            if best is None or result.rps > best.rps:
+                best = result
+                best_bs = bs
+        if best is None:
+            continue
+
+        is_placeholder = model.key in EMBEDDING_QUALITY_PLACEHOLDER
+        bytes_per_doc = stats.mean_output_bytes_per_input
+        point = {
+            "x": best.rps,
+            "y": quality,
+            "docs_per_second": best.rps,
+            "tokens_per_second": best.tps,
+            "vectors_per_second": best.vectors_per_second,
+            "vectors_per_input": best.vectors_per_input,
+            "output_mb_s": best.output_mb_s,
+            "bytes_per_doc": bytes_per_doc,
+            "seq_len": best.seq_len,
+            "peak_batch": best_bs,
+            "max_batch": best.max_batch,
+            "mode": profile.mode_label,
+            "quality": quality,
+            "source": EMBEDDING_QUALITY_SOURCES.get(model.key, ""),
+            "placeholder": is_placeholder,
+        }
+
+        datasets.append({
+            "label": _label(am, model, panel_suffix, include_prefill=True),
+            "data": [point],
+            "borderColor": model.color,
+            "backgroundColor": (model.color + "12") if is_placeholder else (model.color + "AA"),
+            "borderWidth": 1.5 if is_b else 2,
+            "borderDash": [5, 3] if is_b else [],
+            "showLine": False,
+            "fill": False,
+            "tension": 0,
+            "pointRadius": 5,
+            "spanGaps": False,
+            "_isEmbeddingQuality": True,
+            "_placeholder": is_placeholder,
+        })
+    return datasets
+
+
+def embedding_quality_axis_range(datasets: list[dict], margin_ratio: float = 0.08, min_margin: float = 0.01) -> dict[str, float]:
+    values: list[float] = []
+    for dataset in datasets:
+        for point in dataset.get("data", []):
+            quality = point.get("quality", point.get("y"))
+            if isinstance(quality, (int, float)) and math.isfinite(float(quality)):
+                values.append(float(quality))
+
+    if not values:
+        return {"y_min": 0.0, "y_max": 1.0}
+
+    lo = min(values)
+    hi = max(values)
+    span = hi - lo
+    margin = max(span * max(margin_ratio, 0.0), max(min_margin, 0.0))
+    if span <= 1e-9:
+        margin = max(margin, 0.02)
+
+    return {
+        "y_min": round(max(0.0, lo - margin), 4),
+        "y_max": round(min(1.0, hi + margin), 4),
+    }
+
+
 def chart_processing_pareto(state, batch_sizes: Optional[list[int]] = None, panel_suffix: str = "") -> list[dict]:
     datasets = []
     is_b = panel_suffix != ""
@@ -1575,6 +2126,8 @@ def chart_processing_pareto(state, batch_sizes: Optional[list[int]] = None, pane
         for bs in batch_sizes:
             total_tps = 0
             for am, gpu in deployed:
+                if getattr(am.model, "embedding_profile", None) is not None:
+                    continue
                 result = compute_data(
                     am.model,
                     (am.prefill_tp, am.prefill_pp, am.prefill_dp),
@@ -1625,6 +2178,8 @@ def chart_user_experience(state, panel_suffix: str = "") -> list[dict]:
 
     for am, gpu in _iter_resolved_models(state):
         model = am.model
+        if getattr(model, "embedding_profile", None) is not None:
+            continue
         points = _user_exp_curve(
             model,
             (am.prefill_tp, am.prefill_pp, am.prefill_dp),
@@ -1726,6 +2281,80 @@ def chart_realtime_capacity(state, batch_sizes: Optional[list[int]] = None, pane
     return datasets
 
 
+def chart_asr_quality(state, panel_suffix: str = "") -> list[dict]:
+    """Max realtime streams vs published WER, one dot per language.
+
+    Concurrency is language-independent in the capacity model, so every dot
+    for a given model sits at the same height. WER is static catalog data;
+    see PUBLISHED_ASR_WER in data.py.
+    """
+    datasets = []
+    is_b = panel_suffix != ""
+
+    for am, gpu in _iter_resolved_models(state):
+        model = am.model
+        profile = getattr(model, "realtime_profile", None)
+        if profile is None:
+            continue
+        wer_by_language = PUBLISHED_ASR_WER.get(model.key)
+        if not wer_by_language:
+            continue
+
+        max_users = compute_realtime_max_users(
+            model,
+            (am.tp, am.pp, am.dp),
+            gpu,
+            state.mu,
+            state.profiled_non_kv_gb,
+            am.prec,
+            state.decode_efficiency,
+        )
+        if max_users <= 0:
+            continue
+
+        is_placeholder = model.key in ASR_WER_PLACEHOLDER
+        pts = []
+        sources = ASR_WER_LANGUAGE_SOURCES.get(model.key, {})
+        for language in ASR_WER_LANGUAGES:
+            wer = wer_by_language.get(language)
+            if wer is None:
+                continue
+            pts.append({
+                "x": wer,
+                "y": max_users,
+                "language": ASR_WER_LANGUAGE_LABELS.get(language, language),
+                "source": sources.get(language, ""),
+                "wer": wer,
+                "max_users": max_users,
+                "placeholder": is_placeholder,
+                "asr_mode": "streaming" if getattr(profile, "streaming", True) else "non-streaming",
+            })
+        if not pts:
+            continue
+        pts.sort(key=lambda p: p["x"])
+
+        datasets.append({
+            "label": _label(am, model, panel_suffix),
+            "data": pts,
+            "borderColor": model.color,
+            "backgroundColor": (model.color + "12") if is_placeholder else (model.color + "AA"),
+            "borderWidth": 1.5 if is_b else 2,
+            "borderDash": [5, 3] if is_b else [],
+            "showLine": True,
+            "fill": False,
+            "tension": 0,
+            "pointRadius": 5,
+            "spanGaps": False,
+            "_isAsrQuality": True,
+            "_placeholder": is_placeholder,
+            "_asrStreaming": bool(getattr(profile, "streaming", True)),
+            "_modelKey": model.key,
+            "_assignmentUid": am.uid,
+            "_seriesId": f"asrquality:{'b' if is_b else 'a'}:{am.uid}:{model.key}",
+        })
+    return datasets
+
+
 def compute_stats_data(state) -> dict:
     il, ol = state.task_il, state.task_ol
     batch_sizes = get_data_bs([state])
@@ -1736,6 +2365,8 @@ def compute_stats_data(state) -> dict:
         total = 0
         for am, gpu in _iter_resolved_models(state):
             model = am.model
+            if getattr(model, "embedding_profile", None) is not None:
+                continue
             result = compute_data(
                 model,
                 (am.prefill_tp, am.prefill_pp, am.prefill_dp),
@@ -1772,6 +2403,8 @@ def compute_user_exp_table(state) -> list[dict]:
     rows = []
     for am, gpu in _iter_resolved_models(state):
         model = am.model
+        if getattr(model, "embedding_profile", None) is not None:
+            continue
         points = _user_exp_curve(
             model,
             (am.prefill_tp, am.prefill_pp, am.prefill_dp),
@@ -2028,7 +2661,7 @@ def _build_model_supply(state, profile, prefix_hit_rate, peak_factor_eff) -> lis
     task_ol = int(getattr(state, "task_ol", profile["out_len"]))
     supply = []
     for am, gpu in _iter_resolved_models(state):
-        if getattr(am.model, "is_realtime_only", False):
+        if getattr(am.model, "is_realtime_only", False) or getattr(am.model, "embedding_profile", None) is not None:
             continue
         cap = compute_data_capacity(
             am.model,
@@ -2470,6 +3103,8 @@ def _marginal_gpu_recommendations(
     seen: set[tuple[int, int]] = set()
     rows: list[dict] = []
     for am, gpu in _iter_resolved_models(state):
+        if getattr(am.model, "embedding_profile", None) is not None:
+            continue
         key = (am.uid, am.gpu_uid)
         if key in seen:
             continue

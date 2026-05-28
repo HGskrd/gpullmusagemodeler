@@ -200,6 +200,6 @@
   {% include "partials/prefix_reuse.html" %}
 {% endwith %}
 
-{% if state.mode == 'data' %}
+{% if state.mode in ('data', 'embedding', 'embedquality') %}
   {% include "partials/task.html" %}
 {% endif %}

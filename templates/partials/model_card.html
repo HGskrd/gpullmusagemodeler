@@ -36,6 +36,27 @@
   {% for alert in info.precision_alerts %}
   <div class="warn">⚠ {{ alert }}</div>
   {% endfor %}
+  {% if m.is_embedding_model %}
+  {% set ep = m.embedding_profile %}
+  <div class="T" style="margin-bottom:3px;" title="{{ ep.note }} Source: {{ ep.source }}.">
+    {{ ep.mode_label }} · {{ ep.output_dim }}d{% if ep.late_interaction_dim %} / late {{ ep.late_interaction_dim }}d{% endif %} · max {{ ep.max_sequence_length|fmt_num }} tok{% if ep.storage_format %} · {{ ep.storage_format }} vectors{% endif %}
+  </div>
+  {% if info.embedding %}
+  <div class="T" style="margin-bottom:3px;">
+    Docs μ {{ info.embedding.seq_len|fmt_num }} tok · P50 {{ info.embedding.p50_seq_len|fmt_num }} · P90 {{ info.embedding.p90_seq_len|fmt_num }} · P99 {{ info.embedding.p99_seq_len|fmt_num }}
+  </div>
+  {% if info.embedding.doc_distribution %}
+  <div style="height:5px;border-radius:2px;overflow:hidden;display:flex;border:1px solid var(--b0);margin-bottom:3px;" title="Document-size distribution after model sequence caps.">
+    {% for bucket in info.embedding.doc_distribution %}
+      <div style="width:{{ bucket.share * 100 }}%;background:{{ bucket.color }};" title="{{ bucket.label }} tokens: {{ (bucket.share * 100)|round|int }}%{% if bucket.clipped_length != bucket.length %}, capped to {{ bucket.clipped_length|fmt_num }}{% endif %}"></div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <div class="T" style="margin-bottom:3px;">
+    {{ "%.1f"|format(info.embedding.vectors_per_input) }} vec/doc avg · {{ "%.1f"|format(info.embedding.output_kb_per_input) }} KB/doc avg
+  </div>
+  {% endif %}
+  {% endif %}
   {% if info.realtime %}
   <div class="T" style="margin-bottom:3px;" title="{{ info.realtime.profile.note }} Source: {{ info.realtime.profile.source }}.">
     {{ info.realtime.profile.label }} · target {{ info.realtime.profile.target_delay_ms }} ms · {{ "%.1f"|format(info.realtime.profile.tokens_per_second) }} tok/s per stream · independent of use-case mix
@@ -48,7 +69,7 @@
     {% endif %}
   </div>
   {% endif %}
-  {% if not m.is_realtime_only %}
+  {% if not m.is_realtime_only and not m.is_embedding_model %}
   <div class="T" style="margin-bottom:3px;display:flex;gap:6px;">
     <span class="tip" title="Confidence-adjusted routing quality. Raw Q {{ '%.2f'|format(m.quality) }} · benchmark confidence {{ '%.0f'|format(m.quality_confidence * 100) }}%.">Q&nbsp;{{ "%.2f"|format(effective_quality(m)) }}</span>
     <span class="tip" title="Token efficiency: 1.00× = 10M output tokens on AA's Intelligence Index reference; 0.50× = twice as verbose (thinks ~2× longer); 2.00× = half as many output tokens. Effective $/M scales the output side only, so long-prompt workloads are penalized less than pure generation workloads.">η&nbsp;{{ "%.2f"|format(m.token_efficiency) }}×</span>
@@ -91,6 +112,37 @@
   </div>
 
   {% if am.gpu_count > 0 and info.strats|length > 0 %}
+  {% if m.is_embedding_model %}
+  <div class="flex" style="margin-bottom:3px;gap:2px;">
+    <span class="T" style="min-width:28px;">E</span>
+    {% for tp_val, pp_val, dp_val in info.strats %}
+      {% set sel = (tp_val == am.prefill_tp and pp_val == am.prefill_pp and dp_val == am.prefill_dp) %}
+      {% if tp_val == 1 and pp_val == 1 and dp_val == 1 %}
+        {% set strat_label = 'TP' + tp_val|string %}
+      {% elif pp_val == 1 %}
+        {% set strat_label = 'TP' + tp_val|string + '×DP' + dp_val|string %}
+      {% elif dp_val == 1 %}
+        {% set strat_label = 'TP' + tp_val|string + '×PP' + pp_val|string %}
+      {% else %}
+        {% set strat_label = 'TP' + tp_val|string + '×PP' + pp_val|string + '×DP' + dp_val|string %}
+      {% endif %}
+      <button class="sm" style="padding:2px 4px;{{ 'background:'+m.color+';color:white;border-color:'+m.color+';' if sel else '' }}"
+              hx-post="/model/strat" hx-target="#main-content"
+              hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}","phase":"prefill","tp":"{{ tp_val }}","pp":"{{ pp_val }}","dp":"{{ dp_val }}"}'>
+        {{ strat_label }}
+      </button>
+    {% endfor %}
+  </div>
+  {% if info.prefill_comm_summary %}
+  <div class="T" style="margin-bottom:3px;">E {{ info.prefill_comm_summary }}</div>
+  {% endif %}
+  {% if info.prefill_exceeds_node %}
+  <div class="warn">⚠ Embedding TP spans nodes.</div>
+  {% endif %}
+  {% for alert in info.prefill_alerts %}
+  <div class="warn">⚠ {{ alert }}</div>
+  {% endfor %}
+  {% else %}
   <div class="flex" style="margin-bottom:3px;gap:2px;">
     <span class="T" style="min-width:28px;">P</span>
     {% for tp_val, pp_val, dp_val in info.strats %}
@@ -150,6 +202,7 @@
   {% for alert in info.decode_alerts %}
   <div class="warn">⚠ {{ alert }}</div>
   {% endfor %}
+  {% endif %}
   {% elif am.gpu_count > 0 %}
   <div style="font-size:10px;color:var(--red);">No feasible {{ PRECISION_LABELS[am.prec] }} topology within the current memory cap.</div>
   {% if info.alt_prec and info.alt_fits_now %}
@@ -176,20 +229,33 @@
     <div class="T">{{ PRECISION_LABELS[info.alt_prec] }} needs at least {{ info.alt_pool_min_gpu_count }} GPUs on this pool.</div>
     {% endif %}
   {% else %}
-    {% if info.prefill_fits %}
-    <div class="T" title="Prefill requested {{ "%.1f"|format(info.prefill_mem.requested / 1e9) }} GB · weights {{ "%.1f"|format(info.prefill_mem.weights / 1e9) }} GB · profiled non-KV {{ "%.1f"|format(info.prefill_mem.profiled_non_kv / 1e9) }} GB · KV reserved {{ "%.1f"|format(info.prefill_mem.kv_reserved / 1e9) }} GB">
-      P {{ info.prefill_kv_gb }} GB effective KV · ~{{ info.prefill_max_batch }} prompts at {{ info.prefill_probe_len|fmt_num }} tok
-    </div>
+    {% if m.is_embedding_model %}
+      {% if info.prefill_fits %}
+      <div class="T" title="Embedding requested {{ "%.1f"|format(info.prefill_mem.requested / 1e9) }} GB · weights {{ "%.1f"|format(info.prefill_mem.weights / 1e9) }} GB · profiled non-KV {{ "%.1f"|format(info.prefill_mem.profiled_non_kv / 1e9) }} GB · work buffer {{ "%.1f"|format(info.prefill_mem.kv_reserved / 1e9) }} GB">
+        E {{ info.prefill_kv_gb }} GB work buffer{% if info.embedding and info.embedding.sample %} · {{ info.embedding.sample.rps|fmt_num }} docs/s · {{ info.embedding.sample.tps|fmt_num }} tok/s{% endif %}
+      </div>
+      {% if info.embedding and info.embedding.sample and info.embedding.sample.output_mb_s > 0 %}
+      <div class="T">{{ info.embedding.sample.vectors_per_second|fmt_num }} vec/s · {{ "%.1f"|format(info.embedding.sample.output_mb_s) }} MB/s vector output</div>
+      {% endif %}
+      {% else %}
+      <div style="font-size:10px;color:var(--red);">Embedding pass does not fit within the requested memory cap.</div>
+      {% endif %}
     {% else %}
-    <div style="font-size:10px;color:var(--red);">Prefill does not fit within the requested memory cap.</div>
-    {% endif %}
+      {% if info.prefill_fits %}
+      <div class="T" title="Prefill requested {{ "%.1f"|format(info.prefill_mem.requested / 1e9) }} GB · weights {{ "%.1f"|format(info.prefill_mem.weights / 1e9) }} GB · profiled non-KV {{ "%.1f"|format(info.prefill_mem.profiled_non_kv / 1e9) }} GB · KV reserved {{ "%.1f"|format(info.prefill_mem.kv_reserved / 1e9) }} GB">
+        P {{ info.prefill_kv_gb }} GB effective KV · ~{{ info.prefill_max_batch }} prompts at {{ info.prefill_probe_len|fmt_num }} tok
+      </div>
+      {% else %}
+      <div style="font-size:10px;color:var(--red);">Prefill does not fit within the requested memory cap.</div>
+      {% endif %}
 
-    {% if info.decode_fits %}
-    <div class="T" title="Decode requested {{ "%.1f"|format(info.decode_mem.requested / 1e9) }} GB · weights {{ "%.1f"|format(info.decode_mem.weights / 1e9) }} GB · profiled non-KV {{ "%.1f"|format(info.decode_mem.profiled_non_kv / 1e9) }} GB · KV reserved {{ "%.1f"|format(info.decode_mem.kv_reserved / 1e9) }} GB">
-      D {{ info.decode_kv_gb }} GB effective KV · ~{{ info.decode_max_slots }} slots{% if m.is_mla %} (MLA compressed){% elif m.attention_query_heads %} (CCA compressed){% endif %}
-    </div>
-    {% else %}
-    <div style="font-size:10px;color:var(--red);">Decode does not fit within the requested memory cap.</div>
+      {% if info.decode_fits %}
+      <div class="T" title="Decode requested {{ "%.1f"|format(info.decode_mem.requested / 1e9) }} GB · weights {{ "%.1f"|format(info.decode_mem.weights / 1e9) }} GB · profiled non-KV {{ "%.1f"|format(info.decode_mem.profiled_non_kv / 1e9) }} GB · KV reserved {{ "%.1f"|format(info.decode_mem.kv_reserved / 1e9) }} GB">
+        D {{ info.decode_kv_gb }} GB effective KV · ~{{ info.decode_max_slots }} slots{% if m.is_mla %} (MLA compressed){% elif m.attention_query_heads %} (CCA compressed){% endif %}
+      </div>
+      {% else %}
+      <div style="font-size:10px;color:var(--red);">Decode does not fit within the requested memory cap.</div>
+      {% endif %}
     {% endif %}
   {% endif %}
 </div>

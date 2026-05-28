@@ -43,7 +43,7 @@
 
 {% include "partials/revenue_projection.html" %}
 
-<p class="T" style="margin-top:6px;">Roofline estimates · vLLM continuous batching · separate prefill and decode efficiency knobs · KV capacity anchored to requested per-GPU memory minus weights minus profiled non-KV runtime memory · MoE uses activated params for core compute plus an adjustable expert-imbalance penalty · APC/prefix-hit workload knob for prefill-sensitive views · explicit prefill/decode interference blend · paged-KV runtime overhead and residual KV slack modeled · cross-node TP warning.</p>
+<p class="T" style="margin-top:6px;">Roofline estimates · vLLM continuous batching · separate prefill, decode, and embedding encoder views · KV capacity anchored to requested per-GPU memory minus weights minus profiled non-KV runtime memory · MoE uses activated params for core compute plus an adjustable expert-imbalance penalty · APC/prefix-hit workload knob for prefill-sensitive views · explicit prefill/decode interference blend · paged-KV runtime overhead and residual KV slack modeled · cross-node TP warning.</p>
 
 <details class="method-note">
   <summary class="T">Calibration note</summary>
@@ -554,6 +554,176 @@ function renderChart(data) {
     });
     return;
   }
+
+  if (data.mode === 'asrquality') {
+    const fmtWer = v => `${Number(v).toFixed(1)}%`;
+    chart.setOption({
+      ...baseOption(theme, params => {
+        const raw = params.data?.raw;
+        if (!raw) return '';
+        const isStreaming = raw.asr_mode !== 'non-streaming';
+        const markerStyle = isStreaming
+          ? `border-radius:50%;background:${params.color};`
+          : `transform:rotate(45deg);background:${params.color};`;
+        let html = axisHeader(theme, 'WER', `${fmtWer(raw.wer)} · ${raw.language || 'Language'}`);
+        html += `<div style="display:flex;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
+          `<span style="display:inline-block;width:10px;height:10px;${markerStyle}flex-shrink:0;"></span>` +
+          `<span style="flex:1;color:${theme.text};">${params.seriesName}</span>` +
+          `<span style="margin-left:8px;font-weight:600;color:${theme.text};">${fmtBatch(Number(raw.max_users))} streams</span>` +
+          `</div>`;
+        html += `<div style="margin-top:5px;font-size:10px;color:${theme.tc};">${isStreaming ? 'Streaming ASR' : 'Non-streaming ASR'}</div>`;
+        if (raw.source) html += `<div style="margin-top:5px;font-size:10px;color:${theme.tc};">${raw.source}</div>`;
+        if (raw.placeholder) html += `<div style="margin-top:5px;font-size:10px;color:var(--amber);">Placeholder WER - not yet sourced</div>`;
+        return html;
+      }, 'item'),
+      legend: {
+        show: true, type: 'scroll', top: 0, left: 8, right: 8, height: 24,
+        icon: 'roundRect', itemWidth: 16, itemHeight: 5,
+        textStyle: { color: theme.tc, fontFamily: theme.fontFamily, fontSize: 10 },
+        pageIconColor: theme.tc,
+      },
+      grid: { top: 34, right: 22, bottom: 48, left: 22, containLabel: true },
+      xAxis: axisCommon(theme, 'WER % (lower is better)', fmtWer, {
+        type: 'value',
+        min: 0,
+        nameGap: 30,
+      }),
+      yAxis: axisCommon(theme, 'Max concurrent streams @ ≥1× realtime', v => fmtBatch(Number(v)), {
+        type: 'log',
+        min: 1,
+        nameGap: 52,
+      }),
+      series: (data.datasets || []).map((ds, idx) => {
+        const placeholder = Boolean(ds._placeholder);
+        const isStreaming = ds._asrStreaming !== false;
+        return {
+          id: ds._seriesId || `asrquality-${idx}`,
+          name: ds.label,
+          type: 'line',
+          showSymbol: true,
+          symbol: isStreaming ? 'circle' : 'diamond',
+          symbolSize: isStreaming ? 11 : 12,
+          data: (ds.data || []).map(p => ({ value: [Number(p.x), Number(p.y)], raw: p })),
+          lineStyle: { color: ds.borderColor, width: Number(ds.borderWidth || 2), type: dashStyle(ds.borderDash), opacity: 0.55 },
+          itemStyle: placeholder
+            ? { color: 'transparent', borderColor: ds.borderColor, borderWidth: 2 }
+            : { color: ds.borderColor, borderColor: 'rgba(255,255,255,0.75)', borderWidth: 1.5 },
+          emphasis: { focus: 'series', symbolSize: 14 },
+          blur: { lineStyle: { opacity: 0.08 }, itemStyle: { opacity: 0.15 } },
+        };
+      }),
+    });
+    return;
+  }
+
+  if (data.mode === 'embedquality') {
+    const fmtQuality = v => Number(v).toFixed(2);
+    const qualityMin = Number.isFinite(Number(data.y_min)) ? Number(data.y_min) : 0;
+    const qualityMax = Number.isFinite(Number(data.y_max)) ? Number(data.y_max) : 1;
+    const fmtBytes = v => {
+      const n = Number(v);
+      if (!isFinite(n) || n <= 0) return '0 B';
+      if (n >= 1e9) return (n / 1e9).toFixed(2) + ' GB';
+      if (n >= 1e6) return (n / 1e6).toFixed(2) + ' MB';
+      if (n >= 1e3) return (n / 1e3).toFixed(1) + ' kB';
+      return Math.round(n) + ' B';
+    };
+    // Dot size encodes bytes-per-doc. Sqrt scaling so area scales with cost
+    // without late-interaction dots dwarfing single-vector ones off-screen.
+    const dotSize = bytes => {
+      const n = Math.max(Number(bytes) || 0, 0);
+      return Math.max(8, Math.min(32, 8 + Math.sqrt(n / 100)));
+    };
+    chart.setOption({
+      ...baseOption(theme, params => {
+        const raw = params.data?.raw;
+        if (!raw) return '';
+        let html = axisHeader(theme, 'Peak throughput', `${fmtRate(Number(raw.docs_per_second))} docs/s`);
+        html += `<div style="display:flex;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
+          `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${params.color};flex-shrink:0;"></span>` +
+          `<span style="flex:1;color:${theme.text};">${params.seriesName}</span>` +
+          `<span style="margin-left:8px;font-weight:600;color:${theme.text};">quality ${fmtQuality(raw.quality)}</span>` +
+          `</div>`;
+        const vpi = Number(raw.vectors_per_input || 1);
+        const multiVec = vpi > 1 ? ` · ${vpi.toLocaleString()} vec/doc → ${fmtRate(Number(raw.vectors_per_second || 0))} vec/s` : '';
+        html += `<div style="margin-top:4px;font-size:10px;color:${theme.tc};">` +
+          `${fmtBytes(raw.bytes_per_doc)} / doc · ${Number(raw.output_mb_s || 0).toFixed(1)} MB/s output${multiVec}` +
+          `</div>`;
+        html += `<div style="font-size:10px;color:${theme.tc};">` +
+          `peak batch ${fmtBatch(Number(raw.peak_batch))} · seq ${Number(raw.seq_len || 0).toLocaleString()} tok · ${raw.mode || ''}` +
+          `</div>`;
+        if (raw.source) html += `<div style="margin-top:5px;font-size:10px;color:${theme.tc};">${raw.source}</div>`;
+        if (raw.placeholder) html += `<div style="margin-top:5px;font-size:10px;color:var(--amber);">Placeholder quality - not yet sourced</div>`;
+        return html;
+      }, 'item'),
+      legend: {
+        show: true, type: 'scroll', top: 0, left: 8, right: 8, height: 24,
+        icon: 'circle', itemWidth: 10, itemHeight: 10,
+        textStyle: { color: theme.tc, fontFamily: theme.fontFamily, fontSize: 10 },
+        pageIconColor: theme.tc,
+      },
+      grid: { top: 34, right: 22, bottom: 48, left: 22, containLabel: true },
+      xAxis: axisCommon(theme, 'Peak docs/sec (higher is better)', fmtRate, {
+        type: 'log',
+        nameGap: 30,
+      }),
+      yAxis: axisCommon(theme, 'Retrieval quality (higher is better)', fmtQuality, {
+        type: 'value',
+        min: qualityMin,
+        max: qualityMax,
+        nameGap: 38,
+      }),
+      series: (() => {
+        const modelSeries = (data.datasets || []).map(ds => {
+          const placeholder = Boolean(ds._placeholder);
+          return {
+            name: ds.label,
+            type: 'scatter',
+            symbol: 'circle',
+            data: (ds.data || []).map(p => ({
+              value: [Number(p.x), Number(p.y)],
+              raw: p,
+              symbolSize: dotSize(p.bytes_per_doc),
+            })),
+            itemStyle: placeholder
+              ? { color: 'transparent', borderColor: ds.borderColor, borderWidth: 2 }
+              : { color: ds.borderColor, borderColor: 'rgba(255,255,255,0.75)', borderWidth: 1.5 },
+            emphasis: { focus: 'series', scale: 1.2 },
+            blur: { itemStyle: { opacity: 0.15 } },
+          };
+        });
+        // Pareto frontier: a point (x, y) dominates another if it has both higher
+        // docs/s and higher quality. Sort by x descending, keep points whose y
+        // strictly exceeds the running max — those are non-dominated.
+        const allPoints = [];
+        (data.datasets || []).forEach(ds => (ds.data || []).forEach(p => {
+          const x = Number(p.x), y = Number(p.y);
+          if (Number.isFinite(x) && Number.isFinite(y)) allPoints.push([x, y]);
+        }));
+        allPoints.sort((a, b) => b[0] - a[0]);
+        const frontier = [];
+        let bestY = -Infinity;
+        for (const pt of allPoints) {
+          if (pt[1] > bestY) { frontier.push(pt); bestY = pt[1]; }
+        }
+        frontier.reverse(); // draw left-to-right
+        if (frontier.length >= 2) {
+          modelSeries.push({
+            name: 'Pareto frontier',
+            type: 'line',
+            data: frontier.map(([x, y]) => ({ value: [x, y] })),
+            showSymbol: false,
+            lineStyle: { color: theme.tc, width: 1.25, type: 'dashed', opacity: 0.7 },
+            tooltip: { show: false },
+            silent: true,
+            z: 1,
+          });
+        }
+        return modelSeries;
+      })(),
+    });
+    return;
+  }
 }
 
 /* Internal-market hourly utilization charts (one ECharts instance per panel). */
@@ -953,7 +1123,6 @@ document.body.addEventListener('htmx:configRequest', e => {
 
 document.body.addEventListener('htmx:beforeRequest', e => {
   const source = e.detail.elt;
-  if (source?.closest?.('.picker')) closePicker();
   markFastRemove(source);
 });
 

@@ -1,6 +1,46 @@
-{# Task profile panel for data processing mode #}
+{# Task profile panel for data processing and embedding modes #}
 <div class="panel">
-  <h2>Task profile</h2>
+  {% set is_embedding_workload = state.mode in ('embedding', 'embedquality') %}
+  <h2>{{ 'Embedding profile' if is_embedding_workload else 'Task profile' }}</h2>
+  {% if is_embedding_workload %}
+  {% set dist = state.embedding_doc_dist %}
+  {% set buckets = EMBEDDING_DOC_BUCKETS %}
+  {% set norm = normalize_dist(dist) %}
+  <div class="flex" style="margin-bottom:4px;">
+    {% for tk in EMBEDDING_DOC_PRESETS.keys() %}
+    <button class="sm"
+            style="{{ 'background:var(--fg0);color:var(--bg0);border-color:var(--fg0);' if state.embedding_doc_pre == tk else '' }}"
+            hx-post="/task/preset" hx-target="#main-content"
+            hx-vals='{"panel":"{{ panel }}","key":"{{ tk }}"}'>{{ tk }}</button>
+    {% endfor %}
+  </div>
+
+  {% for b in buckets %}
+    {% set i = loop.index0 %}
+    <div style="display:flex;align-items:center;gap:4px;margin-bottom:1px;">
+      <span class="M" style="font-size:9px;color:var(--fg1);min-width:28px;text-align:right;">{{ b.label }}</span>
+      <input type="range" min="0" max="100" value="{{ dist[i] }}" style="flex:1;"
+             hx-post="/dist/slide" hx-target="#main-content"
+             hx-trigger="change"
+             hx-vals='{"panel":"{{ panel }}","kind":"embedding_doc","index":"{{ i }}"}'
+             name="value" />
+      <span class="M" style="font-size:9px;font-weight:500;min-width:24px;">{{ (norm[i] * 100)|round|int }}%</span>
+    </div>
+  {% endfor %}
+
+  <div style="height:5px;border-radius:2px;overflow:hidden;display:flex;border:1px solid var(--b0);margin-top:2px;">
+    {% for b in buckets %}
+      {% set i = loop.index0 %}
+      <div style="width:{{ norm[i] * 100 }}%;background:{{ b.color }};transition:width .15s;"></div>
+    {% endfor %}
+  </div>
+  <div class="T" style="margin-top:1px;">
+    Mean {{ avg_dist(dist, buckets)|fmt_num }} tok ·
+    P50 {{ dist_percentile(dist, buckets, 0.5)|fmt_num }} ·
+    P90 {{ dist_percentile(dist, buckets, 0.9)|fmt_num }} ·
+    P99 {{ dist_percentile(dist, buckets, 0.99)|fmt_num }}
+  </div>
+  {% else %}
   <div class="flex" style="margin-bottom:4px;">
     {% for tk, tv in TASK_PRESETS.items() %}
     <button class="sm"
@@ -32,4 +72,5 @@
            data-live-format="log2-tok" />
     <span class="M" id="task-out-val-{{ panel }}" style="font-size:10px;min-width:44px;">{{ "{:,}".format(state.task_ol) }}</span>
   </div>
+  {% endif %}
 </div>

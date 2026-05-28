@@ -13,6 +13,8 @@ from data import (
     GPUS,
     MODELS,
     DIST_PRESETS,
+    EMBEDDING_DOC_BUCKETS,
+    EMBEDDING_DOC_PRESETS,
     TASK_PRESETS,
     INPUT_BUCKETS,
     OUTPUT_BUCKETS,
@@ -29,7 +31,9 @@ from data import (
     PRECISIONS,
     PRECISION_LABELS,
     PRECISION_DESCRIPTIONS,
+    MODEL_KINDS,
     models_by_category,
+    models_by_kind,
     gpu_cards_by_vendor,
     gpus_by_vendor,
     required_quality,
@@ -38,8 +42,11 @@ from data import (
 )
 from calc import (
     avg_dist,
+    chart_embedding_quality,
+    embedding_quality_axis_range,
     chart_processing_pareto,
     chart_realtime_capacity,
+    chart_asr_quality,
     chart_user_pareto,
     compute_revenue_projection,
     get_decode_bs,
@@ -58,6 +65,7 @@ from state import (
     VISIBLE_PLOT_MODES,
     add_gpu,
     add_model,
+    add_models,
     add_project,
     add_use_case_def,
     auto_exclude_model,
@@ -380,6 +388,8 @@ def _template_context() -> dict:
         "GPUS": GPUS,
         "MODELS": MODELS,
         "DIST_PRESETS": DIST_PRESETS,
+        "EMBEDDING_DOC_BUCKETS": EMBEDDING_DOC_BUCKETS,
+        "EMBEDDING_DOC_PRESETS": EMBEDDING_DOC_PRESETS,
         "TASK_PRESETS": TASK_PRESETS,
         "DAY_SHAPES": DAY_SHAPES,
         "CLOUD_MODELS": CLOUD_MODELS,
@@ -521,6 +531,14 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
             gp = state.find_gpu(am.gpu_uid)
             gpu_name = gp.gpu.name if gp else "No GPU pool"
             prec = PRECISION_LABELS.get(am.prec, am.prec.upper())
+            if model.is_embedding_model:
+                ep = model.embedding_profile
+                lines.append(
+                    f"- {model.name}: {model.size_label}, {prec}, {ep.mode_label}, {ep.output_dim}d"
+                    f"{f' / late {ep.late_interaction_dim}d' if ep.late_interaction_dim else ''}; "
+                    f"{gpu_name} x{am.gpu_count}; E {strategy_label(am.prefill_tp, am.prefill_pp, am.prefill_dp)}"
+                )
+                continue
             moe = ""
             if model.is_moe:
                 moe = f", {model.active_params / 1e9:.1f}B active"
@@ -864,7 +882,30 @@ def model_add():
             return jsonify({"error": "Invalid model key"}), 400
             
         add_model(s, model_key)
-        return _tracked_htmx_response("model_add", s)
+        return _htmx_response(s)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/model/add-many", methods=["POST"])
+def model_add_many():
+    try:
+        s = _request_state()
+        if s is None:
+            return _htmx_response()
+        model_keys = [key for key in request.form.getlist("model_key") if key]
+        if not model_keys and request.form.get("model_keys"):
+            model_keys = [key.strip() for key in request.form.get("model_keys", "").split(",") if key.strip()]
+        if not model_keys:
+            return jsonify({"error": "No model keys supplied"}), 400
+        invalid = [key for key in model_keys if key not in MODELS or MODELS[key].hidden]
+        if invalid:
+            return jsonify({"error": "Invalid model key"}), 400
+
+        add_models(s, model_keys)
+        return _htmx_response(s)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
@@ -896,7 +937,7 @@ def model_auto_exclude():
             return _htmx_response()
         uid = int(request.form.get("uid"))
         auto_exclude_model(s, uid)
-        return _tracked_htmx_response("model_auto_exclude", s)
+        return _htmx_response(s)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -909,7 +950,7 @@ def model_auto_reallow():
             return _htmx_response()
         model_key = request.form.get("key", "")
         auto_reallow_model(s, model_key)
-        return _tracked_htmx_response("model_auto_reallow", s)
+        return _htmx_response(s)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -922,7 +963,7 @@ def model_remove():
             return _htmx_response()
         uid = int(request.form.get("uid"))
         remove_model(s, uid)
-        return _tracked_htmx_response("model_remove", s)
+        return _htmx_response(s)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -939,7 +980,7 @@ def model_prec():
             return jsonify({"error": "Invalid precision"}), 400
             
         set_model_prec(s, uid, prec)
-        return _tracked_htmx_response("model_prec", s)
+        return _htmx_response(s)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -956,7 +997,7 @@ def model_count():
             return jsonify({"error": "Count cannot be negative"}), 400
             
         set_model_gpu_count(s, uid, count)
-        return _tracked_htmx_response("model_count", s)
+        return _htmx_response(s)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -989,7 +1030,7 @@ def model_strat():
             return jsonify({"error": "Invalid strategy for this model/GPU combination"}), 400
             
         set_model_strat(s, uid, tp, pp, dp, phase)
-        return _tracked_htmx_response("model_strat", s)
+        return _htmx_response(s)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1003,7 +1044,7 @@ def model_gpu_pool():
         uid = int(request.form.get("uid"))
         gpu_uid = int(request.form.get("gpu_uid"))
         set_model_gpu_pool(s, uid, gpu_uid)
-        return _tracked_htmx_response("model_gpu_pool", s)
+        return _htmx_response(s)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1338,6 +1379,16 @@ def task_preset():
         if s is None:
             return _htmx_response()
         key = request.form.get("key")
+        if getattr(s, "mode", "") in ("embedding", "embedquality"):
+            preset = EMBEDDING_DOC_PRESETS.get(key)
+            if preset:
+                s.embedding_doc_dist = list(preset)
+                s.embedding_doc_pre = key
+                s.task_il = avg_dist(s.embedding_doc_dist, EMBEDDING_DOC_BUCKETS)
+                s.task_ol = 0
+                retune_models(s, preserve_existing=False)
+            return _tracked_htmx_response("task_preset", s)
+
         tp = TASK_PRESETS.get(key)
         if tp:
             s.task_il = tp["i"]
@@ -1381,12 +1432,24 @@ def chart_data():
                 datasets += chart_processing_pareto(sb, batch_sizes, " (B)")
             return jsonify({"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]})
 
+        if mode == "asrquality":
+            datasets = chart_asr_quality(sa)
+            if sb:
+                datasets += chart_asr_quality(sb, " (B)")
+            return jsonify({"type": "scatter", "datasets": datasets, "mode": mode})
+
         if mode == "realtime":
             batch_sizes = get_realtime_bs(states)
             datasets = chart_realtime_capacity(sa, batch_sizes)
             if sb:
                 datasets += chart_realtime_capacity(sb, batch_sizes, " (B)")
             return jsonify({"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]})
+
+        if mode == "embedquality":
+            datasets = chart_embedding_quality(sa)
+            if sb:
+                datasets += chart_embedding_quality(sb, " (B)")
+            return jsonify({"type": "scatter", "datasets": datasets, "mode": mode, **embedding_quality_axis_range(datasets)})
 
         batch_sizes = get_decode_bs(states)
         datasets = chart_user_pareto(sa, batch_sizes)
@@ -1414,7 +1477,18 @@ def picker_gpu():
 
 @app.route("/picker/model")
 def picker_model():
-    return render_template("partials/model_picker.html", panel=request.args.get("panel", "A"), models_by_category=models_by_category())
+    kind_groups = models_by_kind()
+    valid_kind_keys = {kind_key for kind_key, _ in MODEL_KINDS}
+    active_kind = request.args.get("kind")
+    if active_kind not in valid_kind_keys or not kind_groups.get(active_kind):
+        active_kind = next((kind_key for kind_key, _ in MODEL_KINDS if kind_groups.get(kind_key)), None)
+    return render_template(
+        "partials/model_picker.html",
+        panel=request.args.get("panel", "A"),
+        models_by_kind=kind_groups,
+        MODEL_KINDS=MODEL_KINDS,
+        active_kind=active_kind,
+    )
 
 
 @app.route("/picker/project")
@@ -1509,6 +1583,6 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 if __name__ == "__main__":
     host = os.environ.get("HOST") or os.environ.get("FLASK_RUN_HOST") or "0.0.0.0"
-    port = int(os.environ.get("PORT") or os.environ.get("FLASK_RUN_PORT") or "5014")
+    port = int(os.environ.get("PORT") or os.environ.get("FLASK_RUN_PORT") or "5018")
     debug = _env_bool("FLASK_DEBUG", _env_bool("DEBUG", False))
     app.run(host=host, port=port, debug=debug)

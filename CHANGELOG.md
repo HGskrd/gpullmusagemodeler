@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2026-05-28
+
+### Added
+
+- Added open/self-hosted ASR catalog entries for NVIDIA Nemotron/Parakeet, Kyutai STT, Moonshine Streaming, Fun-ASR-Nano, IBM Granite Speech, and Parakeet TDT.
+- Added embedding model catalog entries, document-size workload presets, embedding throughput math, and embedding model cards for dense, hybrid, and late-interaction retrieval models.
+- Added Laguna M.1 225B-A23B to the Poolside model catalog with planner proxy assumptions and regression coverage.
+- Added model picker tabs for LLM, embedding, and ASR catalogs, including add-all actions for grouped model additions.
+
+### Changed
+
+- Updated visible plot modes to focus ASR and embedding analysis on quality-vs-capacity views.
+- Updated the ASR quality plot to use different point shapes for streaming versus non-streaming ASR profiles.
+- Updated memory bars, task panels, and model strategy controls to show embedding encoder workloads separately from decode and prefill paths.
+
 ## 2026-05-26
 
 ### Added

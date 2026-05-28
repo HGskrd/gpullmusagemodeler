@@ -1,9 +1,26 @@
 import copy
 import unittest
 
-from calc import chart_realtime_capacity, compute_realtime_capacity, compute_revenue_projection
-from data import DIST_PRESETS, MODELS
-from state import GpuPool, ModelAssignment, PlannerState, Project, retune_models
+from calc import (
+    chart_asr_quality,
+    chart_embedding_quality,
+    chart_realtime_capacity,
+    chart_user_pareto,
+    compute_realtime_capacity,
+    compute_revenue_projection,
+    embedding_quality_axis_range,
+    get_decode_bs,
+)
+from data import ASR_WER_PLACEHOLDER, DIST_PRESETS, MODELS, PUBLISHED_ASR_WER
+from state import (
+    GpuPool,
+    ModelAssignment,
+    PlannerState,
+    Project,
+    VISIBLE_PLOT_MODES,
+    normalize_plot_mode,
+    retune_models,
+)
 
 
 class RealtimeCapacityTests(unittest.TestCase):
@@ -60,6 +77,148 @@ class RealtimeCapacityTests(unittest.TestCase):
         self.assertEqual(point["users"], 8)
         self.assertGreater(point["required_tps"], 0.0)
         self.assertIn("max_users", point)
+
+    def test_user_pareto_excludes_asr_models(self):
+        text_only = PlannerState(
+            gpus=[GpuPool(1, "H100", 2, cost_per_gpu_hour=1.0)],
+            models=[ModelAssignment(3, "q08", 1, 1, 1, 1, "bf16")],
+        )
+        mixed = PlannerState(
+            gpus=[GpuPool(1, "H100", 2, cost_per_gpu_hour=1.0)],
+            models=[
+                ModelAssignment(2, "voxtral-realtime-mini-4b", 1, 1, 1, 1, "bf16"),
+                ModelAssignment(3, "q08", 1, 1, 1, 1, "bf16"),
+            ],
+        )
+        retune_models(text_only, preserve_existing=False)
+        retune_models(mixed, preserve_existing=False)
+
+        batch_sizes = get_decode_bs([mixed])
+        datasets = chart_user_pareto(mixed, batch_sizes)
+        labels = [dataset["label"] for dataset in datasets]
+
+        self.assertEqual(batch_sizes, get_decode_bs([text_only]))
+        self.assertEqual(len(datasets), 1)
+        self.assertTrue(any("Qwen 3.5 0.8B" in label for label in labels))
+        self.assertFalse(any("Voxtral" in label for label in labels))
+
+    def test_visible_asr_view_is_quality_max_streams_plot(self):
+        visible_modes = [mode for mode, _label in VISIBLE_PLOT_MODES]
+
+        self.assertNotIn("realtime", visible_modes)
+        self.assertIn("asrquality", visible_modes)
+        self.assertEqual(normalize_plot_mode("realtime"), "asrquality")
+
+    def test_visible_embedding_view_is_quality_plot_only(self):
+        visible_modes = [mode for mode, _label in VISIBLE_PLOT_MODES]
+
+        self.assertNotIn("embedding", visible_modes)
+        self.assertIn("embedquality", visible_modes)
+        self.assertEqual(normalize_plot_mode("embedding"), "embedquality")
+
+    def test_asr_quality_chart_uses_sourced_wer_points(self):
+        new_asr_models = [
+            "nvidia-nemotron-speech-streaming-0.6b",
+            "nvidia-parakeet-unified-0.6b",
+            "nvidia-parakeet-realtime-eou-120m",
+            "nvidia-multitalker-parakeet-streaming-0.6b",
+            "kyutai-stt-1b-en-fr",
+            "kyutai-stt-2.6b-en",
+            "moonshine-streaming-tiny",
+            "moonshine-streaming-small",
+            "moonshine-streaming-medium",
+            "fun-asr-nano-2512",
+            "granite-4.0-1b-speech",
+            "nvidia-parakeet-tdt-0.6b-v3",
+        ]
+        state = PlannerState(
+            gpus=[GpuPool(1, "H100", 2, cost_per_gpu_hour=1.0)],
+            models=[
+                ModelAssignment(2, "voxtral-realtime-mini-4b", 1, 1, 1, 1, "bf16"),
+                ModelAssignment(3, "mimo-v2.5-asr", 1, 1, 1, 1, "bf16"),
+                *[
+                    ModelAssignment(10 + idx, key, 1, 1, 1, 1, "bf16")
+                    for idx, key in enumerate(new_asr_models)
+                ],
+            ],
+        )
+        retune_models(state, preserve_existing=False)
+
+        datasets = chart_asr_quality(state)
+
+        self.assertEqual(ASR_WER_PLACEHOLDER, frozenset({
+            "kyutai-stt-1b-en-fr",
+            "fun-asr-nano-2512",
+        }))
+        self.assertEqual(PUBLISHED_ASR_WER["voxtral-realtime-mini-4b"]["en"], 4.90)
+        self.assertEqual(PUBLISHED_ASR_WER["voxtral-realtime-mini-4b"]["fr"], 7.92)
+        self.assertEqual(PUBLISHED_ASR_WER["mimo-v2.5-asr"]["en"], 5.73)
+        self.assertNotIn("fr", PUBLISHED_ASR_WER["mimo-v2.5-asr"])
+        self.assertEqual(PUBLISHED_ASR_WER["nvidia-parakeet-tdt-0.6b-v3"]["fr"], 5.42)
+        self.assertEqual(PUBLISHED_ASR_WER["granite-4.0-1b-speech"]["fr"], 7.15)
+        self.assertEqual(PUBLISHED_ASR_WER["moonshine-streaming-medium"]["en"], 6.65)
+
+        seen_keys = {ds["_modelKey"] for ds in datasets}
+        self.assertIn("voxtral-realtime-mini-4b", seen_keys)
+        self.assertIn("mimo-v2.5-asr", seen_keys)
+        for key in new_asr_models:
+            self.assertIn(key, seen_keys)
+
+        self.assertFalse(next(ds for ds in datasets if ds["_modelKey"] == "granite-4.0-1b-speech")["_asrStreaming"])
+        self.assertFalse(next(ds for ds in datasets if ds["_modelKey"] == "nvidia-parakeet-tdt-0.6b-v3")["_asrStreaming"])
+        self.assertTrue(next(ds for ds in datasets if ds["_modelKey"] == "nvidia-nemotron-speech-streaming-0.6b")["_asrStreaming"])
+        for dataset in datasets:
+            self.assertEqual(dataset["_placeholder"], dataset["_modelKey"] in ASR_WER_PLACEHOLDER)
+            self.assertTrue(dataset["showLine"])
+            for point in dataset["data"]:
+                self.assertGreater(point["max_users"], 0)
+                self.assertIn("language", point)
+                self.assertIn("source", point)
+                self.assertIn(point["asr_mode"], {"streaming", "non-streaming"})
+
+    def test_asr_quality_chart_keeps_duplicate_two_wer_deployments(self):
+        state = PlannerState(
+            gpus=[
+                GpuPool(1, "A10", 1, cost_per_gpu_hour=1.0),
+                GpuPool(2, "H100", 1, cost_per_gpu_hour=1.0),
+                GpuPool(3, "H200", 1, cost_per_gpu_hour=1.0),
+            ],
+            models=[
+                ModelAssignment(2, "voxtral-realtime-mini-4b", 1, 1, 1, 1, "bf16"),
+                ModelAssignment(3, "voxtral-realtime-mini-4b", 2, 1, 1, 1, "bf16"),
+                ModelAssignment(4, "voxtral-realtime-mini-4b", 3, 1, 1, 1, "bf16"),
+            ],
+        )
+
+        datasets = chart_asr_quality(state)
+
+        self.assertEqual(len(datasets), 3)
+        self.assertEqual(len({dataset["label"] for dataset in datasets}), 1)
+        self.assertEqual(len({dataset["_seriesId"] for dataset in datasets}), 3)
+        self.assertEqual(sum(len(dataset["data"]) for dataset in datasets), 6)
+        wers = sorted({point["wer"] for dataset in datasets for point in dataset["data"]})
+        self.assertEqual(wers, [4.9, 7.92])
+        self.assertGreater(len({dataset["data"][0]["max_users"] for dataset in datasets}), 1)
+
+    def test_embedding_quality_axis_range_tracks_visible_quality_points(self):
+        state = PlannerState(
+            gpus=[GpuPool(1, "H100", 2, cost_per_gpu_hour=1.0)],
+            models=[
+                ModelAssignment(2, "mxbai-embed-xsmall-v1", 1, 1, 1, 1, "bf16"),
+                ModelAssignment(3, "pplx-embed-v1-4b", 1, 1, 1, 1, "bf16"),
+            ],
+        )
+        retune_models(state, preserve_existing=False)
+
+        datasets = chart_embedding_quality(state)
+        axis = embedding_quality_axis_range(datasets)
+        qualities = [point["quality"] for dataset in datasets for point in dataset["data"]]
+
+        self.assertGreater(len(qualities), 1)
+        self.assertLess(axis["y_min"], min(qualities))
+        self.assertGreater(axis["y_max"], max(qualities))
+        self.assertGreater(axis["y_min"], 0.0)
+        self.assertLess(axis["y_max"], 1.0)
 
     def test_realtime_models_do_not_enter_use_case_projection_supply(self):
         state = self._state()

@@ -3,7 +3,8 @@
 {% if active|length > 0 or state.gpus|length > 0 %}
 <div style="display:flex;gap:2px;margin-top:5px;">
   {% set ns = namespace(gi=0) %}
-  {% set mem_phase = 'prefill' if state.mode == 'data' else 'decode' %}
+  {% set is_embedding_workload = state.mode in ('embedding', 'embedquality') %}
+  {% set mem_phase = 'prefill' if state.mode == 'data' or is_embedding_workload else 'decode' %}
   {% for am in active %}
     {% set m = MODELS[am.model_key] %}
     {% set gp = state.find_gpu(am.gpu_uid) %}
@@ -25,7 +26,7 @@
             {% set np = (non_kv / g.mem) * 100 %}
             {% set kp = (kv_reserved / g.mem) * 100 %}
             {% set hp = (1 - state.mu) * 100 %}
-          <div style="flex:1;min-width:0;" title="{{ m.name }} ({{ 'P' if mem_phase == 'prefill' else 'D' }} {{ strategy_label(phase_tp, phase_pp, phase_dp) }}): requested {{ (g.mem * state.mu / 1e9)|round(1) }}GB, weights {{ (weight_per_gpu / 1e9)|round(1) }}GB, profiled non-KV {{ (non_kv / 1e9)|round(1) }}GB, KV reserved {{ (kv_reserved / 1e9)|round(1) }}GB, usable KV {{ (kv_usable / 1e9)|round(1) }}GB">
+          <div style="flex:1;min-width:0;" title="{{ m.name }} ({{ 'E' if is_embedding_workload and m.is_embedding_model else ('P' if mem_phase == 'prefill' else 'D') }} {{ strategy_label(phase_tp, phase_pp, phase_dp) }}): requested {{ (g.mem * state.mu / 1e9)|round(1) }}GB, weights {{ (weight_per_gpu / 1e9)|round(1) }}GB, profiled non-KV {{ (non_kv / 1e9)|round(1) }}GB, {{ 'work buffer' if is_embedding_workload and m.is_embedding_model else 'KV reserved' }} {{ (kv_reserved / 1e9)|round(1) }}GB, usable {{ (kv_usable / 1e9)|round(1) }}GB">
               <div style="font-size:7px;color:var(--fg2);text-align:center;line-height:1;">G{{ ns.gi }}</div>
               <div style="height:7px;border-radius:2px;overflow:hidden;display:flex;border:1px solid var(--b0);">
                 <div style="width:{{ wp }}%;background:{{ m.color }};"></div>
@@ -55,8 +56,8 @@
 <div class="T" style="margin-top:2px;display:flex;gap:8px;">
   <span><span style="display:inline-block;width:8px;height:5px;border-radius:1px;background:var(--fg1);vertical-align:middle;"></span> weights</span>
   <span><span style="display:inline-block;width:8px;height:5px;border-radius:1px;background:var(--amber);vertical-align:middle;"></span> profiled non-KV</span>
-  <span><span style="display:inline-block;width:8px;height:5px;border-radius:1px;background:var(--fg1);opacity:.3;vertical-align:middle;"></span> KV reserved</span>
-  <span>{{ 'Prefill' if mem_phase == 'prefill' else 'Decode' }} layout</span>
+  <span><span style="display:inline-block;width:8px;height:5px;border-radius:1px;background:var(--fg1);opacity:.3;vertical-align:middle;"></span> {{ 'work buffer' if is_embedding_workload else 'KV reserved' }}</span>
+  <span>{{ 'Embedding' if is_embedding_workload else ('Prefill' if mem_phase == 'prefill' else 'Decode') }} layout</span>
   <span><span style="display:inline-block;width:8px;height:5px;border-radius:1px;background:var(--bg2);border:1px solid var(--b0);vertical-align:middle;"></span> outside cap</span>
 </div>
 {% endif %}

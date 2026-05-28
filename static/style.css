@@ -212,14 +212,47 @@ input[type="range"]::-webkit-slider-thumb {
 .picker .cat {
   padding: 4px 10px; font-size: 9px; font-weight: 600;
   text-transform: uppercase; letter-spacing: .05em; color: var(--fg2);
-  background: var(--bg1); position: sticky; top: 0; z-index: 1;
+  background: var(--bg1); position: sticky; top: 34px; z-index: 1;
+}
+.picker .cat-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.picker .cat-action .picker-add-all {
+  padding: 1px 5px;
+  font-size: 9px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.picker .picker-add-all-form { margin: 0; }
+.picker .model-picker-tabs {
+  position: sticky; top: 0; z-index: 2;
+  margin: 0; padding: 6px 8px;
+  background: var(--bg0);
+  border-bottom: 1px solid var(--b1);
 }
 .picker .item {
   padding: 5px 10px; cursor: pointer; font-size: 11px;
   display: flex; align-items: center; gap: 6px;
   border-bottom: 1px solid var(--b0);
+  width: 100%;
+  background: transparent;
+  color: inherit;
+  border-left: 0;
+  border-right: 0;
+  border-top: 0;
+  border-radius: 0;
+  text-align: left;
+  font-family: inherit;
 }
 .picker .item:hover { background: var(--bg1); }
+.picker .item.htmx-request,
+.picker .picker-add-all-form.htmx-request .picker-add-all {
+  opacity: .55;
+  pointer-events: none;
+}
 .picker .item .T { margin-left: auto; }
 
 .picker .item.gpu-card {

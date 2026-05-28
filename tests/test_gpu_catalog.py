@@ -1,7 +1,15 @@
 import unittest
 
-from data import GPU_CARDS, GPUS
-from state import PlannerState, add_gpu, add_model, change_gpu_qty, get_model_info, set_model_gpu_count
+from data import GPU_CARDS, GPUS, MODELS
+from state import (
+    PlannerState,
+    add_gpu,
+    add_model,
+    add_models,
+    change_gpu_qty,
+    get_model_info,
+    set_model_gpu_count,
+)
 
 
 class GPUCatalogTests(unittest.TestCase):
@@ -130,6 +138,25 @@ class GPUCatalogTests(unittest.TestCase):
         set_model_gpu_count(state, state.models[0].uid, 72)
         self.assertEqual(state.models[0].gpu_count, 72)
         self.assertIn(72, get_model_info(state, state.models[0])["gpu_count_options"])
+
+    def test_bulk_add_models_adds_visible_embedding_models_once(self):
+        state = PlannerState()
+        add_gpu(state, "H100", 64)
+        embedding_keys = [
+            key
+            for key, model in MODELS.items()
+            if model.is_embedding_model and not model.hidden
+        ]
+
+        added = add_models(state, embedding_keys)
+
+        self.assertEqual(added, embedding_keys)
+        self.assertEqual([am.model_key for am in state.models], embedding_keys)
+
+        added_again = add_models(state, embedding_keys)
+
+        self.assertEqual(added_again, [])
+        self.assertEqual(len(state.models), len(embedding_keys))
 
 
 if __name__ == "__main__":

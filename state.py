@@ -12,6 +12,8 @@ from data import (
     GPUS,
     MODELS,
     DIST_PRESETS,
+    EMBEDDING_DOC_BUCKETS,
+    EMBEDDING_DOC_PRESETS,
     INPUT_BUCKETS,
     OUTPUT_BUCKETS,
     DAY_SHAPES,
@@ -35,11 +37,14 @@ from calc import (
     avg_dist,
     communication_breakdown,
     compute_decode,
+    compute_embedding_distribution,
     compute_memory,
     compute_prefill,
     compute_realtime_capacity,
     compute_realtime_max_users,
     default_strategy,
+    embedding_doc_stats,
+    embedding_sequence_length,
     effective_prefill_length,
     gpu_supports_mxfp4,
     gpu_supports_nvfp4,
@@ -69,9 +74,11 @@ ALLOWED_PROJECT_KINDS = frozenset(p["key"] for p in PROJECT_PRESETS) | {"custom"
 VISIBLE_PLOT_MODES = (
     ("userpareto", "User Pareto"),
     ("processingpareto", "Processing Pareto"),
-    ("realtime", "Realtime ASR"),
+    ("embedquality", "Embedding Quality"),
+    ("asrquality", "ASR Quality"),
 )
 DEFAULT_PLOT_MODE = VISIBLE_PLOT_MODES[0][0]
+LEGACY_PLOT_MODE_REDIRECTS = {"realtime": "asrquality", "embedding": "embedquality"}
 ALLOWED_PLOT_MODES = frozenset(mode for mode, _ in VISIBLE_PLOT_MODES)
 DEFAULT_DAY_SHAPE = "workday"
 ALLOWED_DAY_SHAPES = frozenset(DAY_SHAPES)
@@ -116,6 +123,8 @@ def _next_uid() -> int:
 
 
 def normalize_plot_mode(mode: Optional[str]) -> str:
+    if mode in LEGACY_PLOT_MODE_REDIRECTS:
+        return LEGACY_PLOT_MODE_REDIRECTS[mode]
     return mode if mode in ALLOWED_PLOT_MODES else DEFAULT_PLOT_MODE
 
 
@@ -129,6 +138,34 @@ def normalize_corpo_cloud(name: Optional[str]) -> str:
 
 def normalize_auto_strategy(strategy: Optional[str]) -> str:
     return strategy if strategy in ALLOWED_AUTO_MODEL_STRATEGIES else DEFAULT_AUTO_MODEL_STRATEGY
+
+
+def _embedding_doc_dist_from_length(seq_len: int) -> list[int]:
+    length = max(int(seq_len or 0), 1)
+    nearest = min(range(len(EMBEDDING_DOC_BUCKETS)), key=lambda i: abs(EMBEDDING_DOC_BUCKETS[i].length - length))
+    dist = [0] * len(EMBEDDING_DOC_BUCKETS)
+    dist[nearest] = 100
+    return dist
+
+
+def normalize_embedding_doc_distribution(state: "PlannerState"):
+    dist = getattr(state, "embedding_doc_dist", None)
+    if not isinstance(dist, list):
+        dist = _embedding_doc_dist_from_length(getattr(state, "task_il", 2048))
+
+    values = []
+    for i in range(len(EMBEDDING_DOC_BUCKETS)):
+        raw = dist[i] if i < len(dist) else 0
+        values.append(max(0, int(raw or 0)))
+    if not any(values):
+        values = list(EMBEDDING_DOC_PRESETS["Doc"])
+
+    state.embedding_doc_dist = values
+    state.embedding_doc_pre = (
+        getattr(state, "embedding_doc_pre", "Doc")
+        if getattr(state, "embedding_doc_pre", "Doc") in EMBEDDING_DOC_PRESETS
+        else ""
+    )
 
 
 @dataclass
@@ -283,6 +320,8 @@ class PlannerState:
     out_dist: list[int] = field(default_factory=lambda: list(DIST_PRESETS["Chat"]["out"]))
     in_pre: str = "Chat"
     out_pre: str = "Chat"
+    embedding_doc_dist: list[int] = field(default_factory=lambda: list(EMBEDDING_DOC_PRESETS["Doc"]))
+    embedding_doc_pre: str = "Doc"
     mu: float = 0.90
     profiled_non_kv_gb: float = 4.0
 
@@ -435,6 +474,7 @@ def _preferred_strategy(state: PlannerState, am: ModelAssignment, gpu: GPU, phas
     best = candidates[0]
     best_score = None
     probe_prefill_len = max(1, effective_prefill_length(max(state.task_il, avg_dist(state.in_dist, INPUT_BUCKETS)), state.prefix_hit_rate))
+    is_embedding = getattr(model, "embedding_profile", None) is not None
     for tp, pp, dp in candidates:
         mem = compute_memory(
             model,
@@ -452,7 +492,23 @@ def _preferred_strategy(state: PlannerState, am: ModelAssignment, gpu: GPU, phas
         aux = float("-inf")
 
         for bs in _probe_batch_sizes(dp):
-            if phase == "prefill":
+            if is_embedding:
+                result = compute_embedding_distribution(
+                    model,
+                    (tp, pp, dp),
+                    bs,
+                    state.embedding_doc_dist,
+                    EMBEDDING_DOC_BUCKETS,
+                    gpu,
+                    state.mu,
+                    state.profiled_non_kv_gb,
+                    am.prec,
+                    state.prefill_efficiency,
+                )
+                if result is None:
+                    continue
+                metric = (result.tps, result.rps)
+            elif phase == "prefill":
                 result = compute_prefill(
                     model,
                     tp,
@@ -519,6 +575,26 @@ def _retune_model(state: PlannerState, am: ModelAssignment, preserve_existing: b
         return
 
     model = MODELS[am.model_key]
+    if getattr(model, "embedding_profile", None) is not None:
+        embedding_default = _preferred_strategy(state, am, gp.gpu, "prefill")
+        if not preserve_existing:
+            am.tp, am.pp, am.dp = embedding_default
+            am.prefill_tp, am.prefill_pp, am.prefill_dp = embedding_default
+            return
+
+        valid = valid_strategies(
+            model,
+            am.gpu_count,
+            gp.gpu,
+            state.mu,
+            state.profiled_non_kv_gb,
+            am.prec,
+        )
+        if (am.prefill_tp, am.prefill_pp, am.prefill_dp) not in valid:
+            am.prefill_tp, am.prefill_pp, am.prefill_dp = embedding_default
+        am.tp, am.pp, am.dp = am.prefill_tp, am.prefill_pp, am.prefill_dp
+        return
+
     decode_default = _preferred_strategy(state, am, gp.gpu, "decode")
     prefill_default = _preferred_strategy(state, am, gp.gpu, "prefill")
     if not preserve_existing:
@@ -1506,8 +1582,20 @@ def add_model(state: PlannerState, model_key: str):
     state.auto_excluded = []
 
 
+def add_models(state: PlannerState, model_keys: list[str]) -> list[str]:
+    existing = {am.model_key for am in state.models}
+    added: list[str] = []
+    for model_key in model_keys:
+        if model_key in existing:
+            continue
+        add_model(state, model_key)
+        existing.add(model_key)
+        added.append(model_key)
+    return added
+
+
 def _model_serves_project(model: Model, project: Project) -> bool:
-    if getattr(model, "is_realtime_only", False):
+    if getattr(model, "is_realtime_only", False) or getattr(model, "embedding_profile", None) is not None:
         return False
     return (
         project.requires <= model.capabilities
@@ -1903,6 +1991,15 @@ def set_model_strat(state: PlannerState, model_uid: int, tp: int, pp: int, dp: i
     if strategy not in valid:
         # Optionally could set to default or keep current
         return
+
+    if getattr(model, "embedding_profile", None) is not None:
+        am.prefill_tp = tp
+        am.prefill_pp = pp
+        am.prefill_dp = dp
+        am.tp = tp
+        am.pp = pp
+        am.dp = dp
+        return
     
     if phase == "prefill":
         am.prefill_tp = tp
@@ -1927,6 +2024,16 @@ def set_model_gpu_pool(state: PlannerState, model_uid: int, gpu_uid: int):
 
 
 def set_dist_preset(state: PlannerState, kind: str, preset_key: str):
+    if kind == "embedding_doc":
+        preset = EMBEDDING_DOC_PRESETS.get(preset_key)
+        if not preset:
+            return
+        state.embedding_doc_dist = list(preset)
+        state.embedding_doc_pre = preset_key
+        state.task_il = avg_dist(state.embedding_doc_dist, EMBEDDING_DOC_BUCKETS)
+        state.task_ol = 0
+        return
+
     preset = DIST_PRESETS.get(preset_key)
     if not preset:
         return
@@ -1939,7 +2046,13 @@ def set_dist_preset(state: PlannerState, kind: str, preset_key: str):
 
 
 def set_dist_value(state: PlannerState, kind: str, index: int, value: int):
-    if kind == "in":
+    if kind == "embedding_doc":
+        if 0 <= index < len(state.embedding_doc_dist):
+            state.embedding_doc_dist[index] = value
+        state.embedding_doc_pre = ""
+        state.task_il = avg_dist(state.embedding_doc_dist, EMBEDDING_DOC_BUCKETS)
+        state.task_ol = 0
+    elif kind == "in":
         if 0 <= index < len(state.in_dist):
             state.in_dist[index] = value
         state.in_pre = ""
@@ -1998,6 +2111,7 @@ def get_state(session_id: str) -> PlannerState:
     if not hasattr(s, "auto_mode"):
         s.auto_mode = False
     s.auto_strategy = normalize_auto_strategy(getattr(s, "auto_strategy", DEFAULT_AUTO_MODEL_STRATEGY))
+    normalize_embedding_doc_distribution(s)
     normalize_projects(s)
     return s
 
@@ -2015,6 +2129,7 @@ def get_compare_state(session_id: str) -> Optional[PlannerState]:
         if not hasattr(state, "auto_mode"):
             state.auto_mode = False
         state.auto_strategy = normalize_auto_strategy(getattr(state, "auto_strategy", DEFAULT_AUTO_MODEL_STRATEGY))
+        normalize_embedding_doc_distribution(state)
         normalize_projects(state)
     return state
 
@@ -2101,8 +2216,13 @@ def _build_model_info(state: PlannerState, am: ModelAssignment, gpu_pool: Option
     avg_out = avg_dist(state.out_dist, OUTPUT_BUCKETS)
     avg_seq = avg_in + avg_out / 2.0
     realtime_profile = getattr(model, "realtime_profile", None)
+    embedding_profile = getattr(model, "embedding_profile", None)
+    embedding_stats = None
     if realtime_profile is not None:
         avg_seq = float(realtime_profile.state_tokens)
+    if embedding_profile is not None:
+        embedding_stats = embedding_doc_stats(model, state.embedding_doc_dist, EMBEDDING_DOC_BUCKETS, am.prec)
+        avg_seq = float(embedding_stats.mean_seq_len)
 
     decode_max_slots = 0
     if decode_mem and avg_seq > 0:
@@ -2184,6 +2304,58 @@ def _build_model_info(state: PlannerState, am: ModelAssignment, gpu_pool: Option
             "sample": sample,
         }
 
+    embedding = None
+    if embedding_profile is not None and gpu and am.gpu_count > 0 and prefill_mem is not None:
+        if embedding_stats is None:
+            embedding_stats = embedding_doc_stats(model, state.embedding_doc_dist, EMBEDDING_DOC_BUCKETS, am.prec)
+        best_embedding = None
+        for bs in _probe_batch_sizes(max(am.prefill_dp, 1)):
+            sample = compute_embedding_distribution(
+                model,
+                (am.prefill_tp, am.prefill_pp, am.prefill_dp),
+                bs,
+                state.embedding_doc_dist,
+                EMBEDDING_DOC_BUCKETS,
+                gpu,
+                state.mu,
+                state.profiled_non_kv_gb,
+                am.prec,
+                state.prefill_efficiency,
+            )
+            if sample is None:
+                continue
+            if best_embedding is None or sample.rps > best_embedding.rps:
+                best_embedding = sample
+        doc_distribution = []
+        weights = []
+        total = sum(max(int(v or 0), 0) for v in state.embedding_doc_dist) or 1
+        for i, bucket in enumerate(EMBEDDING_DOC_BUCKETS):
+            raw = state.embedding_doc_dist[i] if i < len(state.embedding_doc_dist) else 0
+            share = max(int(raw or 0), 0) / total
+            weights.append(share)
+            if share <= 0:
+                continue
+            clipped = embedding_sequence_length(model, bucket.length)
+            doc_distribution.append({
+                "label": bucket.label,
+                "length": bucket.length,
+                "clipped_length": clipped,
+                "share": share,
+                "color": bucket.color,
+            })
+        embedding = {
+            "profile": embedding_profile,
+            "seq_len": round(embedding_stats.mean_seq_len),
+            "p50_seq_len": embedding_stats.p50_seq_len,
+            "p90_seq_len": embedding_stats.p90_seq_len,
+            "p99_seq_len": embedding_stats.p99_seq_len,
+            "vectors_per_input": embedding_stats.mean_vectors_per_input,
+            "output_kb_per_input": embedding_stats.mean_output_bytes_per_input / 1e3,
+            "doc_distribution": doc_distribution,
+            "doc_distribution_weights": weights,
+            "sample": best_embedding,
+        }
+
     return {
         "am": am,
         "model": model,
@@ -2209,6 +2381,7 @@ def _build_model_info(state: PlannerState, am: ModelAssignment, gpu_pool: Option
         "quant_profiles_by_precision": quant_profiles_by_precision,
         "quant_profile": quant_profile,
         "realtime": realtime,
+        "embedding": embedding,
         "mixed_weight_precision": model.uses_mixed_weight_precision(am.prec),
         "fits": mem is not None,
         "decode_fits": decode_mem is not None,
