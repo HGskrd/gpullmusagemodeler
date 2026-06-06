@@ -7,6 +7,7 @@ from calc import (
     embedding_doc_stats,
     embedding_sequence_length,
     embedding_vectors_per_input,
+    kv_bytes_per_token,
     kv_cache_bytes_for_sequence,
     linear_attention_state_bytes,
     valid_strategies,
@@ -72,6 +73,73 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertAlmostEqual(model.quality, aa_intelligence_to_quality(44.0))
         self.assertAlmostEqual(model.token_efficiency, aa_output_tokens_to_efficiency(95.0))
         self.assertAlmostEqual(model.quality_confidence, 0.55)
+
+    def test_gemma4_12b_unified_catalog_entry_uses_encoder_free_specs(self):
+        model = MODELS["g12"]
+
+        self.assertEqual(model.name, "Gemma 4 12B Unified")
+        self.assertEqual(model.cat, "Gemma")
+        self.assertEqual(model.size_label, "12B")
+        self.assertFalse(model.is_moe)
+        self.assertEqual(model.total_params, 11.95e9)
+        self.assertEqual(model.active_params, 11.95e9)
+        self.assertEqual(model.layers, 48)
+        self.assertEqual(model.attention_layer_count, 48)
+        self.assertEqual(model.local_attention_layers, 40)
+        self.assertEqual(model.local_attention_window, 1024)
+        self.assertEqual(model.hidden_size, 3840)
+        self.assertEqual(model.num_heads, 16)
+        self.assertEqual(model.kv_heads, 8)
+        self.assertEqual(model.global_kv_heads, 1)
+        self.assertEqual(model.global_head_dim, 512)
+        self.assertEqual(model.head_dim, 256)
+        self.assertTrue(model.shared_key_value)
+        self.assertIn("encoder-free image/audio projection", model.attention_label)
+        self.assertTrue({"tools", "ctx_128k", "images", "audio", "reasoning"} <= model.capabilities)
+        self.assertAlmostEqual(model.quality, aa_intelligence_to_quality(25.0))
+        self.assertAlmostEqual(model.token_efficiency, aa_output_tokens_to_efficiency(12.0))
+        self.assertAlmostEqual(model.quality_confidence, 0.65)
+
+        self.assertEqual(kv_bytes_per_token(model, "bf16"), 172_032)
+        self.assertEqual(kv_cache_bytes_for_sequence(model, 32_768, "bf16"), 436_207_616)
+
+    def test_lfm_catalog_entries_use_hybrid_attention_specs(self):
+        expected = {
+            "lfm2.5-350m": ("LFM2.5 350M", 354_483_968, 354_483_968, 16, 6, 1024, 16, 8, False),
+            "lfm2.5-1.2b-instruct": ("LFM2.5 1.2B Instruct", 1_170_340_608, 1_170_340_608, 16, 6, 2048, 32, 8, False),
+            "lfm2.5-1.2b-thinking": ("LFM2.5 1.2B Thinking", 1_170_340_608, 1_170_340_608, 16, 6, 2048, 32, 8, True),
+            "lfm2-700m": ("LFM2 700M", 742_489_344, 742_489_344, 16, 6, 1536, 24, 8, False),
+            "lfm2-2.6b": ("LFM2 2.6B", 2_569_272_320, 2_569_272_320, 30, 8, 2048, 32, 8, False),
+            "lfm2-8b-a1b": ("LFM2 8B-A1.5B", 8.3e9, 1.5e9, 24, 6, 2048, 32, 8, False),
+            "lfm2-24b-a2b": ("LFM2 24B-A2.3B", 24e9, 2.3e9, 40, 10, 2048, 32, 8, False),
+        }
+
+        for key, (name, total, active, layers, attn_layers, hidden_dim, heads, kv_heads, reasoning) in expected.items():
+            with self.subTest(key=key):
+                model = MODELS[key]
+
+                self.assertEqual(model.name, name)
+                self.assertEqual(model.cat, "LFM")
+                self.assertEqual(model.total_params, total)
+                self.assertEqual(model.active_params, active)
+                self.assertEqual(model.is_moe, total != active)
+                self.assertEqual(model.layers, layers)
+                self.assertEqual(model.attention_layer_count, attn_layers)
+                self.assertEqual(model.kv_layer_count, attn_layers)
+                self.assertEqual(model.hidden_size, hidden_dim)
+                self.assertEqual(model.num_heads, heads)
+                self.assertEqual(model.kv_heads, kv_heads)
+                self.assertEqual(model.head_dim, 64)
+                self.assertIn("LIV conv", model.attention_label)
+                self.assertIn("GQA", model.attention_label)
+                self.assertIn("tools", model.capabilities)
+                self.assertNotIn("ctx_128k", model.capabilities)
+                self.assertEqual("reasoning" in model.capabilities, reasoning)
+                self.assertGreater(kv_cache_bytes_for_sequence(model, 32768, "bf16"), 0.0)
+
+        self.assertAlmostEqual(MODELS["lfm2.5-1.2b-instruct"].quality, aa_intelligence_to_quality(8.0))
+        self.assertAlmostEqual(MODELS["lfm2.5-1.2b-instruct"].token_efficiency, aa_output_tokens_to_efficiency(4.6))
+        self.assertAlmostEqual(MODELS["lfm2.5-1.2b-thinking"].token_efficiency, aa_output_tokens_to_efficiency(31.0))
 
     def test_nvfp4_profile_lut_uses_artifact_storage_for_gemma_31b(self):
         model = MODELS["g31"]
@@ -189,6 +257,7 @@ class ModelCatalogTests(unittest.TestCase):
     def test_added_asr_catalog_entries_have_profiles(self):
         expected = {
             "nvidia-nemotron-speech-streaming-0.6b": ("NVIDIA Nemotron Speech Streaming 0.6B", 0.6e9, True),
+            "nvidia-nemotron-3.5-asr-streaming-0.6b": ("NVIDIA Nemotron 3.5 ASR Streaming 0.6B", 0.6e9, True),
             "nvidia-parakeet-unified-0.6b": ("NVIDIA Parakeet Unified 0.6B", 0.6e9, True),
             "nvidia-parakeet-realtime-eou-120m": ("NVIDIA Parakeet Realtime EOU 120M", 120e6, True),
             "nvidia-multitalker-parakeet-streaming-0.6b": ("NVIDIA Multitalker Parakeet Streaming 0.6B", 0.6e9, True),
@@ -216,6 +285,29 @@ class ModelCatalogTests(unittest.TestCase):
                 self.assertEqual(profile.streaming, streaming)
                 self.assertGreater(profile.tokens_per_second, 0)
                 self.assertGreater(profile.target_delay_ms, 0)
+
+    def test_nemotron_35_asr_streaming_catalog_entry_uses_hf_card(self):
+        model = MODELS["nvidia-nemotron-3.5-asr-streaming-0.6b"]
+        profile = model.realtime_profile
+
+        self.assertEqual(model.name, "NVIDIA Nemotron 3.5 ASR Streaming 0.6B")
+        self.assertEqual(model.cat, "Audio")
+        self.assertEqual(model.size_label, "0.6B")
+        self.assertFalse(model.is_moe)
+        self.assertEqual(model.total_params, 0.6e9)
+        self.assertEqual(model.layers, 24)
+        self.assertEqual(model.hidden_size, 1024)
+        self.assertEqual(model.local_attention_layers, 24)
+        self.assertEqual(model.local_attention_window, 56)
+        self.assertIn("Prompted", model.attention_label)
+        self.assertTrue(model.is_realtime_only)
+        self.assertEqual(model.capabilities, frozenset())
+        self.assertIsNotNone(profile)
+        self.assertEqual(profile.source, "nvidia/nemotron-3.5-asr-streaming-0.6b")
+        self.assertEqual(profile.state_tokens, 56)
+        self.assertEqual(profile.target_delay_ms, 560)
+        self.assertAlmostEqual(profile.audio_ms_per_token, 560.0)
+        self.assertAlmostEqual(profile.tokens_per_second, 1000.0 / 560.0)
 
     def test_embedding_catalog_entries_cover_dense_and_late_modes(self):
         expected = {

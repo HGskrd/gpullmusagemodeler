@@ -211,10 +211,13 @@ def strategy_label(tp: int, pp: int, dp: int) -> str:
 
 def kv_bytes_per_token(m: Model, prec: str) -> float:
     bpe = m.kv_cache_bytes_per_elem(prec)
-    kv_layers = m.kv_layer_count
+    full_layers, local_layers = _split_attention_layers(m.kv_layer_count, m.local_attention_layers)
     if m.is_mla:
-        return kv_layers * (m.mla_kv_dim + m.mla_rope_dim) * 2 * bpe
-    return kv_layers * 2 * m.kv_heads * m.head_dim * bpe
+        return (full_layers + local_layers) * (m.mla_kv_dim + m.mla_rope_dim) * 2 * bpe
+    return (
+        (full_layers * _kv_elems_per_layer(m, global_layer=True))
+        + (local_layers * _kv_elems_per_layer(m, global_layer=False))
+    ) * bpe
 
 
 def _split_attention_layers(total_layers: int, local_layers: int) -> tuple[int, int]:
@@ -228,11 +231,24 @@ def _local_context_tokens(m: Model, seq_len: float) -> float:
     return min(max(seq_len, 0.0), float(m.local_attention_window))
 
 
-def _kv_bytes_per_layer(m: Model, prec: str) -> float:
-    bpe = m.kv_cache_bytes_per_elem(prec)
+def _kv_projection_count(m: Model) -> int:
+    return 1 if m.shared_key_value else 2
+
+
+def _kv_elems_per_layer(m: Model, global_layer: bool = False) -> int:
     if m.is_mla:
-        return (m.mla_kv_dim + m.mla_rope_dim) * 2 * bpe
-    return 2 * m.kv_heads * m.head_dim * bpe
+        return (m.mla_kv_dim + m.mla_rope_dim) * 2
+    if global_layer and m.global_kv_heads > 0:
+        heads = m.global_kv_heads
+        head_dim = m.global_head_dim or m.head_dim
+    else:
+        heads = m.kv_heads
+        head_dim = m.head_dim
+    return _kv_projection_count(m) * heads * head_dim
+
+
+def _kv_bytes_per_layer(m: Model, prec: str, global_layer: bool = False) -> float:
+    return _kv_elems_per_layer(m, global_layer=global_layer) * m.kv_cache_bytes_per_elem(prec)
 
 
 def linear_attention_state_bytes(m: Model, prec: str) -> float:
@@ -255,8 +271,10 @@ def linear_attention_state_bytes(m: Model, prec: str) -> float:
 def kv_cache_bytes_for_sequence(m: Model, seq_len: float, prec: str) -> float:
     seq = max(float(seq_len), 0.0)
     full_layers, local_layers = _split_attention_layers(m.kv_layer_count, m.local_attention_layers)
-    effective_tokens = full_layers * seq + local_layers * _local_context_tokens(m, seq)
-    return effective_tokens * _kv_bytes_per_layer(m, prec)
+    return (
+        full_layers * seq * _kv_bytes_per_layer(m, prec, global_layer=True)
+        + local_layers * _local_context_tokens(m, seq) * _kv_bytes_per_layer(m, prec, global_layer=False)
+    )
 
 
 def per_replica_kv_cache_bytes(m: Model, seq_len: float, prec: str, pp: int, tp: int) -> float:
@@ -2282,9 +2300,9 @@ def chart_realtime_capacity(state, batch_sizes: Optional[list[int]] = None, pane
 
 
 def chart_asr_quality(state, panel_suffix: str = "") -> list[dict]:
-    """Max realtime streams vs published WER, one dot per language.
+    """Max realtime streams vs published WER, one dot per benchmark/language.
 
-    Concurrency is language-independent in the capacity model, so every dot
+    Concurrency is benchmark-independent in the capacity model, so every dot
     for a given model sits at the same height. WER is static catalog data;
     see PUBLISHED_ASR_WER in data.py.
     """

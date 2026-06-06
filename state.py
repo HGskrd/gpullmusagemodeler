@@ -1609,8 +1609,8 @@ def _active_project_demand(project: Project) -> float:
 
 
 def _best_available_placement(state: PlannerState, model: Model) -> Optional[tuple[GpuPool, int, str]]:
-    placements: list[tuple[int, int, float, int, GpuPool, str]] = []
-    for gp in state.gpus:
+    placements: list[tuple[tuple[int, int, float, int, int, int], GpuPool, str]] = []
+    for pool_order, gp in enumerate(state.gpus):
         avail = state.free_gpu_for_pool(gp.uid)
         if avail <= 0:
             continue
@@ -1618,10 +1618,15 @@ def _best_available_placement(state: PlannerState, model: Model) -> Optional[tup
             need = _min_gpu_count_for_pool(model, gp.gpu, state.mu, state.profiled_non_kv_gb, prec, avail)
             if math.isinf(need):
                 continue
-            placements.append((int(need), PRECISIONS.index(prec), -gp.gpu.mem, -avail, gp, prec))
+            placements.append((
+                (int(need), PRECISIONS.index(prec), -gp.gpu.mem, -avail, gp.uid, pool_order),
+                gp,
+                prec,
+            ))
     if not placements:
         return None
-    need, _, _, _, gp, prec = min(placements)
+    key, gp, prec = min(placements, key=lambda placement: placement[0])
+    need = key[0]
     return gp, need, prec
 
 

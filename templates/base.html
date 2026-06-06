@@ -565,7 +565,7 @@ function renderChart(data) {
         const markerStyle = isStreaming
           ? `border-radius:50%;background:${params.color};`
           : `transform:rotate(45deg);background:${params.color};`;
-        let html = axisHeader(theme, 'WER', `${fmtWer(raw.wer)} · ${raw.language || 'Language'}`);
+        let html = axisHeader(theme, 'WER', `${fmtWer(raw.wer)} · ${raw.language || 'Benchmark'}`);
         html += `<div style="display:flex;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
           `<span style="display:inline-block;width:10px;height:10px;${markerStyle}flex-shrink:0;"></span>` +
           `<span style="flex:1;color:${theme.text};">${params.seriesName}</span>` +

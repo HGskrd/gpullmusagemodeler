@@ -72,6 +72,19 @@ class AutoSelectionTests(unittest.TestCase):
         self.assertEqual(normalize_auto_strategy("unknown"), DEFAULT_AUTO_MODEL_STRATEGY)
         self.assertEqual(state.auto_strategy, DEFAULT_AUTO_MODEL_STRATEGY)
 
+    def test_auto_selection_handles_identical_gpu_pools(self):
+        state = _strategy_fixture()
+        state.gpus = [
+            GpuPool(1, "H100", 8, cost_per_gpu_hour=1.0),
+            GpuPool(2, "H100", 8, cost_per_gpu_hour=1.0),
+        ]
+
+        auto_select_models(state, "balanced")
+
+        self.assertTrue(state.auto_mode)
+        self.assertTrue(state.models)
+        self.assertIn(state.models[0].gpu_uid, {1, 2})
+
 
 if __name__ == "__main__":
     unittest.main()

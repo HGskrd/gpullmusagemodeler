@@ -119,6 +119,7 @@ class RealtimeCapacityTests(unittest.TestCase):
     def test_asr_quality_chart_uses_sourced_wer_points(self):
         new_asr_models = [
             "nvidia-nemotron-speech-streaming-0.6b",
+            "nvidia-nemotron-3.5-asr-streaming-0.6b",
             "nvidia-parakeet-unified-0.6b",
             "nvidia-parakeet-realtime-eou-120m",
             "nvidia-multitalker-parakeet-streaming-0.6b",
@@ -151,11 +152,17 @@ class RealtimeCapacityTests(unittest.TestCase):
             "fun-asr-nano-2512",
         }))
         self.assertEqual(PUBLISHED_ASR_WER["voxtral-realtime-mini-4b"]["en"], 4.90)
-        self.assertEqual(PUBLISHED_ASR_WER["voxtral-realtime-mini-4b"]["fr"], 7.92)
+        self.assertEqual(PUBLISHED_ASR_WER["voxtral-realtime-mini-4b"]["fr_covost"], 9.68)
+        self.assertEqual(PUBLISHED_ASR_WER["voxtral-realtime-mini-4b"]["fr_fleurs"], 8.44)
+        self.assertEqual(PUBLISHED_ASR_WER["voxtral-realtime-mini-4b"]["fr_mls"], 5.64)
         self.assertEqual(PUBLISHED_ASR_WER["mimo-v2.5-asr"]["en"], 5.73)
-        self.assertNotIn("fr", PUBLISHED_ASR_WER["mimo-v2.5-asr"])
-        self.assertEqual(PUBLISHED_ASR_WER["nvidia-parakeet-tdt-0.6b-v3"]["fr"], 5.42)
-        self.assertEqual(PUBLISHED_ASR_WER["granite-4.0-1b-speech"]["fr"], 7.15)
+        self.assertNotIn("fr_covost", PUBLISHED_ASR_WER["mimo-v2.5-asr"])
+        self.assertEqual(PUBLISHED_ASR_WER["nvidia-nemotron-3.5-asr-streaming-0.6b"]["en"], 7.99)
+        self.assertEqual(PUBLISHED_ASR_WER["nvidia-nemotron-3.5-asr-streaming-0.6b"]["fr_fleurs"], 9.45)
+        self.assertEqual(PUBLISHED_ASR_WER["nvidia-parakeet-tdt-0.6b-v3"]["fr_covost"], 6.38)
+        self.assertEqual(PUBLISHED_ASR_WER["nvidia-parakeet-tdt-0.6b-v3"]["fr_fleurs"], 4.76)
+        self.assertEqual(PUBLISHED_ASR_WER["nvidia-parakeet-tdt-0.6b-v3"]["fr_mls"], 5.12)
+        self.assertEqual(PUBLISHED_ASR_WER["granite-4.0-1b-speech"]["fr_commonvoice"], 7.15)
         self.assertEqual(PUBLISHED_ASR_WER["moonshine-streaming-medium"]["en"], 6.65)
 
         seen_keys = {ds["_modelKey"] for ds in datasets}
@@ -167,6 +174,7 @@ class RealtimeCapacityTests(unittest.TestCase):
         self.assertFalse(next(ds for ds in datasets if ds["_modelKey"] == "granite-4.0-1b-speech")["_asrStreaming"])
         self.assertFalse(next(ds for ds in datasets if ds["_modelKey"] == "nvidia-parakeet-tdt-0.6b-v3")["_asrStreaming"])
         self.assertTrue(next(ds for ds in datasets if ds["_modelKey"] == "nvidia-nemotron-speech-streaming-0.6b")["_asrStreaming"])
+        self.assertTrue(next(ds for ds in datasets if ds["_modelKey"] == "nvidia-nemotron-3.5-asr-streaming-0.6b")["_asrStreaming"])
         for dataset in datasets:
             self.assertEqual(dataset["_placeholder"], dataset["_modelKey"] in ASR_WER_PLACEHOLDER)
             self.assertTrue(dataset["showLine"])
@@ -195,9 +203,9 @@ class RealtimeCapacityTests(unittest.TestCase):
         self.assertEqual(len(datasets), 3)
         self.assertEqual(len({dataset["label"] for dataset in datasets}), 1)
         self.assertEqual(len({dataset["_seriesId"] for dataset in datasets}), 3)
-        self.assertEqual(sum(len(dataset["data"]) for dataset in datasets), 6)
+        self.assertEqual(sum(len(dataset["data"]) for dataset in datasets), 12)
         wers = sorted({point["wer"] for dataset in datasets for point in dataset["data"]})
-        self.assertEqual(wers, [4.9, 7.92])
+        self.assertEqual(wers, [4.9, 5.64, 8.44, 9.68])
         self.assertGreater(len({dataset["data"][0]["max_users"] for dataset in datasets}), 1)
 
     def test_embedding_quality_axis_range_tracks_visible_quality_points(self):

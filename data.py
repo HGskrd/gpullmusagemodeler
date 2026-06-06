@@ -279,15 +279,16 @@ class EmbeddingProfile:
 
 # Capability flags. Projects can require one or more; models must supply them to be eligible.
 # Kept deliberately coarse — the planner isn't a model quality benchmark, it's a capacity model.
-MODEL_CAPABILITIES: tuple[str, ...] = ("tools", "ctx_128k", "images", "reasoning")
+MODEL_CAPABILITIES: tuple[str, ...] = ("tools", "ctx_128k", "images", "audio", "reasoning")
 CAPABILITY_LABELS = {
     "tools":     "Tool use",
     "ctx_128k":  "≥128k ctx",
     "images":    "Image input",
+    "audio":     "Audio input",
     "reasoning": "Thinking / reasoning",
 }
-# Every modern open-weights model supports tool-calling and long context. "images" and
-# "reasoning" are the ones that actually discriminate.
+# Every modern open-weights model supports tool-calling and long context. Multimodal
+# and reasoning flags are the ones that actually discriminate.
 DEFAULT_MODEL_CAPABILITIES: frozenset[str] = frozenset({"tools", "ctx_128k"})
 
 
@@ -325,6 +326,9 @@ class Model:
     local_attention_layers: int = 0
     local_attention_window: int = 0
     local_attention_heads: int = 0
+    global_kv_heads: int = 0
+    global_head_dim: int = 0
+    shared_key_value: bool = False
     linear_attention_layers: int = 0
     linear_attention_heads: int = 0
     linear_attention_head_dim: int = 0
@@ -1059,6 +1063,15 @@ NEMOTRON_SPEECH_STREAMING_PROFILE = RealtimeProfile(
     source="nvidia/nemotron-speech-streaming-en-0.6b",
     note="Cache-aware FastConformer-RNNT profile uses the 560 ms streaming chunk setting; the cached left context is 70 80 ms frames.",
 )
+NEMOTRON_35_ASR_STREAMING_PROFILE = RealtimeProfile(
+    label="Multilingual Streaming ASR",
+    tokens_per_second=1000.0 / 560.0,
+    audio_ms_per_token=560.0,
+    target_delay_ms=560,
+    state_tokens=56,
+    source="nvidia/nemotron-3.5-asr-streaming-0.6b",
+    note="Prompt-conditioned cache-aware FastConformer-RNNT profile uses the 560 ms streaming chunk setting from att_context_size [56,6]; the cached left context is 56 80 ms frames.",
+)
 PARAKEET_UNIFIED_STREAMING_PROFILE = RealtimeProfile(
     label="Streaming ASR",
     tokens_per_second=1000.0 / 560.0,
@@ -1163,10 +1176,10 @@ PARAKEET_TDT_06B_V3_PROFILE = RealtimeProfile(
 
 
 # ---------------------------------------------------------------------------
-# Published ASR quality: word error rate (WER) by language, in percent; lower
-# is better. Used by the "ASR Quality" plot (max streams vs WER). Capacity is
-# language-independent in this closed-form model, so each language is a separate
-# quality point at the same max-stream height.
+# Published ASR quality: word error rate (WER) by benchmark/language, in
+# percent; lower is better. Used by the "ASR Quality" plot (max streams vs
+# WER). Capacity is benchmark-independent in this closed-form model, so each
+# benchmark point for a model sits at the same max-stream height.
 #
 # Sources:
 # - https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602
@@ -1174,6 +1187,13 @@ PARAKEET_TDT_06B_V3_PROFILE = RealtimeProfile(
 # - https://mimo.xiaomi.com/mimo-v2-5-asr
 #   Xiaomi-published Open ASR English average. MiMo is documented as
 #   Chinese-English; no primary French WER was found.
+# - https://artificialanalysis.ai/speech-to-text/batch#error-rate
+#   AA-WER v2 is an English batch score over AA-AgentTalk, VoxPopuli-Cleaned-AA,
+#   and Earnings22-Cleaned-AA. The closest source-backed French public rows
+#   used here are CoVoST for short-form prompted speech, FLEURS for formal
+#   read-speech, and MLS for long-form speech. VoxPopuli-fr would be the closest
+#   French parliamentary match, but the current public model table used below
+#   does not publish matching rows for this catalog's models.
 # - NVIDIA, Kyutai, Moonshine, IBM, and Hugging Face model cards / Open ASR
 #   leaderboard rows for the added open/self-hosted ASR models below.
 # - https://huggingface.co/datasets/Steveeeeeeen/multilingual_evals
@@ -1182,23 +1202,43 @@ PARAKEET_TDT_06B_V3_PROFILE = RealtimeProfile(
 # - https://arxiv.org/abs/2603.11243
 #   IBM Granite 4.0 Speech paper, CommonVoice French full-AR WER.
 # French rows are filled only when a source-backed French WER was found; models
-# that are English-only or have no published French table intentionally omit fr.
+# that are English-only or have no published French table intentionally omit the
+# French benchmark keys unless the whole model is marked placeholder.
 # ---------------------------------------------------------------------------
-ASR_WER_LANGUAGES: tuple[str, ...] = ("en", "fr")
+ASR_WER_LANGUAGES: tuple[str, ...] = (
+    "en",
+    "fr_covost",
+    "fr_fleurs",
+    "fr_mls",
+    "fr_commonvoice",
+)
 ASR_WER_LANGUAGE_LABELS: dict[str, str] = {
     "en": "English",
-    "fr": "French",
+    # Legacy aggregate label kept for imports/tests; not included in
+    # ASR_WER_LANGUAGES because the chart now plots the component French rows.
+    "fr": "French aggregate",
+    "fr_covost": "French CoVoST",
+    "fr_fleurs": "French FLEURS",
+    "fr_mls": "French MLS",
+    "fr_commonvoice": "French Common Voice",
 }
 ASR_WER_LANGUAGE_SOURCES: dict[str, dict[str, str]] = {
     "voxtral-realtime-mini-4b": {
         "en": "Mistral FLEURS benchmark, 480 ms streaming delay, English WER.",
-        "fr": "Hugging Face Open ASR multilingual eval, French mean over CoVoST, MLS, and FLEURS.",
+        "fr": "Legacy aggregate mean over French CoVoST, FLEURS, and MLS rows.",
+        "fr_covost": "Hugging Face Open ASR multilingual eval, French CoVoST row; closest current source-backed proxy for AA-AgentTalk-style short prompted speech.",
+        "fr_fleurs": "Hugging Face Open ASR multilingual eval, French FLEURS row; closest current source-backed French formal/read-speech proxy.",
+        "fr_mls": "Hugging Face Open ASR multilingual eval, French MLS row; closest current source-backed long-form French proxy.",
     },
     "mimo-v2.5-asr": {
         "en": "Xiaomi MiMo General English Recognition Open ASR average WER.",
     },
     "nvidia-nemotron-speech-streaming-0.6b": {
         "en": "NVIDIA comparison table, HuggingFace OpenASR average WER at 0.56 s streaming latency.",
+    },
+    "nvidia-nemotron-3.5-asr-streaming-0.6b": {
+        "en": "NVIDIA Nemotron 3.5 ASR model card, FLEURS English WER at 560 ms LangID streaming chunk.",
+        "fr_fleurs": "NVIDIA Nemotron 3.5 ASR model card, FLEURS French WER at 560 ms LangID streaming chunk.",
     },
     "nvidia-parakeet-unified-0.6b": {
         "en": "NVIDIA comparison table, HuggingFace OpenASR average WER at 0.56 s streaming latency.",
@@ -1211,7 +1251,8 @@ ASR_WER_LANGUAGE_SOURCES: dict[str, dict[str, str]] = {
     },
     "kyutai-stt-1b-en-fr": {
         "en": "Placeholder: Kyutai publishes model latency and throughput, but no text WER table was found.",
-        "fr": "Placeholder: Kyutai publishes model latency and throughput, but no text WER table was found.",
+        "fr": "Placeholder legacy aggregate: Kyutai publishes model latency and throughput, but no text WER table was found.",
+        "fr_covost": "Placeholder French CoVoST proxy: Kyutai publishes model latency and throughput, but no text WER table was found.",
     },
     "kyutai-stt-2.6b-en": {
         "en": "Kyutai Hugging Face evaluation, HuggingFace OpenASR mean WER.",
@@ -1230,23 +1271,34 @@ ASR_WER_LANGUAGE_SOURCES: dict[str, dict[str, str]] = {
     },
     "granite-4.0-1b-speech": {
         "en": "IBM Granite model card, HuggingFace OpenASR average WER.",
-        "fr": "IBM Granite 4.0 Speech paper, CommonVoice French full-AR WER.",
+        "fr": "Legacy aggregate alias for IBM Granite 4.0 Speech paper, CommonVoice French full-AR WER.",
+        "fr_commonvoice": "IBM Granite 4.0 Speech paper, CommonVoice French full-AR WER.",
     },
     "nvidia-parakeet-tdt-0.6b-v3": {
         "en": "NVIDIA model card, HuggingFace OpenASR average WER.",
-        "fr": "Hugging Face Open ASR multilingual eval, French mean over CoVoST, MLS, and FLEURS.",
+        "fr": "Legacy aggregate mean over French CoVoST, FLEURS, and MLS rows.",
+        "fr_covost": "Hugging Face Open ASR multilingual eval, French CoVoST row; closest current source-backed proxy for AA-AgentTalk-style short prompted speech.",
+        "fr_fleurs": "Hugging Face Open ASR multilingual eval, French FLEURS row; closest current source-backed French formal/read-speech proxy.",
+        "fr_mls": "Hugging Face Open ASR multilingual eval, French MLS row; closest current source-backed long-form French proxy.",
     },
 }
 PUBLISHED_ASR_WER: dict[str, dict[str, float]] = {
     "voxtral-realtime-mini-4b": {
         "en": 4.90,
         "fr": 7.92,
+        "fr_covost": 9.68,
+        "fr_fleurs": 8.44,
+        "fr_mls": 5.64,
     },
     "mimo-v2.5-asr": {
         "en": 5.73,
     },
     "nvidia-nemotron-speech-streaming-0.6b": {
         "en": 7.09,
+    },
+    "nvidia-nemotron-3.5-asr-streaming-0.6b": {
+        "en": 7.99,
+        "fr_fleurs": 9.45,
     },
     "nvidia-parakeet-unified-0.6b": {
         "en": 6.52,
@@ -1260,6 +1312,7 @@ PUBLISHED_ASR_WER: dict[str, dict[str, float]] = {
     "kyutai-stt-1b-en-fr": {
         "en": 7.00,
         "fr": 7.50,
+        "fr_covost": 7.50,
     },
     "kyutai-stt-2.6b-en": {
         "en": 6.40,
@@ -1279,10 +1332,14 @@ PUBLISHED_ASR_WER: dict[str, dict[str, float]] = {
     "granite-4.0-1b-speech": {
         "en": 5.52,
         "fr": 7.15,
+        "fr_commonvoice": 7.15,
     },
     "nvidia-parakeet-tdt-0.6b-v3": {
         "en": 6.34,
         "fr": 5.42,
+        "fr_covost": 6.38,
+        "fr_fleurs": 4.76,
+        "fr_mls": 5.12,
     },
 }
 ASR_WER_PLACEHOLDER: frozenset[str] = frozenset({
@@ -1435,6 +1492,46 @@ def _rwkv7_g1_model(
         linear_attention_k_heads=heads,
         linear_attention_k_head_dim=RWKV7_G1_HEAD_DIM,
         attention_label=f"RWKV recurrent state, ctx {RWKV7_G1_CONTEXT // 1024}k",
+        capabilities_override=capabilities,
+    )
+
+
+LFM_TEXT_CAPABILITIES = frozenset({"tools"})
+
+
+def _lfm_text_model(
+    key: str,
+    name: str,
+    color: str,
+    total_params: float,
+    active_params: float,
+    layers: int,
+    attention_layers: int,
+    hidden_dim: int,
+    num_heads: int,
+    kv_heads: int,
+    capabilities: frozenset[str] = LFM_TEXT_CAPABILITIES,
+) -> Model:
+    conv_layers = max(layers - attention_layers, 0)
+    head_dim = hidden_dim // max(num_heads, 1)
+    return Model(
+        key,
+        name,
+        "LFM",
+        color,
+        total_params,
+        active_params,
+        not math.isclose(total_params, active_params, rel_tol=1e-9, abs_tol=1.0),
+        layers,
+        num_heads,
+        kv_heads,
+        head_dim,
+        False,
+        kv_layers=attention_layers,
+        hidden_dim=hidden_dim,
+        attention_layers=attention_layers,
+        attention_query_heads=num_heads,
+        attention_label=f"{conv_layers} LIV conv + {attention_layers} GQA, ctx 32k",
         capabilities_override=capabilities,
     )
 
@@ -1776,8 +1873,115 @@ MODELS: dict[str, Model] = {
 
     "ge2": Model("ge2", "Gemma 4 E2B", "Gemma", "#5D8C3C", 2e9, 2e9, False, 26, 16, 8, 128, False),
     "ge4": Model("ge4", "Gemma 4 E4B", "Gemma", "#6FA84A", 4e9, 4e9, False, 34, 24, 8, 128, False),
+    "g12": Model(
+        "g12",
+        "Gemma 4 12B Unified",
+        "Gemma",
+        "#7DAF52",
+        11.95e9,
+        11.95e9,
+        False,
+        48,
+        16,
+        8,
+        256,
+        False,
+        hidden_dim=3840,
+        attention_layers=48,
+        local_attention_layers=40,
+        local_attention_window=1024,
+        global_kv_heads=1,
+        global_head_dim=512,
+        shared_key_value=True,
+        attention_label="40 sliding 1k + 8 global p-RoPE; encoder-free image/audio projection",
+    ),
     "g26": Model("g26", "Gemma 4 26B-A4B", "Gemma", "#8AB85C", 26e9, 4e9, True, 48, 32, 8, 128, False),
     "g31": Model("g31", "Gemma 4 31B", "Gemma", "#A2C96E", 31e9, 31e9, False, 48, 40, 8, 128, False),
+
+    "lfm2.5-350m": _lfm_text_model(
+        "lfm2.5-350m",
+        "LFM2.5 350M",
+        "#14B8A6",
+        354_483_968,
+        354_483_968,
+        16,
+        6,
+        1024,
+        16,
+        8,
+    ),
+    "lfm2.5-1.2b-instruct": _lfm_text_model(
+        "lfm2.5-1.2b-instruct",
+        "LFM2.5 1.2B Instruct",
+        "#0891B2",
+        1_170_340_608,
+        1_170_340_608,
+        16,
+        6,
+        2048,
+        32,
+        8,
+    ),
+    "lfm2.5-1.2b-thinking": _lfm_text_model(
+        "lfm2.5-1.2b-thinking",
+        "LFM2.5 1.2B Thinking",
+        "#2563EB",
+        1_170_340_608,
+        1_170_340_608,
+        16,
+        6,
+        2048,
+        32,
+        8,
+    ),
+    "lfm2-700m": _lfm_text_model(
+        "lfm2-700m",
+        "LFM2 700M",
+        "#0F766E",
+        742_489_344,
+        742_489_344,
+        16,
+        6,
+        1536,
+        24,
+        8,
+    ),
+    "lfm2-2.6b": _lfm_text_model(
+        "lfm2-2.6b",
+        "LFM2 2.6B",
+        "#0E7490",
+        2_569_272_320,
+        2_569_272_320,
+        30,
+        8,
+        2048,
+        32,
+        8,
+    ),
+    "lfm2-8b-a1b": _lfm_text_model(
+        "lfm2-8b-a1b",
+        "LFM2 8B-A1.5B",
+        "#1D4ED8",
+        8.3e9,
+        1.5e9,
+        24,
+        6,
+        2048,
+        32,
+        8,
+    ),
+    "lfm2-24b-a2b": _lfm_text_model(
+        "lfm2-24b-a2b",
+        "LFM2 24B-A2.3B",
+        "#1E3A8A",
+        24e9,
+        2.3e9,
+        40,
+        10,
+        2048,
+        32,
+        8,
+    ),
 
     "rwkv7-g1d-01b": _rwkv7_g1_model(
         "rwkv7-g1d-01b",
@@ -2042,6 +2246,26 @@ MODELS: dict[str, Model] = {
         attention_label="Cache-aware FastConformer 70f",
         capabilities_override=frozenset(),
         realtime_profile=NEMOTRON_SPEECH_STREAMING_PROFILE,
+    ),
+    "nvidia-nemotron-3.5-asr-streaming-0.6b": Model(
+        "nvidia-nemotron-3.5-asr-streaming-0.6b",
+        "NVIDIA Nemotron 3.5 ASR Streaming 0.6B",
+        "Audio",
+        "#76B900",
+        0.6e9,
+        0.6e9,
+        False,
+        24,
+        8,
+        8,
+        128,
+        False,
+        hidden_dim=1024,
+        local_attention_layers=24,
+        local_attention_window=56,
+        attention_label="Prompted cache-aware FastConformer 56f",
+        capabilities_override=frozenset(),
+        realtime_profile=NEMOTRON_35_ASR_STREAMING_PROFILE,
     ),
     "nvidia-parakeet-unified-0.6b": Model(
         "nvidia-parakeet-unified-0.6b",
@@ -2622,15 +2846,19 @@ def get_quantization_profile(model_key: str, prec: str) -> QuantizationProfile |
 # Capability overrides. Vision-enabled and reasoning-first models deviate from the default
 # (tools + ctx_128k). Kept conservative — annotate models with well-documented support.
 _VISION_MODELS = (
-    "ge4", "g26", "g31",
+    "ge2", "ge4", "g12", "g26", "g31",
     "command-a-plus-05-2026",
     "ms24", "ms32", "mistral-medium-3.5-preview",
     "minimax25", "minimax27", "nem3no", "mimo-v2.5",
 )
+_AUDIO_INPUT_MODELS = (
+    "ge2", "ge4", "g12",
+)
 _REASONING_MODELS = (
-    "q35", "q122", "q397",
+    "g12", "q35", "q122", "q397",
     "glm45", "glm45a", "glm46", "glm47", "glm47f", "glm5", "glm51",
     "k25", "ds3", "deepseek-v4-pro", "deepseek-v4-flash",
+    "lfm2.5-1.2b-thinking",
     "command-a-plus-05-2026",
     "mistral-medium-3.5-preview", "ml3",
     "minimax25", "minimax27",
@@ -2641,6 +2869,9 @@ _REASONING_MODELS = (
 for _k in _VISION_MODELS:
     if _k in MODELS:
         MODELS[_k].extra_capabilities = MODELS[_k].extra_capabilities | {"images"}
+for _k in _AUDIO_INPUT_MODELS:
+    if _k in MODELS:
+        MODELS[_k].extra_capabilities = MODELS[_k].extra_capabilities | {"audio"}
 for _k in _REASONING_MODELS:
     if _k in MODELS:
         MODELS[_k].extra_capabilities = MODELS[_k].extra_capabilities | {"reasoning"}
@@ -2654,8 +2885,16 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "l70": (12.0, 4.7),
     "ge2": (12.0, 8.3),
     "ge4": (15.0, 7.9),
+    "g12": (25.0, 12.0),  # Proxy from Google Gemma 4 12B benchmarks; no AA page found at launch.
     "g26": (27.0, 14.0),
     "g31": (32.0, 7.1),
+    "lfm2.5-350m": (7.0, 12.0),          # Conservative proxy; no AA page found for LFM2.5-350M.
+    "lfm2.5-1.2b-instruct": (8.0, 4.6),
+    "lfm2.5-1.2b-thinking": (8.0, 31.0),
+    "lfm2-700m": (7.0, 10.0),           # Conservative size proxy; no AA page found for LFM2-700M.
+    "lfm2-2.6b": (8.0, 7.8),
+    "lfm2-8b-a1b": (7.0, 7.8),
+    "lfm2-24b-a2b": (10.0, 11.0),
     "rwkv7-g1d-01b": (7.0, 60.0),     # Low-confidence size proxy until AA publishes RWKV7-G1 rows.
     "rwkv7-g1d-04b": (8.0, 70.0),
     "rwkv7-g1f-15b": (11.0, 90.0),
@@ -2719,6 +2958,9 @@ for _k, (_score, _verbosity_m) in AA_MODEL_METRICS.items():
 # are discounted by effective_quality(). This is intentionally conservative for models
 # whose public benchmark coverage is missing or weak.
 AA_MODEL_QUALITY_CONFIDENCE: dict[str, float] = {
+    "lfm2.5-350m": 0.45,
+    "lfm2-700m": 0.45,
+    "g12": 0.65,
     "rwkv7-g1d-01b": 0.35,
     "rwkv7-g1d-04b": 0.35,
     "rwkv7-g1f-15b": 0.35,
