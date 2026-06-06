@@ -2027,11 +2027,11 @@ def chart_embedding_quality(state, panel_suffix: str = "") -> list[dict]:
     """Peak docs/s vs published retrieval quality, one dot per embedding model.
 
     Each model emits a single point — x = peak docs/s (max over the standard
-    batch sweep at the current workload distribution), y = catalog quality in
+    batch sweep at the current workload distribution), y = decontaminated BEIR
+    quality when sourced, otherwise the existing catalog quality fallback in
     [0, 1]. Bytes-per-doc and vec/s are attached to the point so the front-end
     can encode storage cost via dot size and surface multi-vector blowup in the
-    tooltip. Decontaminated BEIR is included as optional hover context when a
-    sourced score is available.
+    tooltip.
     """
     datasets = []
     is_b = panel_suffix != ""
@@ -2042,8 +2042,8 @@ def chart_embedding_quality(state, panel_suffix: str = "") -> list[dict]:
         profile = getattr(model, "embedding_profile", None)
         if profile is None:
             continue
-        quality = PUBLISHED_EMBEDDING_QUALITY.get(model.key)
-        if quality is None:
+        fallback_quality = PUBLISHED_EMBEDDING_QUALITY.get(model.key)
+        if fallback_quality is None:
             continue
 
         stats = embedding_doc_stats(model, doc_dist, EMBEDDING_DOC_BUCKETS, am.prec)
@@ -2072,6 +2072,8 @@ def chart_embedding_quality(state, panel_suffix: str = "") -> list[dict]:
 
         is_placeholder = model.key in EMBEDDING_QUALITY_PLACEHOLDER
         decontaminated_beir = PUBLISHED_EMBEDDING_DECONTAMINATED_BEIR.get(model.key)
+        uses_decontaminated_beir = decontaminated_beir is not None
+        quality = decontaminated_beir if uses_decontaminated_beir else fallback_quality
         bytes_per_doc = stats.mean_output_bytes_per_input
         point = {
             "x": best.rps,
@@ -2087,10 +2089,16 @@ def chart_embedding_quality(state, panel_suffix: str = "") -> list[dict]:
             "max_batch": best.max_batch,
             "mode": profile.mode_label,
             "quality": quality,
-            "quality_metric": "Published retrieval nDCG@10",
-            "source": EMBEDDING_QUALITY_SOURCES.get(model.key, ""),
+            "quality_metric": "Decontaminated BEIR nDCG@10" if uses_decontaminated_beir else "Published retrieval nDCG@10 fallback",
+            "source": (
+                EMBEDDING_DECONTAMINATED_BEIR_SOURCES.get(model.key, "")
+                if uses_decontaminated_beir else EMBEDDING_QUALITY_SOURCES.get(model.key, "")
+            ),
+            "published_quality": fallback_quality,
+            "published_quality_source": EMBEDDING_QUALITY_SOURCES.get(model.key, ""),
             "decontaminated_beir_quality": decontaminated_beir,
             "decontaminated_beir_source": EMBEDDING_DECONTAMINATED_BEIR_SOURCES.get(model.key, ""),
+            "uses_decontaminated_beir": uses_decontaminated_beir,
             "placeholder": is_placeholder,
         }
 

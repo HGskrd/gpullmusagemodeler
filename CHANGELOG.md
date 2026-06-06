@@ -14,7 +14,7 @@ All notable changes to this project will be documented in this file.
 ### Changed
 
 - Updated visible plot modes to focus ASR and embedding analysis on quality-vs-capacity views.
-- Added sourced decontaminated BEIR nDCG@10 as embedding quality hover detail where available.
+- Used sourced decontaminated BEIR nDCG@10 for embedding quality where available, with hover details for fallback scores.
 - Updated the ASR quality plot to use different point shapes for streaming versus non-streaming ASR profiles.
 - Updated memory bars, task panels, and model strategy controls to show embedding encoder workloads separately from decode and prefill paths.
 

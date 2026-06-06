@@ -642,7 +642,7 @@ function renderChart(data) {
         html += `<div style="display:flex;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
           `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${params.color};flex-shrink:0;"></span>` +
           `<span style="flex:1;color:${theme.text};">${params.seriesName}</span>` +
-          `<span style="margin-left:8px;font-weight:600;color:${theme.text};">quality ${fmtQuality(raw.quality)}</span>` +
+          `<span style="margin-left:8px;font-weight:600;color:${theme.text};">${raw.quality_metric || 'quality'} ${fmtQuality(raw.quality)}</span>` +
           `</div>`;
         const vpi = Number(raw.vectors_per_input || 1);
         const multiVec = vpi > 1 ? ` · ${vpi.toLocaleString()} vec/doc → ${fmtRate(Number(raw.vectors_per_second || 0))} vec/s` : '';
@@ -653,9 +653,10 @@ function renderChart(data) {
           `peak batch ${fmtBatch(Number(raw.peak_batch))} · seq ${Number(raw.seq_len || 0).toLocaleString()} tok · ${raw.mode || ''}` +
           `</div>`;
         if (raw.source) html += `<div style="margin-top:5px;font-size:10px;color:${theme.tc};">${raw.source}</div>`;
-        if (Number.isFinite(Number(raw.decontaminated_beir_quality))) {
-          html += `<div style="margin-top:5px;font-size:10px;color:${theme.tc};">Decontaminated BEIR nDCG@10 ${fmtQuality(raw.decontaminated_beir_quality)}</div>`;
-          if (raw.decontaminated_beir_source) html += `<div style="font-size:10px;color:${theme.tc};">${raw.decontaminated_beir_source}</div>`;
+        if (raw.uses_decontaminated_beir) {
+          if (Number.isFinite(Number(raw.published_quality))) {
+            html += `<div style="margin-top:5px;font-size:10px;color:${theme.tc};">Published retrieval comparison ${fmtQuality(raw.published_quality)}</div>`;
+          }
         } else {
           html += `<div style="margin-top:5px;font-size:10px;color:${theme.tc};">Decontaminated BEIR not sourced</div>`;
         }

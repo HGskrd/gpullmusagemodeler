@@ -220,12 +220,17 @@ class RealtimeCapacityTests(unittest.TestCase):
 
         datasets = chart_embedding_quality(state)
         axis = embedding_quality_axis_range(datasets)
-        qualities = [point["quality"] for dataset in datasets for point in dataset["data"]]
-        decontaminated_beir = [point["decontaminated_beir_quality"] for dataset in datasets for point in dataset["data"]]
+        points = [point for dataset in datasets for point in dataset["data"]]
+        qualities = [point["quality"] for point in points]
+        decontaminated_beir = [point["decontaminated_beir_quality"] for point in points]
 
         self.assertGreater(len(qualities), 1)
+        self.assertIn(0.4280, qualities)
+        self.assertIn(0.5771, qualities)
         self.assertIn(None, decontaminated_beir)
         self.assertIn(0.5771, decontaminated_beir)
+        self.assertTrue(any(point["uses_decontaminated_beir"] for point in points))
+        self.assertTrue(any(not point["uses_decontaminated_beir"] for point in points))
         self.assertLess(axis["y_min"], min(qualities))
         self.assertGreater(axis["y_max"], max(qualities))
         self.assertGreater(axis["y_min"], 0.0)
