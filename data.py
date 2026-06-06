@@ -1398,6 +1398,21 @@ PUBLISHED_EMBEDDING_QUALITY: dict[str, float] = {
 }
 EMBEDDING_QUALITY_PLACEHOLDER: frozenset[str] = frozenset()
 
+# Optional hover-detail metric. Keep separate from PUBLISHED_EMBEDDING_QUALITY
+# so models without decontaminated BEIR still remain visible in the plot.
+EMBEDDING_DECONTAMINATED_BEIR_SOURCES: dict[str, str] = {
+    "denseon": "LightOn DenseOn/LateOn blog, Full Decontaminated BEIR Results, DenseOn row, average nDCG@10 over 12 datasets.",
+    "lateon": "LightOn DenseOn/LateOn blog, Full Decontaminated BEIR Results, LateOn row, average nDCG@10 over 12 datasets.",
+    "modernbert-embed-base": "LightOn DenseOn/LateOn blog, Full Decontaminated BEIR Results, MBEmb.-base row, average nDCG@10 over 12 datasets.",
+    "pplx-embed-v1-0.6b": "LightOn DenseOn/LateOn blog, Full Decontaminated BEIR Results, pplx-v1-0.6b row, average nDCG@10 over 12 datasets.",
+}
+PUBLISHED_EMBEDDING_DECONTAMINATED_BEIR: dict[str, float] = {
+    "denseon":                 0.5771,
+    "lateon":                  0.6036,
+    "modernbert-embed-base":   0.5442,
+    "pplx-embed-v1-0.6b":      0.5850,
+}
+
 
 def _modernbert_embed_model(
     key: str,

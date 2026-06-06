@@ -653,6 +653,12 @@ function renderChart(data) {
           `peak batch ${fmtBatch(Number(raw.peak_batch))} · seq ${Number(raw.seq_len || 0).toLocaleString()} tok · ${raw.mode || ''}` +
           `</div>`;
         if (raw.source) html += `<div style="margin-top:5px;font-size:10px;color:${theme.tc};">${raw.source}</div>`;
+        if (Number.isFinite(Number(raw.decontaminated_beir_quality))) {
+          html += `<div style="margin-top:5px;font-size:10px;color:${theme.tc};">Decontaminated BEIR nDCG@10 ${fmtQuality(raw.decontaminated_beir_quality)}</div>`;
+          if (raw.decontaminated_beir_source) html += `<div style="font-size:10px;color:${theme.tc};">${raw.decontaminated_beir_source}</div>`;
+        } else {
+          html += `<div style="margin-top:5px;font-size:10px;color:${theme.tc};">Decontaminated BEIR not sourced</div>`;
+        }
         if (raw.placeholder) html += `<div style="margin-top:5px;font-size:10px;color:var(--amber);">Placeholder quality - not yet sourced</div>`;
         return html;
       }, 'item'),

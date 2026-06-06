@@ -213,7 +213,7 @@ class RealtimeCapacityTests(unittest.TestCase):
             gpus=[GpuPool(1, "H100", 2, cost_per_gpu_hour=1.0)],
             models=[
                 ModelAssignment(2, "mxbai-embed-xsmall-v1", 1, 1, 1, 1, "bf16"),
-                ModelAssignment(3, "pplx-embed-v1-4b", 1, 1, 1, 1, "bf16"),
+                ModelAssignment(3, "denseon", 1, 1, 1, 1, "bf16"),
             ],
         )
         retune_models(state, preserve_existing=False)
@@ -221,8 +221,11 @@ class RealtimeCapacityTests(unittest.TestCase):
         datasets = chart_embedding_quality(state)
         axis = embedding_quality_axis_range(datasets)
         qualities = [point["quality"] for dataset in datasets for point in dataset["data"]]
+        decontaminated_beir = [point["decontaminated_beir_quality"] for dataset in datasets for point in dataset["data"]]
 
         self.assertGreater(len(qualities), 1)
+        self.assertIn(None, decontaminated_beir)
+        self.assertIn(0.5771, decontaminated_beir)
         self.assertLess(axis["y_min"], min(qualities))
         self.assertGreater(axis["y_max"], max(qualities))
         self.assertGreater(axis["y_min"], 0.0)

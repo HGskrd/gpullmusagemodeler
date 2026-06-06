@@ -15,10 +15,12 @@ from calc import (
 from data import (
     EMBEDDING_DOC_BUCKETS,
     EMBEDDING_DOC_PRESETS,
+    EMBEDDING_DECONTAMINATED_BEIR_SOURCES,
     EMBEDDING_QUALITY_PLACEHOLDER,
     EMBEDDING_QUALITY_SOURCES,
     GPUS,
     MODELS,
+    PUBLISHED_EMBEDDING_DECONTAMINATED_BEIR,
     PUBLISHED_EMBEDDING_QUALITY,
     aa_intelligence_to_quality,
     aa_output_tokens_to_efficiency,
@@ -346,7 +348,7 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(MODELS["mxbai-edge-colbert-v0-32m"].embedding_profile.late_interaction_dim, 64)
 
     def test_embedding_quality_scores_are_sourced(self):
-        expected = {
+        expected_quality = {
             "denseon": 0.5620,
             "lateon": 0.5722,
             "bge-m3": 0.5288,
@@ -362,14 +364,26 @@ class ModelCatalogTests(unittest.TestCase):
             "pplx-embed-v1-4b": 0.6966,
             "pplx-embed-v1-late-0.6b": 0.5661,
         }
+        expected_decontaminated_beir = {
+            "denseon": 0.5771,
+            "lateon": 0.6036,
+            "modernbert-embed-base": 0.5442,
+            "pplx-embed-v1-0.6b": 0.5850,
+        }
 
         self.assertEqual(EMBEDDING_QUALITY_PLACEHOLDER, frozenset())
-        self.assertEqual(set(PUBLISHED_EMBEDDING_QUALITY), set(expected))
-        self.assertEqual(set(EMBEDDING_QUALITY_SOURCES), set(expected))
-        for key, score in expected.items():
+        self.assertEqual(set(PUBLISHED_EMBEDDING_QUALITY), set(expected_quality))
+        self.assertEqual(set(EMBEDDING_QUALITY_SOURCES), set(expected_quality))
+        self.assertEqual(set(PUBLISHED_EMBEDDING_DECONTAMINATED_BEIR), set(expected_decontaminated_beir))
+        self.assertEqual(set(EMBEDDING_DECONTAMINATED_BEIR_SOURCES), set(expected_decontaminated_beir))
+        for key, score in expected_quality.items():
             with self.subTest(key=key):
                 self.assertAlmostEqual(PUBLISHED_EMBEDDING_QUALITY[key], score)
                 self.assertGreater(len(EMBEDDING_QUALITY_SOURCES[key]), 20)
+        for key, score in expected_decontaminated_beir.items():
+            with self.subTest(key=key):
+                self.assertAlmostEqual(PUBLISHED_EMBEDDING_DECONTAMINATED_BEIR[key], score)
+                self.assertIn("Decontaminated BEIR", EMBEDDING_DECONTAMINATED_BEIR_SOURCES[key])
 
     def test_embedding_estimator_caps_sequence_and_counts_vectors(self):
         model = MODELS["lateon"]

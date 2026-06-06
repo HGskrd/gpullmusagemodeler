@@ -27,8 +27,10 @@ from data import (
     ASR_WER_LANGUAGES,
     ASR_WER_PLACEHOLDER,
     PUBLISHED_ASR_WER,
+    EMBEDDING_DECONTAMINATED_BEIR_SOURCES,
     EMBEDDING_QUALITY_PLACEHOLDER,
     EMBEDDING_QUALITY_SOURCES,
+    PUBLISHED_EMBEDDING_DECONTAMINATED_BEIR,
     PUBLISHED_EMBEDDING_QUALITY,
     normalize_precision,
     carbon_intensity_avg,
@@ -2028,8 +2030,8 @@ def chart_embedding_quality(state, panel_suffix: str = "") -> list[dict]:
     batch sweep at the current workload distribution), y = catalog quality in
     [0, 1]. Bytes-per-doc and vec/s are attached to the point so the front-end
     can encode storage cost via dot size and surface multi-vector blowup in the
-    tooltip. Quality is static catalog data; see PUBLISHED_EMBEDDING_QUALITY in
-    data.py.
+    tooltip. Decontaminated BEIR is included as optional hover context when a
+    sourced score is available.
     """
     datasets = []
     is_b = panel_suffix != ""
@@ -2069,6 +2071,7 @@ def chart_embedding_quality(state, panel_suffix: str = "") -> list[dict]:
             continue
 
         is_placeholder = model.key in EMBEDDING_QUALITY_PLACEHOLDER
+        decontaminated_beir = PUBLISHED_EMBEDDING_DECONTAMINATED_BEIR.get(model.key)
         bytes_per_doc = stats.mean_output_bytes_per_input
         point = {
             "x": best.rps,
@@ -2084,7 +2087,10 @@ def chart_embedding_quality(state, panel_suffix: str = "") -> list[dict]:
             "max_batch": best.max_batch,
             "mode": profile.mode_label,
             "quality": quality,
+            "quality_metric": "Published retrieval nDCG@10",
             "source": EMBEDDING_QUALITY_SOURCES.get(model.key, ""),
+            "decontaminated_beir_quality": decontaminated_beir,
+            "decontaminated_beir_source": EMBEDDING_DECONTAMINATED_BEIR_SOURCES.get(model.key, ""),
             "placeholder": is_placeholder,
         }
 
