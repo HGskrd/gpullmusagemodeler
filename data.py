@@ -1163,6 +1163,16 @@ GRANITE_4_1B_SPEECH_PROFILE = RealtimeProfile(
     note="Granite Speech is modeled as high-throughput chunked ASR rather than native streaming; one planner tick approximates one audio-second equivalent of chunk processing.",
     streaming=False,
 )
+COHERE_TRANSCRIBE_PROFILE = RealtimeProfile(
+    label="Offline Multilingual ASR",
+    tokens_per_second=1.0,
+    audio_ms_per_token=1000.0,
+    target_delay_ms=30000,
+    state_tokens=8192,
+    source="Cohere Transcribe 03-2026 docs",
+    note="Cohere publishes Transcribe as a 2B Conformer ASR model for 14 languages. No comparable local streaming table is published, so planner timing uses the same offline one-audio-second tick as other chunked ASR entries.",
+    streaming=False,
+)
 PARAKEET_TDT_06B_V3_PROFILE = RealtimeProfile(
     label="Offline ASR",
     tokens_per_second=1.0,
@@ -1379,6 +1389,7 @@ EMBEDDING_QUALITY_SOURCES: dict[str, str] = {
     "pplx-embed-v1-0.6b": "Perplexity pplx-embed technical report, MTEB Multilingual v2 retrieval average nDCG@10, INT8.",
     "pplx-embed-v1-4b": "Perplexity pplx-embed technical report, MTEB Multilingual v2 retrieval average nDCG@10, INT8.",
     "pplx-embed-v1-late-0.6b": "Perplexity late-interaction HF model card, BEIR (15 tasks) average nDCG@10.",
+    "cohere-embed-v4-0": "Placeholder: Cohere Embed v4.0 docs publish multimodal and 128k-context product limits, but no comparable public retrieval aggregate was found.",
 }
 PUBLISHED_EMBEDDING_QUALITY: dict[str, float] = {
     "denseon":                 0.5620,
@@ -1395,8 +1406,11 @@ PUBLISHED_EMBEDDING_QUALITY: dict[str, float] = {
     "pplx-embed-v1-0.6b":      0.6541,
     "pplx-embed-v1-4b":        0.6966,
     "pplx-embed-v1-late-0.6b": 0.5661,
+    "cohere-embed-v4-0":       0.6000,
 }
-EMBEDDING_QUALITY_PLACEHOLDER: frozenset[str] = frozenset()
+EMBEDDING_QUALITY_PLACEHOLDER: frozenset[str] = frozenset({
+    "cohere-embed-v4-0",
+})
 
 # Optional hover-detail metric. Keep separate from PUBLISHED_EMBEDDING_QUALITY
 # so models without decontaminated BEIR still remain visible in the plot.
@@ -1472,6 +1486,59 @@ def _pplx_embed_model(
         attention_label="bidirectional Qwen3 encoder",
         capabilities_override=frozenset(),
         embedding_profile=profile,
+    )
+
+
+def _cohere_embed_v4_model() -> Model:
+    return Model(
+        "cohere-embed-v4-0",
+        "Cohere Embed v4.0",
+        "Embeddings",
+        "#0F766E",
+        1.0e9,
+        1.0e9,
+        False,
+        32,
+        16,
+        8,
+        128,
+        False,
+        hidden_dim=2048,
+        local_attention_layers=24,
+        local_attention_window=4096,
+        attention_label="managed multimodal encoder proxy, ctx 128k",
+        capabilities_override=frozenset(),
+        embedding_profile=EmbeddingProfile(
+            label="Cohere Embed v4.0",
+            kind="single",
+            output_dim=1536,
+            max_sequence_length=128000,
+            source="Cohere embed-v4.0 docs",
+            note="Managed/API multimodal embedder for text, images, and mixed document inputs; Cohere publishes 256/512/1024/1536 output dimensions and 128k context, but no local parameter/config card, so capacity uses a conservative 1B encoder proxy.",
+            pooling="API embedding",
+        ),
+    )
+
+
+def _tiny_aya_model(key: str, name: str, color: str) -> Model:
+    return Model(
+        key,
+        name,
+        "Cohere",
+        color,
+        3.35e9,
+        3.35e9,
+        False,
+        32,
+        20,
+        8,
+        128,
+        False,
+        hidden_dim=2560,
+        local_attention_layers=24,
+        local_attention_window=4096,
+        attention_label="Tiny Aya gated-config proxy, 3:1 SWA/global, ctx 8k",
+        capabilities_override=frozenset(),
     )
 
 
@@ -1882,6 +1949,7 @@ MODELS: dict[str, Model] = {
             pooling="token vectors",
         ),
     ),
+    "cohere-embed-v4-0": _cohere_embed_v4_model(),
 
     "l8": Model("l8", "Llama 3.1 8B", "Meta", "#22976B", 8e9, 8e9, False, 32, 32, 8, 128, False),
     "l70": Model("l70", "Llama 3.1 70B", "Meta", "#2B7A78", 70.6e9, 70.6e9, False, 80, 64, 8, 128, False),
@@ -2134,6 +2202,76 @@ MODELS: dict[str, Model] = {
         local_attention_window=4096,
         local_attention_heads=128,
         attention_label="24 SWA 4k + 8 global",
+    ),
+    "command-a-03-2025": Model(
+        "command-a-03-2025",
+        "Command A 03-2025 111B",
+        "Cohere",
+        "#115E59",
+        111e9,
+        111e9,
+        False,
+        80,
+        64,
+        8,
+        128,
+        False,
+        hidden_dim=8192,
+        local_attention_layers=60,
+        local_attention_window=4096,
+        attention_label="Cohere gated-config proxy, ctx 256k",
+    ),
+    "command-r7b-12-2024": Model(
+        "command-r7b-12-2024",
+        "Command R7B 12-2024",
+        "Cohere",
+        "#0E7490",
+        7e9,
+        7e9,
+        False,
+        32,
+        32,
+        8,
+        128,
+        False,
+        hidden_dim=4096,
+        attention_label="Cohere gated-config proxy, ctx 128k",
+    ),
+    "north-mini-code-1-0": Model(
+        "north-mini-code-1-0",
+        "North Mini Code 1.0 30B-A3B",
+        "Cohere",
+        "#0B6B61",
+        30e9,
+        3e9,
+        True,
+        64,
+        16,
+        4,
+        128,
+        False,
+        hidden_dim=2048,
+        attention_label="Cohere coding MoE proxy, ctx 256k",
+    ),
+    "tiny-aya-global": _tiny_aya_model(
+        "tiny-aya-global",
+        "Tiny Aya Global 3.35B",
+        "#15803D",
+    ),
+    "tiny-aya-earth": _tiny_aya_model(
+        "tiny-aya-earth",
+        "Tiny Aya Earth 3.35B",
+        "#047857",
+    ),
+    "tiny-aya-fire": _tiny_aya_model(
+        "tiny-aya-fire",
+        "Tiny Aya Fire 3.35B",
+        "#B45309",
+    ),
+    "tiny-aya-water": _tiny_aya_model(
+        "tiny-aya-water",
+        "Tiny Aya Water 3.35B",
+        "#0369A1",
     ),
 
     "minimax25": Model("minimax25", "MiniMax M2.5 229B-A10B", "MiniMax", "#2C6D9B", 229e9, 10e9, True, 62, 48, 8, 128, False),
@@ -2477,6 +2615,24 @@ MODELS: dict[str, Model] = {
         attention_label="Offline speech LLM 128k ctx",
         capabilities_override=frozenset(),
         realtime_profile=GRANITE_4_1B_SPEECH_PROFILE,
+    ),
+    "cohere-transcribe-03-2026": Model(
+        "cohere-transcribe-03-2026",
+        "Cohere Transcribe 03-2026 2B",
+        "Audio",
+        "#0F766E",
+        2.0e9,
+        2.0e9,
+        False,
+        32,
+        16,
+        8,
+        128,
+        False,
+        hidden_dim=2048,
+        attention_label="Conformer ASR proxy · 14 languages",
+        capabilities_override=frozenset(),
+        realtime_profile=COHERE_TRANSCRIBE_PROFILE,
     ),
     "nvidia-parakeet-tdt-0.6b-v3": Model(
         "nvidia-parakeet-tdt-0.6b-v3",
@@ -2933,6 +3089,9 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "glm51": (51.0, 110.0),
     "kimi-linear-48b": (37.0, 100.0),  # Proxy from Qwen 3.5 35B-A3B until AA publishes Kimi Linear.
     "command-a-plus-05-2026": (37.0, 66.0),
+    "command-a-03-2025": (32.0, 70.0),       # Conservative proxy until AA publishes a directly comparable Command A row.
+    "command-r7b-12-2024": (12.0, 8.3),      # Size-class proxy from compact open instruction models; no AA row found.
+    "north-mini-code-1-0": (37.0, 100.0),    # Coding-agent proxy from Qwen 3.5 35B-A3B until public benchmark rows exist.
     "minimax25": (42.0, 56.0),
     "minimax27": (50.0, 87.0),
     "nem3s": (36.0, 110.0),
@@ -2955,6 +3114,10 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "n14": (16.0, 11.0),
     "dv24": (19.0, 8.6),
     "dv123": (22.0, 7.4),
+    "tiny-aya-global": (8.0, 4.6),           # Compact multilingual proxy; gated config and no AA row found.
+    "tiny-aya-earth": (8.0, 4.6),
+    "tiny-aya-fire": (8.0, 4.6),
+    "tiny-aya-water": (8.0, 4.6),
     "zaya1-8b": (24.0, 140.0),       # Proxy from Nemotron 3 Nano reasoning until AA publishes ZAYA1-8B.
     "zaya1-74b-preview": (37.0, 100.0),  # Preview is pre-RL; proxy from Qwen 3.5 35B-A3B until AA publishes it.
     "laguna-m1": (44.0, 95.0),       # Proxy from Qwen 3.5 397B-A17B adjusted against Poolside coding-agent benchmarks; no AA row found.
@@ -2983,10 +3146,17 @@ AA_MODEL_QUALITY_CONFIDENCE: dict[str, float] = {
     "rwkv7-g1g-72b": 0.35,
     "rwkv7-g1g-133b": 0.35,
     "kimi-linear-48b": 0.55,
+    "command-a-03-2025": 0.65,
+    "command-r7b-12-2024": 0.60,
+    "north-mini-code-1-0": 0.45,
     "nem3no": 0.65,
     "mx87": 0.70,
     "cs22": 0.60,
     "mistral-medium-3.5-preview": 0.70,
+    "tiny-aya-global": 0.45,
+    "tiny-aya-earth": 0.45,
+    "tiny-aya-fire": 0.45,
+    "tiny-aya-water": 0.45,
     "zaya1-8b": 0.45,
     "zaya1-74b-preview": 0.35,
     "laguna-m1": 0.55,
@@ -3190,6 +3360,24 @@ CLOUD_MODELS = {
         "quality": 0.5,
         "token_efficiency": 1.0,
     },
+    "command-a-03-2025": {
+        "label": "Command A 03-2025",
+        "vendor": "Cohere",
+        "in_per_m": 2.50,
+        "cached_in_per_m": 2.50,
+        "out_per_m": 10.00,
+        "quality": 0.5,
+        "token_efficiency": 1.0,
+    },
+    "command-r7b-12-2024": {
+        "label": "Command R7B 12-2024",
+        "vendor": "Cohere",
+        "in_per_m": 0.0375,
+        "cached_in_per_m": 0.0375,
+        "out_per_m": 0.15,
+        "quality": 0.5,
+        "token_efficiency": 1.0,
+    },
 }
 
 AA_CLOUD_METRICS: dict[str, tuple[float, float]] = {
@@ -3207,6 +3395,8 @@ AA_CLOUD_METRICS: dict[str, tuple[float, float]] = {
     "mistral-large-2": (15.0, 2.6),
     "codestral-2501": (15.0, 4.4),       # Proxy from Devstral Small (Jul '25'); no AA page for Codestral 2501 found.
     "deepseek-v3": (16.0, 2.6),
+    "command-a-03-2025": (32.0, 70.0),   # Conservative proxy until AA publishes a directly comparable Command A row.
+    "command-r7b-12-2024": (12.0, 8.3),  # Size-class proxy from compact open instruction models; no AA row found.
 }
 
 for _k, (_score, _verbosity_m) in AA_CLOUD_METRICS.items():
@@ -3242,6 +3432,8 @@ CLOUD_MODEL_ZONES: dict[str, tuple[str, ...]] = {
     "mistral-large-2": _MISTRAL_ZONES,
     "codestral-2501": _MISTRAL_ZONES,
     "deepseek-v3": (),
+    "command-a-03-2025": (),
+    "command-r7b-12-2024": (),
 }
 
 # Steepness of the quality/difficulty sigmoid used by success_rate(). k=10 gives a
@@ -3302,6 +3494,20 @@ CORPO_CLOUD_PRESETS = {
             "claude-haiku",
             "claude-sonnet",
             "claude-opus",
+        ),
+    },
+    "with_cohere": {
+        "label": "Current + Cohere",
+        "models": (
+            "gemini-flash-lite",
+            "gemini-flash",
+            "gemini-pro",
+            "codestral-2501",
+            "mistral-medium",
+            "mistral-large",
+            "mistral-large-2",
+            "command-r7b-12-2024",
+            "command-a-03-2025",
         ),
     },
 }

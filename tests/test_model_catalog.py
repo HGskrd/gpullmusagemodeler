@@ -13,6 +13,8 @@ from calc import (
     valid_strategies,
 )
 from data import (
+    CLOUD_MODELS,
+    CORPO_CLOUD_PRESETS,
     EMBEDDING_DOC_BUCKETS,
     EMBEDDING_DOC_PRESETS,
     EMBEDDING_DECONTAMINATED_BEIR_SOURCES,
@@ -52,6 +54,71 @@ class ModelCatalogTests(unittest.TestCase):
 
         self.assertTrue(valid_strategies(model, 1, GPUS["B200"], 0.90, 4.0, "nvfp4"))
         self.assertTrue(valid_strategies(model, 2, GPUS["H100"], 0.90, 4.0, "nvfp4"))
+
+    def test_recent_cohere_llm_entries_use_published_size_and_proxy_configs(self):
+        command_a = MODELS["command-a-03-2025"]
+        command_r7b = MODELS["command-r7b-12-2024"]
+        north = MODELS["north-mini-code-1-0"]
+        tiny_models = {
+            "tiny-aya-global": "Tiny Aya Global 3.35B",
+            "tiny-aya-earth": "Tiny Aya Earth 3.35B",
+            "tiny-aya-fire": "Tiny Aya Fire 3.35B",
+            "tiny-aya-water": "Tiny Aya Water 3.35B",
+        }
+
+        self.assertEqual(command_a.name, "Command A 03-2025 111B")
+        self.assertEqual(command_a.cat, "Cohere")
+        self.assertEqual(command_a.size_label, "111B")
+        self.assertFalse(command_a.is_moe)
+        self.assertEqual(command_a.total_params, 111e9)
+        self.assertEqual(command_a.hidden_size, 8192)
+        self.assertTrue({"tools", "ctx_128k"} <= command_a.capabilities)
+        self.assertIn("proxy", command_a.attention_label)
+        self.assertAlmostEqual(command_a.quality_confidence, 0.65)
+
+        self.assertEqual(command_r7b.size_label, "7B")
+        self.assertEqual(command_r7b.total_params, 7e9)
+        self.assertTrue({"tools", "ctx_128k"} <= command_r7b.capabilities)
+        self.assertIn("proxy", command_r7b.attention_label)
+        self.assertAlmostEqual(command_r7b.quality_confidence, 0.60)
+
+        self.assertEqual(north.name, "North Mini Code 1.0 30B-A3B")
+        self.assertEqual(north.size_label, "30B-A3B")
+        self.assertTrue(north.is_moe)
+        self.assertEqual(north.total_params, 30e9)
+        self.assertEqual(north.active_params, 3e9)
+        self.assertTrue({"tools", "ctx_128k"} <= north.capabilities)
+        self.assertIn("coding MoE proxy", north.attention_label)
+        self.assertAlmostEqual(north.quality, aa_intelligence_to_quality(37.0))
+        self.assertAlmostEqual(north.quality_confidence, 0.45)
+
+        for key, name in tiny_models.items():
+            with self.subTest(key=key):
+                tiny = MODELS[key]
+
+                self.assertEqual(tiny.name, name)
+                self.assertEqual(tiny.size_label, "3.4B")
+                self.assertEqual(tiny.total_params, 3.35e9)
+                self.assertFalse(tiny.is_moe)
+                self.assertEqual(tiny.capabilities, frozenset())
+                self.assertEqual(tiny.local_attention_layers, 24)
+                self.assertEqual(tiny.local_attention_window, 4096)
+                self.assertIn("Tiny Aya gated-config proxy", tiny.attention_label)
+                self.assertAlmostEqual(tiny.quality_confidence, 0.45)
+
+    def test_recent_cohere_cloud_models_are_priced_and_selectable(self):
+        command_a = CLOUD_MODELS["command-a-03-2025"]
+        command_r7b = CLOUD_MODELS["command-r7b-12-2024"]
+        cohere_preset = CORPO_CLOUD_PRESETS["with_cohere"]["models"]
+
+        self.assertEqual(command_a["vendor"], "Cohere")
+        self.assertEqual(command_a["in_per_m"], 2.50)
+        self.assertEqual(command_a["out_per_m"], 10.00)
+        self.assertEqual(command_r7b["vendor"], "Cohere")
+        self.assertEqual(command_r7b["in_per_m"], 0.0375)
+        self.assertEqual(command_r7b["out_per_m"], 0.15)
+        self.assertIn("command-a-03-2025", cohere_preset)
+        self.assertIn("command-r7b-12-2024", cohere_preset)
 
     def test_laguna_m1_catalog_entry_uses_public_poolside_specs(self):
         model = MODELS["laguna-m1"]
@@ -270,6 +337,7 @@ class ModelCatalogTests(unittest.TestCase):
             "moonshine-streaming-medium": ("Moonshine Streaming Medium 245M", 245e6, True),
             "fun-asr-nano-2512": ("Fun-ASR-Nano 2512 800M", 800e6, True),
             "granite-4.0-1b-speech": ("Granite 4.0 1B Speech", 1.0e9, False),
+            "cohere-transcribe-03-2026": ("Cohere Transcribe 03-2026 2B", 2.0e9, False),
             "nvidia-parakeet-tdt-0.6b-v3": ("NVIDIA Parakeet TDT 0.6B v3", 0.6e9, False),
         }
 
@@ -327,6 +395,7 @@ class ModelCatalogTests(unittest.TestCase):
             "pplx-embed-v1-0.6b": ("single", 1024, 32768),
             "pplx-embed-v1-4b": ("single", 2560, 32768),
             "pplx-embed-v1-late-0.6b": ("late", 128, 32768),
+            "cohere-embed-v4-0": ("single", 1536, 128000),
         }
 
         for key, (kind, dim, max_len) in expected.items():
@@ -363,6 +432,7 @@ class ModelCatalogTests(unittest.TestCase):
             "pplx-embed-v1-0.6b": 0.6541,
             "pplx-embed-v1-4b": 0.6966,
             "pplx-embed-v1-late-0.6b": 0.5661,
+            "cohere-embed-v4-0": 0.6000,
         }
         expected_decontaminated_beir = {
             "denseon": 0.5771,
@@ -371,7 +441,7 @@ class ModelCatalogTests(unittest.TestCase):
             "pplx-embed-v1-0.6b": 0.5850,
         }
 
-        self.assertEqual(EMBEDDING_QUALITY_PLACEHOLDER, frozenset())
+        self.assertEqual(EMBEDDING_QUALITY_PLACEHOLDER, frozenset({"cohere-embed-v4-0"}))
         self.assertEqual(set(PUBLISHED_EMBEDDING_QUALITY), set(expected_quality))
         self.assertEqual(set(EMBEDDING_QUALITY_SOURCES), set(expected_quality))
         self.assertEqual(set(PUBLISHED_EMBEDDING_DECONTAMINATED_BEIR), set(expected_decontaminated_beir))
