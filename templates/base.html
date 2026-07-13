@@ -10,7 +10,7 @@
 </head>
 <body>
 
-<div id="toast" class="toast" hidden></div>
+<div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
 
 <div class="topbar">
   <div>
@@ -18,28 +18,45 @@
     <p class="T">Roofline throughput estimates · continuous batching · profiled non-KV anchored KV capacity</p>
   </div>
   <div class="flex" style="gap:6px;">
+    <div class="flex" id="compareControls" style="gap:6px;">
+      {% include "partials/compare_controls.html" %}
+    </div>
     <nav class="app-tabs" aria-label="Primary">
       <a href="{{ url_for('index') }}" class="on">Calculator</a>
       <a href="{{ url_for('explainer') }}" title="What this calculator does and how to use it">User guide</a>
       <a href="{{ url_for('use_cases') }}" title="Detailed explanation of the built-in use-case presets">Use cases</a>
     </nav>
-    <div class="flex" id="compareControls" style="gap:6px;">
-      {% include "partials/compare_controls.html" %}
-    </div>
   </div>
 </div>
 
-<div id="main-content">
+<div class="workflow-bar" aria-label="Planner workflow">
+  <span class="T"><strong style="color:var(--fg0);">Starts with an example scenario.</strong> Replace the sample assumptions, or start from a blank planner.</span>
+  <nav class="workflow-links" aria-label="Jump to planner section">
+    <a href="#main-content">1. Configure</a>
+    <a href="#performance-results">2. Performance</a>
+    <a href="#projectionContent">3. Demand &amp; economics</a>
+  </nav>
+  <div class="workflow-actions" aria-label="Scenario actions">
+    <button type="button" class="ghost sm" hx-post="/session/reset" hx-target="#main-content">Start blank</button>
+    <button type="button" class="ghost sm" onclick="exportScenario()">Export scenario</button>
+    <button type="button" class="ghost sm" onclick="document.getElementById('scenarioImportInput').click()">Import scenario</button>
+    <input id="scenarioImportInput" type="file" accept="application/json,.json" hidden onchange="importScenario(this)" />
+  </div>
+</div>
+
+<div id="main-content" tabindex="-1" aria-label="Planner configuration">
   {% block content %}{% endblock %}
 </div>
 
-<div class="tabs" id="modeTabs" style="margin-top:6px;">
+<h2 id="performance-results" class="section-heading">Performance results</h2>
+<div class="tabs" id="modeTabs" style="margin-top:6px;" role="group" aria-label="Performance chart view">
   {% include "partials/mode_tabs.html" %}
 </div>
 
 <div style="position:relative;width:100%;height:370px;margin-top:4px;">
-  <div id="mc"></div>
+  <div id="mc" role="img" aria-label="Performance estimate chart. A text summary follows for assistive technology."></div>
 </div>
+<div id="chartAccessibleSummary" class="sr-only" role="region" aria-label="Performance chart text summary"></div>
 
 {% include "partials/revenue_projection.html" %}
 
@@ -50,6 +67,16 @@
   <p class="T" style="max-width:96ch;">
     Some of the planner's missing realism is already visible in vLLM runtime metrics: running requests, KV-cache usage, prefix-cache hits, prompt tokens, and generation tokens. vLLM's async scheduling and CUDA-graph capture sizing also move real latency and throughput. In practice, the best calibration loop is empirical: fit the planner's knobs against those metrics for a few representative workloads instead of refining the closed-form model in isolation.
   </p>
+</details>
+
+<details class="method-note privacy-note" id="scenario-privacy">
+  <summary class="T">Scenario storage and privacy</summary>
+  <p class="T" style="max-width:96ch;">
+    This planner stores your current scenario and change history under a random browser identifier so the service can maintain your session and diagnose usage. Scenario snapshots can include hardware, model, cost, and use-case assumptions. Avoid entering confidential names or data you do not want stored by this service.
+  </p>
+  <div class="privacy-actions">
+    <button type="button" class="ghost sm" onclick="deleteStoredScenarios(this)">Delete my stored scenarios</button>
+  </div>
 </details>
 
 <script>
@@ -67,6 +94,7 @@ if (window.htmx) {
  * near the top of that container and jumps the user around as they
  * tweak sliders. */
 let _savedScrollY = null;
+let _focusRestore = null;
 function rememberScroll() { _savedScrollY = window.scrollY; }
 function restoreScroll() {
   if (_savedScrollY == null) return;
@@ -257,6 +285,7 @@ function tooltipBase(theme, trigger, formatter) {
 
 function baseOption(theme, tooltipFormatter, trigger) {
   return {
+    aria: { enabled: true, decal: { show: true } },
     animation: true,
     animationDuration: 280,
     animationEasing: 'cubicOut',
@@ -406,8 +435,46 @@ function refreshChart() {
     .catch(console.error);
 }
 
+function updateChartAccessibleSummary(data) {
+  const root = document.getElementById('chartAccessibleSummary');
+  const chartEl = document.getElementById('mc');
+  if (!root || !chartEl) return;
+  const modeLabels = {
+    userpareto: 'User Pareto', processingpareto: 'Processing Pareto',
+    embedquality: 'Embedding Quality', asrquality: 'ASR Quality', realtime: 'Realtime capacity',
+  };
+  const modeLabel = modeLabels[data?.mode] || 'Performance estimate';
+  const datasets = Array.isArray(data?.datasets) ? data.datasets : [];
+  chartEl.setAttribute('aria-label', `${modeLabel} chart with ${datasets.length} model series. A text summary follows.`);
+  root.replaceChildren();
+  const heading = document.createElement('h3');
+  heading.textContent = `${modeLabel} chart summary`;
+  root.appendChild(heading);
+  if (!datasets.length) {
+    const empty = document.createElement('p');
+    empty.textContent = 'No deployed model data is available for this chart.';
+    root.appendChild(empty);
+    return;
+  }
+  const list = document.createElement('ul');
+  datasets.forEach(ds => {
+    const points = (ds.data || []).filter(point => Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.y)));
+    const item = document.createElement('li');
+    if (!points.length) {
+      item.textContent = `${ds.label}: no feasible points.`;
+    } else {
+      const xs = points.map(point => Number(point.x));
+      const ys = points.map(point => Number(point.y));
+      item.textContent = `${ds.label}: ${points.length} points; x range ${Math.min(...xs).toLocaleString()} to ${Math.max(...xs).toLocaleString()}, y range ${Math.min(...ys).toLocaleString()} to ${Math.max(...ys).toLocaleString()}.`;
+    }
+    list.appendChild(item);
+  });
+  root.appendChild(list);
+}
+
 function renderChart(data) {
   lastChartData = data;
+  updateChartAccessibleSummary(data);
   disposeChart();
   const el = document.getElementById('mc');
   if (!el || !window.echarts) return;
@@ -938,7 +1005,13 @@ function initProjCharts() {
 
 /* Picker toggle (only JS needed for dropdowns) */
 let openPicker = null;
-function closePicker() { if (openPicker) { openPicker.remove(); openPicker = null; } }
+function closePicker() {
+  if (!openPicker) return;
+  const trigger = openPicker.parentElement?.querySelector('[data-picker]');
+  if (trigger) trigger.setAttribute('aria-expanded', 'false');
+  openPicker.remove();
+  openPicker = null;
+}
 document.addEventListener('click', e => {
   if (!e.target.closest('.picker') && !e.target.closest('[data-picker]')) closePicker();
 });
@@ -953,6 +1026,9 @@ function togglePicker(btn, url) {
   pk.innerHTML = '<div style="padding:10px;text-align:center;" class="T">Loading...</div>';
   wrap.appendChild(pk);
   openPicker = pk;
+  btn.setAttribute('aria-expanded', 'true');
+  pk.setAttribute('role', 'dialog');
+  pk.setAttribute('aria-label', `${btn.textContent.trim()} options`);
   fetch(withTabUrl(url), { headers: requestHeaders() }).then(r => r.text()).then(html => {
     replaceHtml(pk, html);
     syncGpuCountSelector(pk);
@@ -1041,6 +1117,42 @@ function importUseCases(panel, input) {
     .finally(() => { input.value = ''; });
 }
 
+function exportScenario() {
+  fetch(withTabUrl('/scenario/export'), { headers: requestHeaders() })
+    .then(async response => {
+      if (response.ok) return response.blob();
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || `Export failed (${response.status})`);
+    })
+    .then(blob => {
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = 'gpu-llm-scenario.json';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(objectUrl);
+      showToast('Scenario exported.');
+    })
+    .catch(error => showToast(error.message || 'Could not export scenario.'));
+}
+
+function importScenario(input) {
+  const file = input?.files?.[0];
+  if (!file) return;
+  file.text()
+    .then(json => postPartial('/scenario/import', new URLSearchParams({ json }).toString()))
+    .then(html => {
+      replaceHtml(document.getElementById('main-content'), html);
+      document.body.dispatchEvent(new Event('refreshChart'));
+      showToast('Scenario imported.');
+      document.getElementById('main-content')?.focus();
+    })
+    .catch(error => showToast(error.message || 'Could not import scenario.'))
+    .finally(() => { input.value = ''; });
+}
+
 function writeClipboardText(text) {
   const fallback = () => {
     const ta = document.createElement('textarea');
@@ -1094,6 +1206,24 @@ function copyProjectionReport(button) {
     });
 }
 
+function deleteStoredScenarios(button) {
+  const original = button?.textContent || 'Delete my stored scenarios';
+  if (button) { button.disabled = true; button.textContent = 'Deleting...'; }
+  fetch(withTabUrl('/session/data'), {
+    method: 'DELETE',
+    headers: requestHeaders({ 'Accept': 'application/json' }),
+  }).then(async response => {
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `Delete failed (${response.status})`);
+    try { window.sessionStorage.removeItem(TAB_STORAGE_KEY); } catch {}
+    showToast(data.message || 'Stored scenarios deleted. Reloading a fresh example.');
+    setTimeout(() => window.location.assign('/'), 650);
+  }).catch(error => {
+    showToast(error.message || 'Could not delete stored scenarios.');
+    if (button) { button.disabled = false; button.textContent = original; }
+  });
+}
+
 /* GPU count selector in picker */
 window.selectedGpuCount = 8;
 function syncGpuCountSelector(root) {
@@ -1130,6 +1260,14 @@ document.body.addEventListener('htmx:configRequest', e => {
 
 document.body.addEventListener('htmx:beforeRequest', e => {
   const source = e.detail.elt;
+  if (source && source.matches?.('button,input,select,a')) {
+    _focusRestore = {
+      id: source.id || '',
+      ariaLabel: source.getAttribute('aria-label') || '',
+      post: source.getAttribute('hx-post') || '',
+      text: (source.textContent || '').trim(),
+    };
+  }
   markFastRemove(source);
 });
 
@@ -1143,6 +1281,18 @@ document.body.addEventListener('htmx:afterSwap', e => {
   if (e.detail.target.id === 'main-content') {
     closePicker();
     restoreScroll();
+    if (_focusRestore) {
+      const controls = Array.from(document.querySelectorAll('button,input,select,a'));
+      const match = (_focusRestore.id && document.getElementById(_focusRestore.id)) || controls.find(control => {
+        const sameAction = !_focusRestore.post || control.getAttribute('hx-post') === _focusRestore.post;
+        const sameName = _focusRestore.ariaLabel
+          ? control.getAttribute('aria-label') === _focusRestore.ariaLabel
+          : (control.textContent || '').trim() === _focusRestore.text;
+        return sameAction && sameName;
+      });
+      match?.focus();
+      _focusRestore = null;
+    }
   }
   bindLiveSliders(e.detail.target || document);
   initProjCharts();

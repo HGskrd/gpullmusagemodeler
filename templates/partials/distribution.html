@@ -17,7 +17,7 @@
     {% set i = loop.index0 %}
     <div style="display:flex;align-items:center;gap:4px;margin-bottom:1px;">
       <span class="M" style="font-size:9px;color:var(--fg1);min-width:28px;text-align:right;">{{ b.label }}</span>
-      <input type="range" min="0" max="100" value="{{ dist[i] }}" style="flex:1;"
+    <input type="range" min="0" max="100" value="{{ dist[i] }}" style="flex:1;" aria-label="{{ b.label }} token share for {{ dist_label }}"
              hx-post="/dist/slide" hx-target="#main-content"
              hx-trigger="change"
              hx-vals='{"panel":"{{ panel }}","kind":"{{ kind }}","index":"{{ i }}"}'

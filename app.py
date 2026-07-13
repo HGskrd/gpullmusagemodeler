@@ -1,10 +1,15 @@
 """Flask application for vLLM Multi-Model Planner."""
 
 import json
+import hmac
 import math
 import os
+import re
+import secrets
+import threading
+import time
 import uuid
-from collections import defaultdict
+from collections import defaultdict, deque
 from pathlib import Path
 
 from flask import Flask, g, jsonify, make_response, redirect, render_template, request, session, url_for
@@ -68,6 +73,7 @@ from state import (
     add_models,
     add_project,
     add_use_case_def,
+    allow_visitor_scope,
     auto_exclude_model,
     auto_reallow_model,
     auto_select_models,
@@ -75,6 +81,9 @@ from state import (
     clear_compare_state,
     create_default_state,
     duplicate_compare_state,
+    delete_visitor_states,
+    deserialize_scenario,
+    get_scope_lock,
     get_compare_state,
     get_model_info,
     get_model_infos,
@@ -88,6 +97,9 @@ from state import (
     normalize_plot_mode,
     normalize_auto_strategy,
     replace_project_set,
+    replace_scope_states,
+    reset_state,
+    serialize_scenario,
     replace_use_case_defs,
     serialize_project_set,
     serialize_use_case_defs,
@@ -147,13 +159,89 @@ def _load_dotenv(path: Path) -> None:
 _load_dotenv(BASE_DIR / ".env")
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_positive_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, default)))
+    except (TypeError, ValueError):
+        return default
+
+
 app = Flask(__name__)
-app.secret_key = os.environ.get("PLANNER_SECRET_KEY", "vllm-planner-dev-key")
+_configured_secret = os.environ.get("PLANNER_SECRET_KEY", "").strip()
+app.secret_key = _configured_secret or secrets.token_urlsafe(48)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=_env_bool("PLANNER_SECURE_COOKIES", False),
+    MAX_CONTENT_LENGTH=_env_positive_int("PLANNER_MAX_REQUEST_BYTES", 2 * 1024 * 1024),
+)
 
 VISITOR_COOKIE = "planner_vid"
 TAB_PARAM = "tab_id"
 ADMIN_SESSION_KEY = "planner_admin_ok"
 SNAPSHOT_STORE = SnapshotStore(BASE_DIR / "instance" / "planner_snapshots.json")
+TRACKING_ENABLED = _env_bool("PLANNER_TRACKING_ENABLED", True)
+MAX_IMPORT_BYTES = _env_positive_int("PLANNER_MAX_IMPORT_BYTES", 1024 * 1024)
+MAX_TABS_PER_VISITOR = _env_positive_int("PLANNER_MAX_TABS_PER_VISITOR", 64)
+ADMIN_PAGE_SIZE = min(_env_positive_int("PLANNER_ADMIN_PAGE_SIZE", 100), 500)
+REQUEST_RATE_LIMIT = _env_positive_int("PLANNER_RATE_LIMIT_PER_MINUTE", 600)
+ADMIN_LOGIN_RATE_LIMIT = _env_positive_int("PLANNER_ADMIN_LOGIN_ATTEMPTS_PER_MINUTE", 10)
+_TAB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
+_rate_lock = threading.Lock()
+_rate_windows: dict[tuple[str, str], deque[float]] = defaultdict(deque)
+EFFICIENCY_SETTING_BOUNDS = {
+    "prefill_bw_eff": (0.50, 1.00),
+    "prefill_comp_eff": (0.50, 1.00),
+    "prefill_overhead": (0.00, 0.25),
+    "prefill_paged_oh": (0.00, 0.25),
+    "prefill_ar_overlap": (0.00, 0.80),
+    "decode_bw_eff": (0.50, 1.00),
+    "decode_comp_eff": (0.50, 1.00),
+    "decode_overhead": (0.00, 0.25),
+    "decode_paged_oh": (0.00, 0.25),
+    "decode_ar_overlap": (0.00, 0.80),
+    "kv_slack": (0.00, 0.10),
+    "moe_imbalance": (1.00, 2.00),
+    "pd_interference": (0.00, 1.00),
+}
+INTEGER_SETTING_BOUNDS = {"decode_sched_budget": (2048, 65536)}
+
+
+def _finite_float(raw, *, name: str, lo: float, hi: float) -> float:
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be a number.") from None
+    if not math.isfinite(value) or not lo <= value <= hi:
+        raise ValueError(f"{name} must be between {lo:g} and {hi:g}.")
+    return value
+
+
+def _bounded_int(raw, *, name: str, lo: int, hi: int) -> int:
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be an integer.") from None
+    if not lo <= value <= hi:
+        raise ValueError(f"{name} must be between {lo} and {hi}.")
+    return value
+
+
+def _load_import_json(raw: str) -> object:
+    if len(raw.encode("utf-8")) > MAX_IMPORT_BYTES:
+        raise ValueError(f"Imported JSON exceeds the {MAX_IMPORT_BYTES}-byte limit.")
+
+    def reject_constant(value: str):
+        raise ValueError(f"Non-finite number {value} is not valid scenario data.")
+
+    return json.loads(raw, parse_constant=reject_constant)
 
 
 USE_CASE_DETAILS = {
@@ -329,8 +417,12 @@ def _visitor_id() -> str:
     if visitor_id:
         return visitor_id
 
-    visitor_id = request.cookies.get(VISITOR_COOKIE)
-    if not visitor_id:
+    visitor_id = request.cookies.get(VISITOR_COOKIE, "")
+    try:
+        valid = str(uuid.UUID(visitor_id)) == visitor_id.lower()
+    except (ValueError, AttributeError):
+        valid = False
+    if not valid:
         visitor_id = _new_id()
     g.visitor_id = visitor_id
     return visitor_id
@@ -341,17 +433,70 @@ def _tab_id(optional: bool = False) -> str | None:
         request.headers.get("X-Tab-ID")
         or request.form.get(TAB_PARAM)
     )
-    if tab_id:
+    if tab_id and _TAB_ID_RE.fullmatch(tab_id):
         return tab_id
     return None if optional else "default"
 
 
 def _scope_id() -> str:
-    return f"{_visitor_id()}:{_tab_id()}"
+    cached = getattr(g, "planner_scope_id", None)
+    if cached:
+        return cached
+    scope_id = f"{_visitor_id()}:{_tab_id()}"
+    g.planner_scope_id = scope_id
+    return scope_id
+
+
+def _rate_limit(bucket: str, limit: int) -> bool:
+    identity = request.remote_addr or "unknown"
+    now = time.monotonic()
+    key = (bucket, identity)
+    with _rate_lock:
+        window = _rate_windows[key]
+        while window and now - window[0] >= 60.0:
+            window.popleft()
+        if len(window) >= limit:
+            return False
+        window.append(now)
+        return True
+
+
+_UNSCOPED_ENDPOINTS = {
+    "static", "explainer", "admin", "admin_login", "admin_logout", "healthz",
+    "session_data_delete",
+}
+
+
+@app.before_request
+def _protect_and_lock_request_scope():
+    if request.endpoint == "admin_login" and not _rate_limit("admin-login", ADMIN_LOGIN_RATE_LIMIT):
+        return jsonify({"error": "Too many login attempts. Try again later."}), 429
+    if request.method not in {"GET", "HEAD", "OPTIONS"} and not _rate_limit("mutation", REQUEST_RATE_LIMIT):
+        return jsonify({"error": "Too many updates. Try again shortly."}), 429
+    if request.endpoint and request.endpoint not in _UNSCOPED_ENDPOINTS:
+        visitor_id = _visitor_id()
+        visitor_lock = get_scope_lock(f"visitor:{visitor_id}")
+        visitor_lock.acquire()
+        scope_id = _scope_id()
+        if not allow_visitor_scope(scope_id, visitor_id, MAX_TABS_PER_VISITOR):
+            visitor_lock.release()
+            return jsonify({"error": "Too many active tabs for this planner session."}), 429
+        scope_lock = get_scope_lock(scope_id)
+        scope_lock.acquire()
+        g.planner_scope_locks = (scope_lock, visitor_lock)
+    return None
+
+
+@app.teardown_request
+def _release_request_scope_lock(_error=None):
+    for lock in getattr(g, "planner_scope_locks", ()):
+        lock.release()
 
 
 @app.after_request
 def _set_identity_cookie(response):
+    if getattr(g, "suppress_identity_cookie", False):
+        return response
     visitor_id = getattr(g, "visitor_id", None)
     if visitor_id and request.cookies.get(VISITOR_COOKIE) != visitor_id:
         response.set_cookie(
@@ -360,13 +505,21 @@ def _set_identity_cookie(response):
             max_age=60 * 60 * 24 * 365,
             httponly=True,
             samesite="Lax",
-            secure=request.is_secure,
+            secure=app.config["SESSION_COOKIE_SECURE"] or request.is_secure,
         )
     return response
 
 
 def _admin_password() -> str | None:
     return os.environ.get("PLANNER_ADMIN_PASSWORD")
+
+
+def _admin_configuration_error() -> str | None:
+    if not _admin_password():
+        return "Set PLANNER_ADMIN_PASSWORD to enable /admin."
+    if not _configured_secret:
+        return "Set PLANNER_SECRET_KEY to enable /admin securely."
+    return None
 
 
 def _is_admin_authenticated() -> bool:
@@ -430,6 +583,8 @@ def _template_context() -> dict:
 
 
 def _record_snapshot(reason: str, state_a: PlannerState, state_b: PlannerState | None, path: str | None = None):
+    if not TRACKING_ENABLED:
+        return
     SNAPSHOT_STORE.record_snapshot(
         visitor_id=_visitor_id(),
         tab_id=_tab_id() or "default",
@@ -755,6 +910,8 @@ def use_case_definition_set():
         elif field_name in {"tokens_day", "wtp_per_m", "difficulty", "min_success_rate", "quality_floor", "latent_jobs_day", "unlock_price_per_m"}:
             set_use_case_def_field(s, key, field_name, float(raw_value or 0.0))
         return _use_case_library_response("use_case_def_set")
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -779,7 +936,7 @@ def use_case_definition_import():
         raw = request.form.get("json", "")
         if not raw.strip():
             return jsonify({"error": "Choose a use-case JSON file first."}), 400
-        replace_use_case_defs(s, json.loads(raw))
+        replace_use_case_defs(s, _load_import_json(raw))
         retune_models(s, preserve_existing=False)
         return _use_case_library_response("use_case_def_import")
     except json.JSONDecodeError as e:
@@ -835,9 +992,8 @@ def gpu_qty():
             delta = int(request.form.get("delta"))
             change_gpu_qty(s, uid, delta)
         # GPU count edits can fire repeatedly while a user types or steps the
-        # control. Snapshot persistence rewrites the full admin JSON log and is
-        # much slower than the recalculation itself, so keep this hot path
-        # untracked.
+        # control. Keep this hot path untracked to avoid a snapshot row for every
+        # transient keystroke; stable changes are captured by subsequent actions.
         return _htmx_response(s)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1071,11 +1227,15 @@ def dist_slide():
         if s is None:
             return _htmx_response()
         kind = request.form.get("kind")
-        index = int(request.form.get("index"))
-        value = int(request.form.get("value"))
+        if kind not in {"in", "out", "embedding_doc"}:
+            return jsonify({"error": "Invalid distribution kind"}), 400
+        index = _bounded_int(request.form.get("index"), name="index", lo=0, hi=256)
+        value = _bounded_int(request.form.get("value"), name="value", lo=0, hi=1_000_000)
         set_dist_value(s, kind, index, value)
         retune_models(s, preserve_existing=False)
         return _tracked_htmx_response("dist_slide", s)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1086,10 +1246,12 @@ def settings_mu():
         s = _request_state()
         if s is None:
             return _htmx_response()
-        value = int(request.form.get("value"))
+        value = _bounded_int(request.form.get("value"), name="gpu_mem_util", lo=50, hi=98)
         s.mu = value / 100
         retune_models(s, preserve_existing=False)
         return _tracked_htmx_response("settings_mu", s)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1100,10 +1262,12 @@ def settings_non_kv():
         s = _request_state()
         if s is None:
             return _htmx_response()
-        value = float(request.form.get("value"))
-        s.profiled_non_kv_gb = max(0.0, value)
+        value = _finite_float(request.form.get("value"), name="profiled non-KV memory", lo=0.0, hi=4096.0)
+        s.profiled_non_kv_gb = value
         retune_models(s, preserve_existing=False)
         return _tracked_htmx_response("settings_non_kv", s)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1115,11 +1279,16 @@ def settings_eff():
         if s is None:
             return _htmx_response()
         key = request.form.get("key")
-        value = int(request.form.get("value")) / 100
-        if hasattr(s, key):
-            setattr(s, key, value)
-            retune_models(s, preserve_existing=False)
+        bounds = EFFICIENCY_SETTING_BOUNDS.get(key)
+        if bounds is None:
+            return jsonify({"error": "Invalid efficiency setting"}), 400
+        lo, hi = bounds
+        value = _finite_float(request.form.get("value"), name=key, lo=lo * 100, hi=hi * 100) / 100
+        setattr(s, key, value)
+        retune_models(s, preserve_existing=False)
         return _tracked_htmx_response("settings_eff", s)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1131,11 +1300,15 @@ def settings_int():
         if s is None:
             return _htmx_response()
         key = request.form.get("key")
-        value = int(request.form.get("value"))
-        if hasattr(s, key):
-            setattr(s, key, value)
-            retune_models(s, preserve_existing=False)
+        bounds = INTEGER_SETTING_BOUNDS.get(key)
+        if bounds is None:
+            return jsonify({"error": "Invalid integer setting"}), 400
+        value = _bounded_int(request.form.get("value"), name=key, lo=bounds[0], hi=bounds[1])
+        setattr(s, key, value)
+        retune_models(s, preserve_existing=False)
         return _tracked_htmx_response("settings_int", s)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1298,6 +1471,8 @@ def project_set():
             if field_name == "tokens_day":
                 retune_models(s, preserve_existing=False)
         return _tracked_htmx_response("project_set", s)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1327,7 +1502,7 @@ def project_import():
         raw = request.form.get("json", "")
         if not raw.strip():
             return jsonify({"error": "Choose a use-case JSON file first."}), 400
-        payload = json.loads(raw)
+        payload = _load_import_json(raw)
         replace_project_set(s, payload)
         retune_models(s, preserve_existing=False)
         return _tracked_htmx_response("project_import", s)
@@ -1500,16 +1675,81 @@ def picker_project():
     return render_template("partials/project_picker.html", panel=panel, **context)
 
 
+@app.route("/healthz", methods=["GET"])
+def healthz():
+    storage_ok = True if not TRACKING_ENABLED else SNAPSHOT_STORE.healthcheck()
+    return jsonify({"status": "ok" if storage_ok else "degraded", "storage": storage_ok}), (200 if storage_ok else 503)
+
+
+@app.route("/session/reset", methods=["POST"])
+def session_reset():
+    state = reset_state(_scope_id(), blank=True)
+    return _tracked_htmx_response("session_reset", state)
+
+
+@app.route("/session/data", methods=["DELETE", "POST"])
+def session_data_delete():
+    visitor_id = _visitor_id()
+    visitor_lock = get_scope_lock(f"visitor:{visitor_id}")
+    with visitor_lock:
+        states_deleted = delete_visitor_states(visitor_id)
+        snapshots_deleted = SNAPSHOT_STORE.delete_visitor(visitor_id)
+    g.suppress_identity_cookie = True
+    response = jsonify({
+        "deleted": True,
+        "snapshots_deleted": snapshots_deleted,
+        "states_deleted": states_deleted,
+    })
+    response.delete_cookie(
+        VISITOR_COOKIE,
+        httponly=True,
+        samesite="Lax",
+        secure=app.config["SESSION_COOKIE_SECURE"] or request.is_secure,
+    )
+    return response
+
+
+@app.route("/scenario/export", methods=["GET"])
+def scenario_export():
+    payload = serialize_scenario(get_state(_scope_id()), get_compare_state(_scope_id()))
+    body = json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    response = make_response(body)
+    response.headers["Content-Type"] = "application/json; charset=utf-8"
+    response.headers["Content-Disposition"] = 'attachment; filename="gpu-llm-scenario.json"'
+    return response
+
+
+@app.route("/scenario/import", methods=["POST"])
+def scenario_import():
+    raw = request.form.get("json", "")
+    if not raw.strip():
+        return jsonify({"error": "Choose a scenario JSON file first."}), 400
+    try:
+        state_a, state_b = deserialize_scenario(_load_import_json(raw))
+    except (json.JSONDecodeError, ValueError) as error:
+        message = error.msg if isinstance(error, json.JSONDecodeError) else str(error)
+        return jsonify({"error": f"Invalid scenario JSON: {message}"}), 400
+    replace_scope_states(_scope_id(), state_a, state_b)
+    return _tracked_htmx_response("scenario_import", state_a)
+
+
 @app.route("/admin", methods=["GET"])
 def admin():
-    if not _admin_password():
-        return (
-            "Set PLANNER_ADMIN_PASSWORD to enable /admin.",
-            503,
-        )
+    configuration_error = _admin_configuration_error()
+    if configuration_error:
+        return configuration_error, 503
     if not _is_admin_authenticated():
         return render_template("admin_login.html", error=None)
-    all_snapshots = SNAPSHOT_STORE.list_snapshots()
+    try:
+        page = _bounded_int(request.args.get("page", 1), name="page", lo=1, hi=1_000_000)
+        page_size = min(
+            _bounded_int(request.args.get("per_page", ADMIN_PAGE_SIZE), name="per_page", lo=1, hi=500),
+            ADMIN_PAGE_SIZE,
+        )
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    total_snapshots = SNAPSHOT_STORE.count_snapshots()
+    all_snapshots = SNAPSHOT_STORE.list_snapshots(limit=page_size, offset=(page - 1) * page_size)
     visitor_map = defaultdict(list)
     for s in all_snapshots:
         visitor_map[s["visitor_id"]].append(s)
@@ -1518,18 +1758,19 @@ def admin():
         key=lambda v: v["snapshots"][0]["last_seen"],
         reverse=True,
     )
-    return render_template("admin.html", visitors=visitors, total_snapshots=len(all_snapshots), GPUS=GPUS, MODELS=MODELS)
+    return render_template(
+        "admin.html", visitors=visitors, total_snapshots=total_snapshots,
+        page=page, page_size=page_size, GPUS=GPUS, MODELS=MODELS,
+    )
 
 
 @app.route("/admin/login", methods=["POST"])
 def admin_login():
     password = _admin_password()
-    if not password:
-        return (
-            "Set PLANNER_ADMIN_PASSWORD to enable /admin.",
-            503,
-        )
-    if request.form.get("password") != password:
+    configuration_error = _admin_configuration_error()
+    if configuration_error:
+        return configuration_error, 503
+    if not hmac.compare_digest(request.form.get("password", ""), password or ""):
         return render_template("admin_login.html", error="Invalid password."), 401
 
     session[ADMIN_SESSION_KEY] = True
@@ -1572,13 +1813,6 @@ def fmt_money(value):
 @app.template_filter("log2int")
 def log2int(n):
     return int(math.log2(n)) if n > 0 else 0
-
-
-def _env_bool(name: str, default: bool = False) -> bool:
-    value = os.environ.get(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 if __name__ == "__main__":

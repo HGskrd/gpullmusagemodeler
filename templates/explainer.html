@@ -64,16 +64,18 @@
 </head>
 <body class="docs-body">
 
-<div class="docs-hdr">
+<div class="topbar">
   <div>
-    <h1>vLLM multi-model planner · user guide</h1>
-    <div class="sub">What the calculator does and how to drive it.</div>
+    <h1>vLLM multi-model planner</h1>
+    <p class="T">User guide · what the calculator does and how to drive it</p>
   </div>
-  <nav class="app-tabs" aria-label="Primary">
-    <a href="{{ url_for('index') }}">Calculator</a>
-    <a href="{{ url_for('explainer') }}" class="on">User guide</a>
-    <a href="{{ url_for('use_cases') }}">Use cases</a>
-  </nav>
+  <div class="flex" style="gap:6px;">
+    <nav class="app-tabs" aria-label="Primary">
+      <a href="{{ url_for('index') }}">Calculator</a>
+      <a href="{{ url_for('explainer') }}" class="on" title="What this calculator does and how to use it">User guide</a>
+      <a href="{{ url_for('use_cases') }}" title="Detailed explanation of the built-in use-case presets">Use cases</a>
+    </nav>
+  </div>
 </div>
 
 <div class="toc">
@@ -86,7 +88,7 @@
   <a href="#workload">Workload</a>
   <a href="#efficiency">Efficiency</a>
   <a href="#compare">Compare (A/B)</a>
-  <a href="#market">Internal market</a>
+  <a href="#market">Demand &amp; economics</a>
   <a href="#glossary">Glossary</a>
 </div>
 
@@ -114,14 +116,13 @@
       and choose how many are in the pool.</li>
     <li><strong>Add one or more models.</strong> Click <kbd>+ Add model</kbd> and pick from the catalog.
       The planner auto-chooses a GPU count and a TP/PP/DP topology that fits.</li>
-    <li><strong>Shape the workload.</strong> Open the <em>Use cases</em> panel and pick each use
-      case's <em>Input shape</em> / <em>Output shape</em> presets (<code>Chat</code>,
-      <code>Long doc</code>, <code>Code</code>, <code>Classify</code>, <code>RAG</code>). The
-      planner's aggregate prefill/decode distribution is a demand-weighted blend of those choices.
-      Optionally set a prefix-hit rate in the panel below.</li>
+    <li><strong>Shape the workload.</strong> Set organization scale in the calculator's
+      <em>Use cases</em> panel. Use <em>Edit definitions</em> to change each kind's input/output
+      shape, quality gate, capabilities, and price ceiling. The aggregate prefill/decode
+      distribution is a demand-weighted blend of those choices. Optionally set a prefix-hit rate.</li>
     <li><strong>Read the chart.</strong> Switch between <em>User Pareto</em> (tok/s per user vs concurrency)
       and <em>Processing Pareto</em> (requests/sec vs batch size).</li>
-    <li><strong>(Optional)</strong> Open the <em>Internal market</em> panel below the chart
+    <li><strong>(Optional)</strong> Open <em>Demand and economic impact</em> below the chart
       to see how demand from projects routes onto this deployment vs cloud.</li>
     <li><strong>(Optional)</strong> Click <kbd>⊞ Duplicate To Compare</kbd> to fork the current
       config into a B-side and edit it independently for A/B comparisons.</li>
@@ -373,12 +374,17 @@
 </section>
 
 <section class="docs-section panel" id="market">
-  <h2>Internal market (revenue projection)</h2>
+  <h2>Demand and economic impact</h2>
   <p>
     A demand-side layer stacked on top of the throughput model. You describe <em>projects</em>
     (workload streams with a price ceiling and a quality requirement); the planner routes those
     streams across your deployed models, spills excess to cloud, and tells you what happens to
     the rest.
+  </p>
+  <p class="note">
+    Cost, margin, internal token price, value/cost multiple, and expansion recommendations remain
+    suppressed until GPU TCO is set. Equivalent value served is priced at the compatible cloud
+    substitute or WTP ceiling; it is a demand-side estimate, not necessarily booked revenue.
   </p>
 
   <h3>Use cases — the demand side</h3>

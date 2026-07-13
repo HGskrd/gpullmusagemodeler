@@ -2,6 +2,20 @@
 
 A Flask web application for planning and modeling GPU capacity for multi-model vLLM deployments. It lets you configure GPU pools, LLM workloads, and traffic distributions to project infrastructure costs and throughput.
 
+## Accuracy and Scope
+
+This project is a closed-form capacity estimator, not a request-level simulator. It combines published hardware rooflines and model architecture metadata with explicit efficiency, runtime-memory, batching, topology, prefix-cache, and workload-shape assumptions. Results are most useful for comparing scenarios and identifying capacity constraints; they are not a substitute for benchmarking the exact model, quantization, vLLM version, hardware topology, and service-level objective you intend to deploy.
+
+Before using a result for procurement or financial planning:
+
+1. Enter an amortized GPU-hour TCO. Economic margin and expansion recommendations are incomplete without it.
+2. Match the input/output distributions and interactive-versus-batch mix to the real workload.
+3. Calibrate bandwidth efficiency, compute efficiency, non-KV runtime memory, and prefix-cache hit rate against representative vLLM measurements.
+4. Review model and hardware provenance, confidence, preview status, and context-window limits in the UI.
+5. Treat maximum-throughput points separately from latency-constrained interactive capacity.
+
+Useful vLLM calibration signals include request counts, prompt and generation tokens, KV-cache usage, prefix-cache hits, time to first token, inter-token latency, and request throughput. Keep a before/after planner report with the benchmark fixture whenever changing a catalog entry or formula.
+
 ## Requirements
 
 - Python 3.10+
@@ -25,6 +39,7 @@ By default the app listens on `0.0.0.0:5014`, so it is reachable from the local 
    ```
 
    Edit `.env` before deploying. Set a strong `PLANNER_SECRET_KEY`, and set `PLANNER_ADMIN_PASSWORD` if you want to enable `/admin`.
+   For an internet-facing deployment, terminate TLS at a reverse proxy and set `PLANNER_SECURE_COOKIES=true`.
 
 3. **Start the app**
 
@@ -116,4 +131,35 @@ For local debugging, add `DEBUG=1` or `FLASK_DEBUG=1`.
 | `WEB_CONCURRENCY` | Gunicorn worker process count for Docker/systemd deployments; keep this at `1` while planner state is in process memory |
 | `GUNICORN_THREADS` | Gunicorn thread count; defaults to `4` |
 | `GUNICORN_TIMEOUT` | Gunicorn request timeout in seconds; defaults to `120` |
+| `PLANNER_TRACKING_ENABLED` | Persist complete planner scenario snapshots; defaults to `true` |
+| `PLANNER_SNAPSHOT_RETENTION_DAYS` | Delete snapshots older than this many days; `0` keeps the full history indefinitely |
+| `PLANNER_SNAPSHOT_MAX_PER_TAB` | Maximum snapshots retained per browser tab; `0` keeps every snapshot |
+| `PLANNER_ADMIN_PAGE_SIZE` | Snapshots rendered per admin page; defaults to `100` |
+| `PLANNER_STATE_TTL_SECONDS` | Idle lifetime for an in-memory planner scope; defaults to `86400` |
+| `PLANNER_STATE_MAX_SCOPES` | Maximum active in-memory browser scopes; defaults to `5000` |
+| `PLANNER_MAX_TABS_PER_VISITOR` | Maximum active tab scopes accepted per visitor; defaults to `64` |
+| `PLANNER_MAX_IMPORT_BYTES` | Maximum scenario/use-case JSON import size; defaults to `1048576` |
+| `PLANNER_MAX_REQUEST_BYTES` | Maximum total HTTP request size; defaults to `2097152` |
+| `PLANNER_RATE_LIMIT_PER_MINUTE` | Per-IP mutation-request limit; defaults to `600` |
+| `PLANNER_ADMIN_LOGIN_ATTEMPTS_PER_MINUTE` | Per-IP admin login attempt limit; defaults to `10` |
+| `PLANNER_SECURE_COOKIES` | Require HTTPS-only session and visitor cookies; enable behind an HTTPS reverse proxy |
 | `DEBUG` / `FLASK_DEBUG` | Enable Flask debug mode for local development |
+
+## Scenario Data and Privacy
+
+The planner stores complete A/B scenario snapshots—including hardware, model assignments, topology, costs, workload shapes, and use-case economics—so administrators can inspect how planning decisions evolve. Snapshot persistence is enabled by default and the default retention settings preserve the complete history.
+
+Snapshots are stored transactionally in `instance/planner_snapshots.sqlite3`; the legacy JSON file is imported on first use when present. The calculator discloses this behavior and provides a **Delete my scenarios** action that removes the current visitor's persisted snapshots and in-memory state. Set `PLANNER_TRACKING_ENABLED=false` when a deployment should not retain scenarios, or configure the optional retention limits above.
+
+Complete scenarios can be exported and imported as versioned JSON from the calculator. Treat these files as potentially sensitive infrastructure-planning data.
+
+## Development and Validation
+
+Run the full regression suite and source compilation checks before changing planner math or catalog data:
+
+```bash
+python -m compileall -q app.py calc.py data.py state.py tracking.py
+python -m pytest -q
+```
+
+Planner-math changes should include numerical invariants for units, global versus per-replica totals, memory accounting, context limits, and latency semantics. Web changes should include route tests for validation, state isolation, authentication, persistence, and retention. The GitHub Actions workflow runs these checks on Python 3.10 and 3.12.

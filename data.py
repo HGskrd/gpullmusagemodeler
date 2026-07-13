@@ -287,9 +287,9 @@ CAPABILITY_LABELS = {
     "audio":     "Audio input",
     "reasoning": "Thinking / reasoning",
 }
-# Every modern open-weights model supports tool-calling and long context. Multimodal
-# and reasoning flags are the ones that actually discriminate.
-DEFAULT_MODEL_CAPABILITIES: frozenset[str] = frozenset({"tools", "ctx_128k"})
+# Tool use remains the common default. Long-context eligibility is derived from the
+# model's explicit context limit below instead of being granted to every text model.
+DEFAULT_MODEL_CAPABILITIES: frozenset[str] = frozenset({"tools"})
 
 
 @dataclass
@@ -340,12 +340,18 @@ class Model:
     capabilities_override: frozenset[str] | None = None
     realtime_profile: RealtimeProfile | None = None
     embedding_profile: EmbeddingProfile | None = None
+    # Maximum combined prompt + generated tokens accepted by the model. 131072 is
+    # the catalog default for current text models; legacy/short-context families
+    # override it at their definitions. Embedding models retain their profile cap.
+    max_context_tokens: int = 131072
 
     @property
     def capabilities(self) -> frozenset[str]:
-        if self.capabilities_override is not None:
-            return self.capabilities_override | self.extra_capabilities
-        return DEFAULT_MODEL_CAPABILITIES | self.extra_capabilities
+        base = self.capabilities_override if self.capabilities_override is not None else DEFAULT_MODEL_CAPABILITIES
+        capabilities = (base | self.extra_capabilities) - {"ctx_128k"}
+        if not self.is_realtime_only and not self.is_embedding_model and self.max_context_tokens >= 131072:
+            capabilities = capabilities | {"ctx_128k"}
+        return capabilities
 
     @property
     def is_realtime_only(self) -> bool:
@@ -1539,6 +1545,7 @@ def _tiny_aya_model(key: str, name: str, color: str) -> Model:
         local_attention_window=4096,
         attention_label="Tiny Aya gated-config proxy, 3:1 SWA/global, ctx 8k",
         capabilities_override=frozenset(),
+        max_context_tokens=8192,
     )
 
 
@@ -1575,6 +1582,7 @@ def _rwkv7_g1_model(
         linear_attention_k_head_dim=RWKV7_G1_HEAD_DIM,
         attention_label=f"RWKV recurrent state, ctx {RWKV7_G1_CONTEXT // 1024}k",
         capabilities_override=capabilities,
+        max_context_tokens=RWKV7_G1_CONTEXT,
     )
 
 
@@ -1615,6 +1623,7 @@ def _lfm_text_model(
         attention_query_heads=num_heads,
         attention_label=f"{conv_layers} LIV conv + {attention_layers} GQA, ctx 32k",
         capabilities_override=capabilities,
+        max_context_tokens=32768,
     )
 
 
@@ -2336,9 +2345,9 @@ MODELS: dict[str, Model] = {
         fp8_weight_bytes_per_param=FP4_FP8_MOE_WEIGHT_BPP,
     ),
 
-    "mi7": Model("mi7", "Mistral 7B", "Mistral", "#e07020", 7e9, 7e9, False, 32, 32, 8, 128, False),
-    "mx87": Model("mx87", "Mixtral 8×7B (45B-A12B)", "Mistral", "#cc6633", 45e9, 12e9, True, 32, 32, 8, 128, False),
-    "cs22": Model("cs22", "Codestral 22B", "Mistral", "#d4882e", 22e9, 22e9, False, 56, 32, 8, 128, False),
+    "mi7": Model("mi7", "Mistral 7B", "Mistral", "#e07020", 7e9, 7e9, False, 32, 32, 8, 128, False, max_context_tokens=32768),
+    "mx87": Model("mx87", "Mixtral 8×7B (45B-A12B)", "Mistral", "#cc6633", 45e9, 12e9, True, 32, 32, 8, 128, False, max_context_tokens=32768),
+    "cs22": Model("cs22", "Codestral 22B", "Mistral", "#d4882e", 22e9, 22e9, False, 56, 32, 8, 128, False, max_context_tokens=32768),
     "ms24": Model("ms24", "Mistral Small 3.1 24B", "Mistral", "#b87530", 24e9, 24e9, False, 40, 32, 8, 128, False),
     "ms32": Model("ms32", "Mistral Small 3.2 24B", "Mistral", "#C18438", 24e9, 24e9, False, 40, 32, 8, 128, False),
     "voxtral-realtime-mini-4b": Model(

@@ -19,7 +19,7 @@
     {% set i = loop.index0 %}
     <div style="display:flex;align-items:center;gap:4px;margin-bottom:1px;">
       <span class="M" style="font-size:9px;color:var(--fg1);min-width:28px;text-align:right;">{{ b.label }}</span>
-      <input type="range" min="0" max="100" value="{{ dist[i] }}" style="flex:1;"
+      <input type="range" min="0" max="100" value="{{ dist[i] }}" style="flex:1;" aria-label="{{ b.label }} token document share"
              hx-post="/dist/slide" hx-target="#main-content"
              hx-trigger="change"
              hx-vals='{"panel":"{{ panel }}","kind":"embedding_doc","index":"{{ i }}"}'
@@ -50,8 +50,8 @@
   </div>
 
   <div style="display:flex;align-items:center;gap:5px;margin-bottom:2px;">
-    <span class="T" style="min-width:36px;">Input</span>
-    <input type="range" min="6" max="17" value="{{ state.task_il|log2int }}" style="flex:1;"
+    <label class="T" for="task-input-{{ panel }}" style="min-width:36px;">Input</label>
+    <input id="task-input-{{ panel }}" type="range" min="6" max="17" value="{{ state.task_il|log2int }}" style="flex:1;"
            hx-post="/task/length" hx-target="#main-content"
            hx-trigger="change"
            hx-vals='{"panel":"{{ panel }}","kind":"in"}'
@@ -62,8 +62,8 @@
   </div>
 
   <div style="display:flex;align-items:center;gap:5px;">
-    <span class="T" style="min-width:36px;">Output</span>
-    <input type="range" min="3" max="14" value="{{ state.task_ol|log2int }}" style="flex:1;"
+    <label class="T" for="task-output-{{ panel }}" style="min-width:36px;">Output</label>
+    <input id="task-output-{{ panel }}" type="range" min="3" max="14" value="{{ state.task_ol|log2int }}" style="flex:1;"
            hx-post="/task/length" hx-target="#main-content"
            hx-trigger="change"
            hx-vals='{"panel":"{{ panel }}","kind":"out"}'

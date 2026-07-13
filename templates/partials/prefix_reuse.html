@@ -3,8 +3,8 @@
   <h2>Prefix Reuse</h2>
 
   <div style="display:flex;align-items:center;gap:5px;">
-    <span class="T tip" title="Estimated share of prompt tokens served from vLLM Automatic Prefix Caching. This reduces shared-prefix prefill only; decode work is unchanged.">Prefix hit rate</span>
-    <input type="range" min="0" max="100" value="{{ (state.prefix_hit_rate * 100)|int }}" style="flex:1;"
+    <label class="T tip" for="prefix-hit-{{ panel }}" title="Estimated share of prompt tokens served from vLLM Automatic Prefix Caching. This reduces shared-prefix prefill only; decode work is unchanged.">Prefix hit rate</label>
+    <input id="prefix-hit-{{ panel }}" type="range" min="0" max="100" value="{{ (state.prefix_hit_rate * 100)|int }}" style="flex:1;"
            hx-post="/settings/prefix-hit" hx-target="#main-content"
            hx-trigger="change" hx-vals='{"panel":"{{ panel }}"}'
            name="value"

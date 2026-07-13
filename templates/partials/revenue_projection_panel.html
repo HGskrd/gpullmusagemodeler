@@ -6,14 +6,24 @@
   <h3 style="margin:0;">{{ label }}</h3>
   {% endif %}
 
+  {% if p.cost_day <= 0 %}
+  <div class="estimate-warning" role="note">
+    <div>
+      <strong>Economics incomplete.</strong>
+      <span class="T">TCO is unset, so internal spend, margin, internal token prices, revenue multiple, and expansion recommendations are suppressed. Equivalent value remains a demand-side estimate.</span>
+    </div>
+    <a href="#main-content">Set TCO in the cluster card</a>
+  </div>
+  {% endif %}
+
   {# ── Headline: demand served vs leaked vs destroyed ─────────────────────── #}
   <div class="card">
     <div class="projection-headline">
       <div class="hs money-hero">
-        <span class="T tip" title="Daily revenue captured by the infrastructure owner from demand served on these GPUs, priced at the cloud substitute or WTP when cloud is blocked.">Owner revenue / day</span>
+        <span class="T tip" title="Equivalent daily value of demand served on these GPUs, priced at the cloud substitute or WTP when cloud is blocked. This is not necessarily booked revenue.">Equivalent value served / day</span>
         <span class="val good">{{ p.value_served_day|fmt_money }}</span>
         <span class="sub">
-          {% if p.cost_day > 0 %}margin {{ p.margin_day|fmt_money }}/day · revenue multiple {{ "%.2f"|format(p.revenue_multiple) }}×{% else %}captured by your GPUs{% endif %}
+          {% if p.cost_day > 0 %}margin {{ p.margin_day|fmt_money }}/day · value/cost multiple {{ "%.2f"|format(p.revenue_multiple) }}×{% else %}gross equivalent value; costs not included{% endif %}
         </span>
       </div>
       <div class="hs">
@@ -27,27 +37,27 @@
         <span class="sub">{{ f.served_tokens|fmt_num }} tok on your GPUs</span>
       </div>
       <div class="hs">
-        <span class="T">Leaked to cloud</span>
+        <span class="T">Cloud fallback</span>
         <span class="val {{ 'bad' if (f.spilled_pct + f.leaked_pct) >= 25 else ('warn' if (f.spilled_pct + f.leaked_pct) > 0 else '') }}">
           {{ (f.spilled_pct + f.leaked_pct)|round(0)|int }}%
         </span>
-        <span class="sub">{{ p.value_cloud_day|fmt_money }}/day would flow out to cloud</span>
+        <span class="sub">{{ f.spilled_pct|round(0)|int }}% capacity spill · {{ f.leaked_pct|round(0)|int }}% model/price mismatch</span>
       </div>
       <div class="hs">
-        <span class="T">Destroyed</span>
+        <span class="T">Unserved</span>
         <span class="val {{ 'bad' if f.destroyed_pct >= 10 else ('warn' if f.destroyed_pct > 0 else '') }}">
           {{ f.destroyed_pct|round(0)|int }}%
         </span>
-        <span class="sub">price too high — work not done</span>
+        <span class="sub">no compatible option within the price ceiling</span>
       </div>
       <div class="hs">
-        <span class="T">Revenue multiple</span>
+        <span class="T">Value / cost multiple</span>
         <span class="val {{ 'good' if p.revenue_multiple >= 1.5 else ('warn' if p.revenue_multiple >= 1 else 'bad') }}">
           {% if p.cost_day > 0 %}{{ "%.2f"|format(p.revenue_multiple) }}×{% else %}—{% endif %}
         </span>
         <span class="sub">
           {% if p.cost_day > 0 %}{{ (p.value_capture_rate * 100)|round(0)|int }}% value capture · cluster {{ p.cost_day|fmt_money }}/day
-          {% else %}set TCO $/GPU·hr to see{% endif %}
+          {% else %}set TCO $/GPU·hr to calculate{% endif %}
         </span>
       </div>
       <div class="hs">
@@ -63,7 +73,7 @@
 
     {% if f.total_tokens > 0 %}
     <div class="fate-bar-wrap" style="margin-top:10px;">
-      <div class="fate-bar" role="img" aria-label="Where demand ends up">
+      <div class="fate-bar" role="img" aria-label="Demand outcome: {{ f.served_pct|round(0)|int }} percent served internally, {{ f.spilled_pct|round(0)|int }} percent spilled to cloud for capacity, {{ f.leaked_pct|round(0)|int }} percent sent to cloud for model or price mismatch, and {{ f.destroyed_pct|round(0)|int }} percent unserved">
         {% if f.served_pct > 0 %}<div class="fate-seg served" style="flex:{{ f.served_pct }};" title="Served on your GPUs · {{ f.served_tokens|fmt_num }} tok/day">{% if f.served_pct >= 10 %}Served {{ f.served_pct|round(0)|int }}%{% endif %}</div>{% endif %}
         {% if f.spilled_pct > 0 %}<div class="fate-seg spilled" style="flex:{{ f.spilled_pct }};" title="Right model deployed but capacity saturated · {{ f.spilled_tokens|fmt_num }} tok/day spilled to cloud">{% if f.spilled_pct >= 10 %}Spilled {{ f.spilled_pct|round(0)|int }}%{% endif %}</div>{% endif %}
         {% if f.leaked_pct > 0 %}<div class="fate-seg leaked" style="flex:{{ f.leaked_pct }};" title="No matching model or internally priced out · {{ f.leaked_tokens|fmt_num }} tok/day leaked to cloud">{% if f.leaked_pct >= 10 %}Leaked {{ f.leaked_pct|round(0)|int }}%{% endif %}</div>{% endif %}
@@ -73,7 +83,7 @@
         <span><i class="sw served"></i> Served on your GPUs</span>
         <span><i class="sw spilled"></i> Spilled — right model, not enough GPUs</span>
         <span><i class="sw leaked"></i> Leaked — wrong or no model / priced out</span>
-        <span><i class="sw destroyed"></i> Destroyed — cloud too expensive, work dropped</span>
+        <span><i class="sw destroyed"></i> Unserved — no compatible option within the price ceiling</span>
       </div>
     </div>
     {% endif %}
@@ -95,10 +105,12 @@
     {% endif %}
   </div>
 
-  {% if p.recommendations %}
+  {% if p.cost_day > 0 and p.recommendations %}
   <div class="card">
     <div class="T" style="margin-bottom:4px;font-weight:600;color:var(--fg0);">Best next GPU</div>
+    <div class="table-scroll" tabindex="0" aria-label="Best next GPU recommendations; scroll horizontally for more columns">
     <table class="projection-table">
+      <caption class="sr-only">Best next GPU recommendations and modeled economic gains</caption>
       <thead>
         <tr>
           <th>Expansion</th>
@@ -120,6 +132,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
   </div>
   {% endif %}
 
@@ -156,8 +169,10 @@
         {% if row.any_served %}
         <div class="T" style="margin-top:4px;display:flex;flex-wrap:wrap;gap:8px;">
           <span title="Revenue captured internally, priced at cloud substitute (or WTP if cloud is blocked).">💰 {{ row.value_served|fmt_money }}/day served</span>
+          {% if p.cost_day > 0 %}
           <span title="Internal GPU-day cost allocated to tokens this use case consumed.">· spent {{ row.internal_cost_day|fmt_money }}/day</span>
-          <span class="{{ 'good' if row.margin_day > 0 else 'bad' }}" title="value_served − internal_cost_day">· margin {{ row.margin_day|fmt_money }}/day</span>
+          <span class="{{ 'good' if row.margin_day > 0 else 'bad' }}" title="equivalent value served − internal cost/day">· margin {{ row.margin_day|fmt_money }}/day</span>
+          {% endif %}
           {% if row.value_spilled + row.value_leaked > 0 %}
           <span class="warn" title="Value that flees to cloud because capacity saturated or priced out.">· {{ (row.value_spilled + row.value_leaked)|fmt_money }}/day to cloud</span>
           {% endif %}
@@ -206,7 +221,9 @@
   {% if p.has_supply %}
   <div class="card">
     <div class="T" style="margin-bottom:4px;font-weight:600;color:var(--fg0);">Supply · Deployed models</div>
+    <div class="table-scroll" tabindex="0" aria-label="Deployed model supply table; scroll horizontally for more columns">
     <table class="projection-table">
+      <caption class="sr-only">Deployed model supply, capacity, utilization, cost, and emissions estimates</caption>
       <thead>
         <tr>
           <th>Model</th>
@@ -264,6 +281,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
   </div>
   {% else %}
   <div class="card">
@@ -276,8 +294,8 @@
     <summary><span class="T" style="font-weight:600;">Advanced · day shape, night batching, workload</span></summary>
     <div class="lever-grid" style="margin-top:8px;">
       <div class="lv">
-        <span class="T">Day shape</span>
-        <select name="value"
+        <label class="T" for="projection-day-shape-{{ panel }}">Day shape</label>
+        <select id="projection-day-shape-{{ panel }}" name="value"
                 hx-post="/projection/choice" hx-target="#main-content" hx-trigger="change"
                 hx-vals='{"panel":"{{ panel }}","key":"projection_day_shape"}'>
           {% for key, shape in DAY_SHAPES.items() %}

@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import copy
 import math
+import os
 import re
-from dataclasses import dataclass, field
+import threading
+import time
+import weakref
+from dataclasses import asdict, dataclass, field
 from typing import Any, Optional
 
 from data import (
@@ -22,6 +26,7 @@ from data import (
     PROJECT_PRESETS,
     CORPO_CLOUD_PRESETS,
     CORPO_CLOUD_DEFAULT,
+    COUNTRIES,
     MODEL_CAPABILITIES,
     SCALE_MODELS,
     PRECISIONS,
@@ -55,6 +60,7 @@ from calc import (
 
 
 _uid_counter = 0
+_uid_lock = threading.Lock()
 PROJECT_FIELD_BOUNDS = {
     "tokens_day":          (0.0, 1e12),     # 0 to 1T tokens/day — generous, the UI enforces slider range
     "wtp_per_m":           (0.0, 200.0),    # $/M tokens ceiling
@@ -118,8 +124,16 @@ PROJECTION_PCT_BOUNDS = {
 
 def _next_uid() -> int:
     global _uid_counter
-    _uid_counter += 1
-    return _uid_counter
+    with _uid_lock:
+        _uid_counter += 1
+        return _uid_counter
+
+
+def _env_nonnegative_int(name: str, default: int) -> int:
+    try:
+        return max(0, int(os.environ.get(name, default)))
+    except (TypeError, ValueError):
+        return default
 
 
 def normalize_plot_mode(mode: Optional[str]) -> str:
@@ -1030,7 +1044,10 @@ def set_project_field(state: PlannerState, project_uid: int, field_name: str, va
     if not bounds:
         return
     lo, hi = bounds
-    setattr(proj, field_name, min(max(float(value), lo), hi))
+    numeric = float(value)
+    if not math.isfinite(numeric):
+        raise ValueError(f"{field_name} must be finite.")
+    setattr(proj, field_name, min(max(numeric, lo), hi))
     if field_name == "tokens_day":
         proj.scale_value = tokens_to_scale_value(proj.tokens_day, getattr(proj, "scale_kind", {}))
         _sync_aggregate_distribution(state)
@@ -1144,6 +1161,8 @@ def replace_use_case_defs(state: PlannerState, payload: Any) -> int:
         items = None
     if not isinstance(items, list):
         raise ValueError("Use-case JSON must contain a use_cases array.")
+    if len(items) > 256:
+        raise ValueError("Use-case JSON may contain at most 256 definitions.")
 
     normalized = []
     seen = set()
@@ -1326,14 +1345,18 @@ def _payload_dict(value: Any) -> dict:
 
 def _payload_float(source: dict, key: str, default: float) -> float:
     try:
-        return float(source.get(key, default))
+        value = float(source.get(key, default))
     except (TypeError, ValueError):
         return default
+    return value if math.isfinite(value) else default
 
 
 def _bounded_project_value(field_name: str, value: float) -> float:
     lo, hi = PROJECT_FIELD_BOUNDS[field_name]
-    return min(max(float(value), lo), hi)
+    numeric = float(value)
+    if not math.isfinite(numeric):
+        raise ValueError(f"{field_name} must be finite.")
+    return min(max(numeric, lo), hi)
 
 
 def _project_from_payload(state: PlannerState, item: dict) -> Project:
@@ -1428,6 +1451,8 @@ def replace_project_set(state: PlannerState, payload: Any) -> int:
         items = None
     if not isinstance(items, list):
         raise ValueError("Use-case JSON must contain a use_cases array.")
+    if len(items) > 256:
+        raise ValueError("Use-case JSON may contain at most 256 use cases.")
 
     projects = []
     for item in items:
@@ -2051,6 +2076,7 @@ def set_dist_preset(state: PlannerState, kind: str, preset_key: str):
 
 
 def set_dist_value(state: PlannerState, kind: str, index: int, value: int):
+    value = min(max(int(value), 0), 1_000_000)
     if kind == "embedding_doc":
         if 0 <= index < len(state.embedding_doc_dist):
             state.embedding_doc_dist[index] = value
@@ -2100,12 +2126,86 @@ def set_gpu_cost(state: PlannerState, gpu_uid: int, cost: float):
 
 _states: dict[str, PlannerState] = {}
 _compare_states: dict[str, PlannerState] = {}
+_state_last_seen: dict[str, float] = {}
+_state_guard = threading.RLock()
+_scope_locks: weakref.WeakValueDictionary[str, threading.RLock] = weakref.WeakValueDictionary()
+_STATE_TTL_SECONDS = _env_nonnegative_int("PLANNER_STATE_TTL_SECONDS", 86400)
+_STATE_MAX_SCOPES = max(1, _env_nonnegative_int("PLANNER_STATE_MAX_SCOPES", 5000))
+
+
+def get_scope_lock(session_id: str) -> threading.RLock:
+    """Return the process-local lock serializing one browser-tab scope."""
+    with _state_guard:
+        lock = _scope_locks.get(session_id)
+        if lock is None:
+            lock = threading.RLock()
+            _scope_locks[session_id] = lock
+        return lock
+
+
+def allow_visitor_scope(session_id: str, visitor_id: str, max_scopes: int) -> bool:
+    """Return whether a visitor may reuse/create this tab scope under its cap."""
+    prefix = f"{visitor_id}:"
+    with _state_guard:
+        _prune_states_locked(time.monotonic(), preserve=session_id)
+        if session_id in _states or session_id in _compare_states:
+            return True
+        existing = sum(1 for key in _states if key.startswith(prefix))
+        return existing < max(1, int(max_scopes))
+
+
+def _prune_states_locked(now: float, preserve: Optional[str] = None) -> None:
+    if _STATE_TTL_SECONDS > 0:
+        stale = [
+            key for key, touched in _state_last_seen.items()
+            if key != preserve and now - touched > _STATE_TTL_SECONDS
+        ]
+        for key in stale:
+            _states.pop(key, None)
+            _compare_states.pop(key, None)
+            _state_last_seen.pop(key, None)
+
+    excess = len(_states) - _STATE_MAX_SCOPES
+    if excess > 0:
+        oldest = sorted(
+            (touched, key) for key, touched in _state_last_seen.items() if key != preserve
+        )[:excess]
+        for _, key in oldest:
+            _states.pop(key, None)
+            _compare_states.pop(key, None)
+            _state_last_seen.pop(key, None)
+
+
+def reset_state(session_id: str, *, blank: bool = False) -> PlannerState:
+    with _state_guard:
+        state = PlannerState() if blank else create_default_state()
+        _states[session_id] = state
+        _compare_states.pop(session_id, None)
+        _state_last_seen[session_id] = time.monotonic()
+        _prune_states_locked(_state_last_seen[session_id], preserve=session_id)
+        return state
+
+
+def delete_visitor_states(visitor_id: str) -> int:
+    prefix = f"{visitor_id}:"
+    with _state_guard:
+        keys = {key for key in (*_states.keys(), *_compare_states.keys()) if key.startswith(prefix)}
+        for key in keys:
+            _states.pop(key, None)
+            _compare_states.pop(key, None)
+            _state_last_seen.pop(key, None)
+        return len(keys)
 
 
 def get_state(session_id: str) -> PlannerState:
-    if session_id not in _states:
-        _states[session_id] = create_default_state()
-    s = _states[session_id]
+    now = time.monotonic()
+    with _state_guard:
+        _prune_states_locked(now, preserve=session_id)
+        if session_id not in _states:
+            _states[session_id] = create_default_state()
+        _state_last_seen[session_id] = now
+        _prune_states_locked(now, preserve=session_id)
+        s = _states[session_id]
     for am in s.models:
         am.prec = normalize_precision(getattr(am, "prec", "bf16"))
     s.mode = normalize_plot_mode(s.mode)
@@ -2122,7 +2222,10 @@ def get_state(session_id: str) -> PlannerState:
 
 
 def get_compare_state(session_id: str) -> Optional[PlannerState]:
-    state = _compare_states.get(session_id)
+    with _state_guard:
+        state = _compare_states.get(session_id)
+        if state is not None:
+            _state_last_seen[session_id] = time.monotonic()
     if state is not None:
         for am in state.models:
             am.prec = normalize_precision(getattr(am, "prec", "bf16"))
@@ -2141,12 +2244,194 @@ def get_compare_state(session_id: str) -> Optional[PlannerState]:
 
 def duplicate_compare_state(session_id: str) -> PlannerState:
     # Clone the current primary configuration so panel B starts from panel A.
-    _compare_states[session_id] = copy.deepcopy(get_state(session_id))
-    return _compare_states[session_id]
+    with _state_guard:
+        _compare_states[session_id] = copy.deepcopy(get_state(session_id))
+        _state_last_seen[session_id] = time.monotonic()
+        return _compare_states[session_id]
 
 
 def clear_compare_state(session_id: str) -> bool:
-    return _compare_states.pop(session_id, None) is not None
+    with _state_guard:
+        return _compare_states.pop(session_id, None) is not None
+
+
+def _json_compatible(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_compatible(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_compatible(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        return sorted(_json_compatible(item) for item in value)
+    return value
+
+
+def serialize_scenario(state_a: PlannerState, state_b: Optional[PlannerState]) -> dict[str, Any]:
+    """Return a versioned, complete A/B planner scenario."""
+    return {
+        "type": "gpullm-scenario",
+        "version": 1,
+        "panel_a": _json_compatible(asdict(state_a)),
+        "panel_b": _json_compatible(asdict(state_b)) if state_b is not None else None,
+    }
+
+
+def _scenario_float(raw: dict, key: str, default: float, lo: float, hi: float) -> float:
+    try:
+        value = float(raw.get(key, default))
+    except (TypeError, ValueError):
+        value = default
+    if not math.isfinite(value):
+        value = default
+    return min(max(value, lo), hi)
+
+
+def _scenario_int(raw: dict, key: str, default: int, lo: int, hi: int) -> int:
+    try:
+        value = int(raw.get(key, default))
+    except (TypeError, ValueError):
+        value = default
+    return min(max(value, lo), hi)
+
+
+def _scenario_dist(raw: Any, expected: int, fallback: list[int]) -> list[int]:
+    if not isinstance(raw, list):
+        return list(fallback)
+    values = []
+    for idx in range(expected):
+        try:
+            value = int(raw[idx]) if idx < len(raw) else 0
+        except (TypeError, ValueError):
+            value = 0
+        values.append(min(max(value, 0), 1_000_000))
+    return values if any(values) else list(fallback)
+
+
+def deserialize_planner_state(payload: Any) -> PlannerState:
+    """Validate and reconstruct one panel from a scenario payload."""
+    if not isinstance(payload, dict):
+        raise ValueError("Each scenario panel must be a JSON object.")
+    state = PlannerState()
+
+    use_case_defs = payload.get("use_case_defs")
+    if isinstance(use_case_defs, list):
+        if len(use_case_defs) > 256:
+            raise ValueError("A scenario may contain at most 256 use-case definitions.")
+        replace_use_case_defs(state, {"use_cases": use_case_defs})
+
+    projects = payload.get("projects", [])
+    if not isinstance(projects, list) or len(projects) > 256:
+        raise ValueError("A scenario panel may contain at most 256 use cases.")
+    replace_project_set(state, {"use_cases": projects})
+
+    gpu_rows = payload.get("gpus", [])
+    if not isinstance(gpu_rows, list) or len(gpu_rows) > 64:
+        raise ValueError("A scenario panel may contain at most 64 GPU pools.")
+    uid_map: dict[str, int] = {}
+    state.gpus = []
+    for row in gpu_rows:
+        if not isinstance(row, dict) or row.get("gpu_type") not in GPUS:
+            raise ValueError("Scenario contains an invalid GPU pool.")
+        gpu_type = str(row["gpu_type"])
+        count = normalize_gpu_count(gpu_type, _scenario_int(row, "count", 1, 1, 100_000))
+        new_uid = _next_uid()
+        old_uid = str(row.get("uid", new_uid))
+        if old_uid in uid_map:
+            raise ValueError("Scenario GPU pool identifiers must be unique.")
+        uid_map[old_uid] = new_uid
+        country = str(row.get("country", "FR"))
+        if country not in COUNTRIES:
+            country = "FR"
+        state.gpus.append(GpuPool(
+            new_uid, gpu_type, count,
+            _scenario_float(row, "cost_per_gpu_hour", 0.0, 0.0, 1_000_000.0),
+            country,
+        ))
+
+    model_rows = payload.get("models", [])
+    if not isinstance(model_rows, list) or len(model_rows) > 512:
+        raise ValueError("A scenario panel may contain at most 512 model assignments.")
+    state.models = []
+    for row in model_rows:
+        if not isinstance(row, dict) or row.get("model_key") not in MODELS:
+            raise ValueError("Scenario contains an invalid model assignment.")
+        gpu_uid = uid_map.get(str(row.get("gpu_uid")))
+        pool = state.find_gpu(gpu_uid) if gpu_uid is not None else None
+        if pool is None:
+            raise ValueError("Every scenario model must reference a valid GPU pool.")
+        available = max(0, pool.count - state.used_gpu_for_pool(pool.uid))
+        gpu_count = min(_scenario_int(row, "gpu_count", 0, 0, pool.count), available)
+        assignment = ModelAssignment(
+            _next_uid(), str(row["model_key"]), pool.uid, gpu_count,
+            _scenario_int(row, "tp", 1, 1, max(1, gpu_count)),
+            _scenario_int(row, "dp", 1, 1, max(1, gpu_count)),
+            normalize_precision(str(row.get("prec", "bf16"))),
+            _scenario_int(row, "pp", 1, 1, max(1, gpu_count)),
+            _scenario_int(row, "prefill_tp", 1, 1, max(1, gpu_count)),
+            _scenario_int(row, "prefill_pp", 1, 1, max(1, gpu_count)),
+            _scenario_int(row, "prefill_dp", 1, 1, max(1, gpu_count)),
+        )
+        state.models.append(assignment)
+
+    for key, default, lo, hi in (
+        ("mu", 0.90, 0.01, 1.0), ("profiled_non_kv_gb", 4.0, 0.0, 4096.0),
+        ("kv_slack", 0.02, 0.0, 1.0), ("moe_imbalance", 1.15, 0.1, 10.0),
+        ("pd_interference", 0.0, 0.0, 1.0), ("prefix_hit_rate", 0.0, 0.0, 1.0),
+        ("prefill_bw_eff", 0.80, 0.01, 1.0), ("prefill_comp_eff", 0.75, 0.01, 1.0),
+        ("prefill_overhead", 0.08, 0.0, 1.0), ("prefill_paged_oh", 0.10, 0.0, 1.0),
+        ("prefill_ar_overlap", 0.30, 0.0, 1.0), ("decode_bw_eff", 0.80, 0.01, 1.0),
+        ("decode_comp_eff", 0.75, 0.01, 1.0), ("decode_overhead", 0.08, 0.0, 1.0),
+        ("decode_paged_oh", 0.10, 0.0, 1.0), ("decode_ar_overlap", 0.30, 0.0, 1.0),
+        ("projection_demand_level", 0.65, 0.05, 1.20),
+        ("projection_night_discount", 0.30, 0.0, 0.80),
+        ("projection_batch_eligible", 0.35, 0.0, 1.0),
+        ("projection_elasticity", 2.0, 0.0, 4.0),
+    ):
+        setattr(state, key, _scenario_float(payload, key, default, lo, hi))
+    state.decode_sched_budget = _scenario_int(payload, "decode_sched_budget", 16384, 1, 10_000_000)
+    state.task_il = _scenario_int(payload, "task_il", 2048, 1, 10_000_000)
+    state.task_ol = _scenario_int(payload, "task_ol", 32, 0, 10_000_000)
+    state.in_dist = _scenario_dist(payload.get("in_dist"), len(INPUT_BUCKETS), list(DIST_PRESETS["Chat"]["in"]))
+    state.out_dist = _scenario_dist(payload.get("out_dist"), len(OUTPUT_BUCKETS), list(DIST_PRESETS["Chat"]["out"]))
+    state.embedding_doc_dist = _scenario_dist(
+        payload.get("embedding_doc_dist"), len(EMBEDDING_DOC_BUCKETS), list(EMBEDDING_DOC_PRESETS["Doc"])
+    )
+    state.in_pre = str(payload.get("in_pre", "Chat")) if payload.get("in_pre") in DIST_PRESETS else ""
+    state.out_pre = str(payload.get("out_pre", "Chat")) if payload.get("out_pre") in DIST_PRESETS else ""
+    state.embedding_doc_pre = (
+        str(payload.get("embedding_doc_pre")) if payload.get("embedding_doc_pre") in EMBEDDING_DOC_PRESETS else ""
+    )
+    state.mode = normalize_plot_mode(payload.get("mode"))
+    state.projection_day_shape = normalize_day_shape(payload.get("projection_day_shape"))
+    state.corpo_cloud = normalize_corpo_cloud(payload.get("corpo_cloud"))
+    state.projection_night_batching = bool(payload.get("projection_night_batching", False))
+    state.auto_mode = bool(payload.get("auto_mode", False))
+    state.auto_strategy = normalize_auto_strategy(payload.get("auto_strategy"))
+    excluded = payload.get("auto_excluded", [])
+    state.auto_excluded = [str(key) for key in excluded if key in MODELS] if isinstance(excluded, list) else []
+    retune_models(state, preserve_existing=True)
+    return state
+
+
+def deserialize_scenario(payload: Any) -> tuple[PlannerState, Optional[PlannerState]]:
+    if not isinstance(payload, dict) or payload.get("type") != "gpullm-scenario":
+        raise ValueError("Scenario JSON must have type 'gpullm-scenario'.")
+    if payload.get("version") != 1:
+        raise ValueError("Unsupported scenario version.")
+    state_a = deserialize_planner_state(payload.get("panel_a"))
+    panel_b = payload.get("panel_b")
+    state_b = deserialize_planner_state(panel_b) if panel_b is not None else None
+    return state_a, state_b
+
+
+def replace_scope_states(session_id: str, state_a: PlannerState, state_b: Optional[PlannerState]) -> None:
+    with _state_guard:
+        _states[session_id] = state_a
+        if state_b is None:
+            _compare_states.pop(session_id, None)
+        else:
+            _compare_states[session_id] = state_b
+        _state_last_seen[session_id] = time.monotonic()
+        _prune_states_locked(_state_last_seen[session_id], preserve=session_id)
 
 
 def _comm_summary(tp: int, pp: int) -> str:

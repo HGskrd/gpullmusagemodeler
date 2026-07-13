@@ -1,11 +1,12 @@
 {# Model picker dropdown - loaded via HTMX into picker element. One tab per
    model kind (LLM / Embedding / ASR). Tab switches are HTMX GETs into the
    existing picker so this partial stays declarative. #}
-<div class="model-picker-tabs tabs">
+<div class="model-picker-tabs tabs" role="tablist" aria-label="Model type">
   {% for kind_key, kind_label in MODEL_KINDS %}
     {% set count = models_by_kind.get(kind_key, {}).values() | map('length') | sum %}
     <button type="button"
             class="sm {% if kind_key == active_kind %}on{% endif %}"
+            role="tab" aria-selected="{{ 'true' if kind_key == active_kind else 'false' }}"
             hx-get="/picker/model?panel={{ panel }}&kind={{ kind_key }}"
             hx-target="closest .picker"
             hx-swap="innerHTML"

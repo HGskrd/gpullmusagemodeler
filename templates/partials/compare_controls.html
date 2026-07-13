@@ -1,12 +1,14 @@
 <button id="compareBtn"
+        type="button"
         hx-post="/compare/duplicate"
         hx-target="#main-content"
         style="font-size:10px;"
         class="{{ 'on' if B else '' }}">
-  ⊞ {{ 'Duplicate A → B' if B else 'Duplicate To Compare' }}
+  ⊞ {{ 'Replace B with A' if B else 'Duplicate A to compare' }}
 </button>
 {% if B %}
 <button id="closeCompareBtn"
+        type="button" aria-label="Close comparison and remove configuration B"
         hx-post="/compare/close"
         hx-target="#main-content"
         style="font-size:10px;">

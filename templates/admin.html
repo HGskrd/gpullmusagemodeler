@@ -168,6 +168,17 @@
   .vnav-label .vnav-vid { font-weight: 700; color: #a8d4e6; }
   .vnav-label .vnav-pos { color: rgba(240,235,224,0.6); font-size: 10px; margin-left: 5px; }
   .vnav-hint { font-size: 9px; color: rgba(240,235,224,0.4); padding: 0 8px 0 0; font-family: "IBM Plex Mono", monospace; }
+  .pagination {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    margin: 18px 0 4px; font-family: "IBM Plex Mono", monospace; font-size: 11px;
+  }
+  .pagination a {
+    display: inline-flex; align-items: center; min-height: 32px; padding: 4px 10px;
+    color: #f0ebe0; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.16);
+    border-radius: 5px; text-decoration: none;
+  }
+  .pagination a:hover { background: rgba(255,255,255,0.14); }
+  .pagination .disabled { opacity: .35; min-width: 78px; text-align: center; }
 </style>
 </head>
 <body>
@@ -178,7 +189,7 @@
       <h1>Planner Admin</h1>
       <div class="meta">
         <strong>{{ total_snapshots }}</strong> snapshot{{ '' if total_snapshots == 1 else 's' }} &nbsp;·&nbsp;
-        <strong>{{ visitors|length }}</strong> visitor{{ '' if visitors|length == 1 else 's' }}
+        <strong>{{ visitors|length }}</strong> visitor{{ '' if visitors|length == 1 else 's' }} on this page
       </div>
     </div>
     <form method="post" action="/admin/logout">
@@ -293,6 +304,23 @@
   </div>
   {% else %}
   <div class="empty">No snapshots yet.</div>
+  {% endif %}
+
+  {% set total_pages = ((total_snapshots + page_size - 1) // page_size) if page_size else 1 %}
+  {% if total_snapshots > 0 %}
+  <nav class="pagination" aria-label="Snapshot pages">
+    {% if page > 1 %}
+    <a href="{{ url_for('admin', page=page - 1, per_page=page_size) }}" rel="prev">← Previous</a>
+    {% else %}
+    <span class="disabled" aria-hidden="true">← Previous</span>
+    {% endif %}
+    <span>Page {{ page }} of {{ [total_pages, 1]|max }}</span>
+    {% if page * page_size < total_snapshots %}
+    <a href="{{ url_for('admin', page=page + 1, per_page=page_size) }}" rel="next">Next →</a>
+    {% else %}
+    <span class="disabled" aria-hidden="true">Next →</span>
+    {% endif %}
+  </nav>
   {% endif %}
 
 </div>

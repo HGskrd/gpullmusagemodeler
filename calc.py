@@ -215,7 +215,9 @@ def kv_bytes_per_token(m: Model, prec: str) -> float:
     bpe = m.kv_cache_bytes_per_elem(prec)
     full_layers, local_layers = _split_attention_layers(m.kv_layer_count, m.local_attention_layers)
     if m.is_mla:
-        return (full_layers + local_layers) * (m.mla_kv_dim + m.mla_rope_dim) * 2 * bpe
+        # MLA caches one joint compressed KV latent plus the decoupled RoPE key.
+        # It does not retain separate compressed K and V vectors.
+        return (full_layers + local_layers) * (m.mla_kv_dim + m.mla_rope_dim) * bpe
     return (
         (full_layers * _kv_elems_per_layer(m, global_layer=True))
         + (local_layers * _kv_elems_per_layer(m, global_layer=False))
@@ -239,7 +241,7 @@ def _kv_projection_count(m: Model) -> int:
 
 def _kv_elems_per_layer(m: Model, global_layer: bool = False) -> int:
     if m.is_mla:
-        return (m.mla_kv_dim + m.mla_rope_dim) * 2
+        return m.mla_kv_dim + m.mla_rope_dim
     if global_layer and m.global_kv_heads > 0:
         heads = m.global_kv_heads
         head_dim = m.global_head_dim or m.head_dim
@@ -281,9 +283,29 @@ def kv_cache_bytes_for_sequence(m: Model, seq_len: float, prec: str) -> float:
 
 def per_replica_kv_cache_bytes(m: Model, seq_len: float, prec: str, pp: int, tp: int) -> float:
     pp = max(pp, 1)
-    token_cache = kv_cache_bytes_for_sequence(m, seq_len, prec) / (pp * kv_shards(m, tp))
-    linear_state = linear_attention_state_bytes(m, prec) / (pp * max(tp, 1))
+    pp_fraction = _pp_peak_fraction(m, pp)
+    token_cache = kv_cache_bytes_for_sequence(m, seq_len, prec) * pp_fraction / kv_shards(m, tp)
+    linear_state = linear_attention_state_bytes(m, prec) * pp_fraction / max(tp, 1)
     return token_cache + linear_state
+
+
+def _pp_peak_fraction(m: Model, pp: int) -> float:
+    """Conservative fraction of layer-distributed work/memory on the busiest PP stage."""
+    layers = max(int(m.layers), 1)
+    stages = min(max(int(pp), 1), layers)
+    return math.ceil(layers / stages) / layers
+
+
+def _pp_bubble_multiplier(pp: int, microbatches: int) -> float:
+    """Classic pipeline fill/drain tax: (microbatches + stages - 1) / microbatches."""
+    stages = max(int(pp), 1)
+    microbatches = max(int(microbatches), 1)
+    return 1.0 + (stages - 1) / microbatches
+
+
+def context_supported(m: Model, input_tokens: float, output_tokens: float = 0.0) -> bool:
+    limit = max(int(getattr(m, "max_context_tokens", 0) or 0), 1)
+    return max(float(input_tokens), 0.0) + max(float(output_tokens), 0.0) <= limit
 
 
 def _linear_attention_work(m: Model, seq_len: float) -> float:
@@ -302,7 +324,10 @@ def _decode_attention_work(m: Model, pr: int, avg_seq: float, pp: int) -> float:
     full_work = full_layers * full_width * max(avg_seq, 0.0)
     local_work = local_layers * local_width * _local_context_tokens(m, avg_seq)
     linear_work = _linear_attention_work(m, 1.0)
-    return 2 * pr * (full_work + local_work + linear_work) / max(pp, 1)
+    # QK and AV are each one matrix multiply (2 FLOPs per multiply-add).
+    dot_product_work = 4 * pr * (full_work + local_work)
+    recurrent_work = 2 * pr * linear_work
+    return (dot_product_work + recurrent_work) * _pp_peak_fraction(m, pp)
 
 
 def _realtime_audio_encoder_work(profile, pr: int, pp: int) -> float:
@@ -320,7 +345,7 @@ def _realtime_audio_encoder_work(profile, pr: int, pp: int) -> float:
     heads = max(int(getattr(profile, "audio_attention_heads", 0)), 0)
     head_dim = max(int(getattr(profile, "audio_attention_head_dim", 0)), 0)
     window = max(int(getattr(profile, "audio_attention_window", 0)), audio_tokens)
-    attention_work = 2 * pr * layers * heads * head_dim * audio_tokens * window / pp
+    attention_work = 4 * pr * layers * heads * head_dim * audio_tokens * window / pp
     return ffn_work + attention_work
 
 
@@ -332,7 +357,9 @@ def _prefill_attention_work(m: Model, pr: int, seq_len: int, pp: int) -> float:
     full_work = full_layers * full_width * seq * seq
     local_work = local_layers * local_width * seq * _local_context_tokens(m, seq)
     linear_work = _linear_attention_work(m, seq)
-    return 2 * pr * (full_work + local_work + linear_work) / max(pp, 1)
+    dot_product_work = 4 * pr * (full_work + local_work)
+    recurrent_work = 2 * pr * linear_work
+    return (dot_product_work + recurrent_work) * _pp_peak_fraction(m, pp)
 
 
 def gpu_supports_mxfp4(g: GPU) -> bool:
@@ -494,7 +521,8 @@ def compute_memory(
     eff: EfficiencyParams,
 ) -> Optional[MemoryResult]:
     requested = g.mem * mu
-    weights = m.weight_bytes(prec) / (tp * pp)
+    pp_fraction = _pp_peak_fraction(m, pp)
+    weights = m.weight_bytes(prec) * pp_fraction / tp
     profiled_non_kv = profiled_non_kv_bytes(tp, profiled_non_kv_gb)
     non_kv = weights + profiled_non_kv
     if non_kv > requested:
@@ -507,7 +535,7 @@ def compute_memory(
         profiled_non_kv=profiled_non_kv,
         kv_reserved=kv_reserved,
         kv_budget=kv_budget,
-        kv_per_token=kv_bytes_per_token(m, prec) / (pp * kv_shards(m, tp)),
+        kv_per_token=kv_bytes_per_token(m, prec) * pp_fraction / kv_shards(m, tp),
     )
 
 
@@ -529,7 +557,7 @@ def valid_strategies(
         budget = per_gpu_weight_budget(g, mu, profiled_non_kv_gb, tp)
         if budget <= 0:
             continue
-        if m.weight_bytes(prec) / (tp * pp) <= budget:
+        if m.weight_bytes(prec) * _pp_peak_fraction(m, pp) / tp <= budget:
             result.append((tp, pp, dp))
 
     return sorted(
@@ -561,7 +589,7 @@ def default_strategy(
     requested = g.mem * mu
     for tp, pp, dp in candidates:
         profiled_non_kv = profiled_non_kv_bytes(tp, profiled_non_kv_gb)
-        kv_headroom = max(0.0, requested - (m.weight_bytes(prec) / (tp * pp)) - profiled_non_kv)
+        kv_headroom = max(0.0, requested - (m.weight_bytes(prec) * _pp_peak_fraction(m, pp) / tp) - profiled_non_kv)
         score = (
             1 if tp <= g.node_size else 0,
             min(tp, g.node_size),
@@ -673,17 +701,19 @@ def _decode_step_time(
     extra_flops: float = 0.0,
 ) -> float:
     aw = _active_weight_bytes(m, prec)
-    wt = (aw / (tp * pp)) / (g.effective_bw * eff.bw_eff)
+    pp_fraction = _pp_peak_fraction(m, pp)
+    wt = (aw * pp_fraction / tp) / (g.effective_bw * eff.bw_eff)
     kv_read_bytes = pr * per_replica_kv_cache_bytes(m, avg_seq, prec, pp, tp)
     kv_time = kv_read_bytes / (g.effective_bw * eff.bw_eff)
     bt = wt + kv_time
 
-    wf = 2 * m.active_params * pr / pp
+    wf = 2 * m.active_params * pr * pp_fraction
     af = _decode_attention_work(m, pr, avg_seq, pp)
     ct = (wf + af + max(extra_flops, 0.0)) / (model_gpu_flops(g, m, prec) * tp * eff.comp_eff)
 
     comm = communication_breakdown(m, tp, pp, pr, avg_seq, g, eff)
-    step = (max(bt, ct) + comm.total) * (1 + eff.overhead + paged_oh)
+    base = max(bt, ct) * _pp_bubble_multiplier(pp, pr)
+    step = (base + comm.total) * (1 + eff.overhead + paged_oh)
     return step * _moe_tail_multiplier(m, eff)
 
 
@@ -703,11 +733,19 @@ def _compute_decode_core(
     paged_oh: float = 0.0,
     extra_flops: float = 0.0,
 ) -> Optional[DecodeResult]:
+    if not context_supported(m, avg_in, avg_out):
+        return None
     mem = compute_memory(m, tp, pp, g, mu, profiled_non_kv_gb, prec, eff)
     if mem is None:
         return None
 
-    pr = math.ceil(bs / dp)
+    dp = max(int(dp), 1)
+    active_replicas = min(max(int(bs), 0), dp)
+    if active_replicas <= 0:
+        return None
+    base_load, extra_replicas = divmod(int(bs), active_replicas)
+    replica_loads = [base_load + (1 if i < extra_replicas else 0) for i in range(active_replicas)]
+    pr = max(replica_loads)
     avg_seq = avg_in + avg_out / 2.0
     avg_kv = per_replica_kv_cache_bytes(m, avg_seq, prec, pp, tp)
     max_slots = int(mem.kv_budget / avg_kv) if avg_kv > 0 else 0
@@ -716,11 +754,18 @@ def _compute_decode_core(
     if pr > max_slots:
         return None
 
-    step = _decode_step_time(m, tp, pp, pr, g, prec, avg_seq, eff, paged_oh, extra_flops)
+    # Sum independently loaded replica throughput. For realtime audio, callers pass
+    # per-request extra work so uneven replicas receive proportional encoder work.
+    replica_steps = [
+        _decode_step_time(m, tp, pp, load, g, prec, avg_seq, eff, paged_oh, extra_flops * load)
+        for load in replica_loads
+    ]
+    total_tps = sum(load / step for load, step in zip(replica_loads, replica_steps) if step > 0)
+    slowest_step = max(replica_steps)
     return DecodeResult(
-        tps=round(pr / step * dp),
-        lat=round((step / pr) * 1e5) / 100,
-        step_ms=round(step * 1e5) / 100,
+        tps=round(total_tps),
+        lat=round(slowest_step * 1e5) / 100,
+        step_ms=round(slowest_step * 1e5) / 100,
         max_slots=max_slots * dp,
     )
 
@@ -788,6 +833,8 @@ def compute_prefill(
     prec: str,
     eff: EfficiencyParams,
 ) -> Optional[PrefillResult]:
+    if not context_supported(m, seq_len):
+        return None
     mem = compute_memory(m, tp, pp, g, mu, profiled_non_kv_gb, prec, eff)
     if mem is None:
         return None
@@ -800,16 +847,18 @@ def compute_prefill(
     if pr > max_per_replica:
         return None
 
-    ffn = 2 * m.active_params * pr * seq_len / pp
+    pp_fraction = _pp_peak_fraction(m, pp)
+    ffn = 2 * m.active_params * pr * seq_len * pp_fraction
     att = _prefill_attention_work(m, pr, seq_len, pp)
     tf = ffn + att
     ct = tf / (model_gpu_flops(g, m, prec) * tp * eff.comp_eff)
 
     aw = _active_weight_bytes(m, prec)
-    mt = (aw / (tp * pp)) / (g.effective_bw * eff.bw_eff)
+    mt = (aw * pp_fraction / tp) / (g.effective_bw * eff.bw_eff)
 
     comm = communication_breakdown(m, tp, pp, pr * seq_len, seq_len, g, eff)
-    t = (max(ct, mt) + comm.total) * (1 + eff.overhead * 1.3 + fixed_paged_oh(seq_len, eff, 0.35))
+    base = max(ct, mt) * _pp_bubble_multiplier(pp, pr)
+    t = (base + comm.total) * (1 + eff.overhead * 1.3 + fixed_paged_oh(seq_len, eff, 0.35))
     t *= _moe_tail_multiplier(m, eff)
     rps = bs / t if t > 0 else 0.0
     return PrefillResult(
@@ -1090,6 +1139,8 @@ def compute_data(
     prefill_eff: EfficiencyParams,
     decode_eff: EfficiencyParams,
 ) -> Optional[DataResult]:
+    if not context_supported(m, in_len, out_len):
+        return None
     prefill_tp, prefill_pp, prefill_dp = prefill_strat
     decode_tp, decode_pp, decode_dp = decode_strat
     pf_in = effective_prefill_length(in_len, prefix_hit_rate)
@@ -1153,6 +1204,8 @@ def compute_data_capacity(
     prefill_eff: EfficiencyParams,
     decode_eff: EfficiencyParams,
 ) -> int:
+    if not context_supported(m, in_len, out_len):
+        return 0
     prefill_tp, prefill_pp, prefill_dp = prefill_strat
     decode_tp, decode_pp, decode_dp = decode_strat
     pf_in = effective_prefill_length(in_len, prefix_hit_rate)
@@ -1278,8 +1331,9 @@ def compute_realtime_capacity(
 
     tp, pp, dp = decode_strat
     state_tokens = max(float(profile.state_tokens), 1.0)
-    pr = math.ceil(users / max(dp, 1))
-    extra_flops = _realtime_audio_encoder_work(profile, pr, pp)
+    # Pass one user's incremental encoder work; the decode core scales it by
+    # each unevenly loaded replica's actual user count.
+    extra_flops = _realtime_audio_encoder_work(profile, 1, pp)
     result = _compute_decode_core(
         m,
         tp,
@@ -2582,6 +2636,46 @@ def _best_deployment_result_for_model(state, am, gpu: GPU, in_len: int, out_len:
     return best
 
 
+def _deployment_capacity_for_profile(
+    state,
+    am,
+    gpu: GPU,
+    profile: dict,
+    peak_factor: float,
+) -> tuple[float, float]:
+    """Return shape-specific daily token capacity and peak RPS.
+
+    Capacity is recomputed for each workload shape. Routing consumes a shared
+    normalized deployment-time fraction, so long and short requests no longer
+    spend an interchangeable blended token budget.
+    """
+    in_len = int(profile["in_len"])
+    out_len = int(profile["out_len"])
+    cap = compute_data_capacity(
+        am.model,
+        (am.prefill_tp, am.prefill_pp, am.prefill_dp),
+        (am.tp, am.pp, am.dp),
+        in_len,
+        out_len,
+        gpu,
+        state.mu,
+        state.profiled_non_kv_gb,
+        am.prec,
+        state.prefix_hit_rate,
+        state.prefill_efficiency,
+        state.decode_efficiency,
+    )
+    batch_sizes = _batch_axis_sweep([cap], DATA_BATCH_SIZES)
+    best = _best_deployment_result_for_model(state, am, gpu, in_len, out_len, batch_sizes)
+    peak_rps = best.rps if best and best.rps > 0 else 0.0
+    tokens_per_request = max(float(profile["tokens_per_request"]), 1.0)
+    daily_tokens = (
+        peak_rps * 86400.0 * tokens_per_request / max(float(peak_factor), 1.0)
+        if peak_rps > 0 else 0.0
+    )
+    return daily_tokens, peak_rps
+
+
 def _cloud_price_per_m_in_preset(
     difficulty: float,
     min_success: float,
@@ -2612,7 +2706,8 @@ def _cloud_price_per_m_in_preset(
         cloud_eff = max(float(cloud.get("token_efficiency", 1.0)), 1e-6)
         if cloud_quality + 1e-9 < quality_floor:
             continue
-        if success_rate(cloud_quality, difficulty) + 1e-9 < min_success:
+        cloud_success = success_rate(cloud_quality, difficulty)
+        if cloud_success + 1e-9 < min_success:
             continue
         sticker = (
             (uncached / 1e6) * cloud["in_per_m"]
@@ -2620,9 +2715,11 @@ def _cloud_price_per_m_in_preset(
             + ((out_len / cloud_eff) / 1e6) * cloud["out_per_m"]
         )
         # Token efficiency affects generated tokens, not the fixed prompt payload.
-        price_pm = sticker / (tokens_per_req / 1e6)
+        # Retry-adjust cloud and on-prem routes symmetrically. A route with
+        # success probability p consumes 1/p attempts per completed useful task.
+        price_pm = sticker / (tokens_per_req / 1e6) / max(cloud_success, 1e-6)
         if best is None or price_pm < best[0]:
-            best = (price_pm, cloud | {"key": key})
+            best = (price_pm, cloud | {"key": key, "success_rate": cloud_success})
 
     if best is None:
         return None, math.inf
@@ -2743,6 +2840,8 @@ def _build_model_supply(state, profile, prefix_hit_rate, peak_factor_eff) -> lis
             "peak_rps": peak_rps,
             "daily_tokens_cap": daily_tokens_cap,
             "remaining_cap": daily_tokens_cap,
+            "remaining_fraction": 1.0,
+            "used_fraction": 0.0,
             "served_tokens": 0.0,
             "gpu_cost_day": gpu_cost_day,
             "internal_pm": internal_pm,
@@ -2834,12 +2933,22 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
                 float(project_profile["out_len"]),
             )
             retry_mult = 1.0 / max(sr, 1e-6)
+            project_peak_factor = 1.0 if (night_batching and p.batch_eligible) else peak_factor
+            shape_daily_cap, shape_peak_rps = _deployment_capacity_for_profile(
+                state, me["am"], me["gpu"], project_profile, project_peak_factor,
+            )
+            if shape_daily_cap <= 0:
+                continue
+            shape_internal_pm = me["gpu_cost_day"] * 1e6 / shape_daily_cap
             candidates.append({
                 "me": me,
                 "success_rate": sr,
                 "retry_mult": retry_mult,
                 "token_mult": token_mult * retry_mult,
-                "effective_pm": me["internal_pm"] * token_mult * retry_mult,
+                "shape_daily_cap": shape_daily_cap,
+                "shape_peak_rps": shape_peak_rps,
+                "shape_internal_pm": shape_internal_pm,
+                "effective_pm": shape_internal_pm * token_mult * retry_mult,
             })
         candidates.sort(key=lambda c: c["effective_pm"])
 
@@ -2864,21 +2973,25 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
         has_affordable_candidate = any(c["effective_pm"] <= price_cap + 1e-9 for c in candidates)
         for c in candidates:
             me = c["me"]
-            if me["remaining_cap"] <= 0:
+            if me["remaining_fraction"] <= 0:
                 continue
             if c["effective_pm"] > price_cap:
                 continue
             useful_remaining = total - served
             if useful_remaining <= 0:
                 break
-            useful_take = min(useful_remaining, me["remaining_cap"] / c["token_mult"])
+            shape_remaining = me["remaining_fraction"] * c["shape_daily_cap"]
+            useful_take = min(useful_remaining, shape_remaining / c["token_mult"])
             if useful_take <= 0:
                 continue
             actual_take = useful_take * c["token_mult"]
-            me["remaining_cap"] -= actual_take
+            fraction_used = actual_take / c["shape_daily_cap"]
+            me["remaining_fraction"] = max(0.0, me["remaining_fraction"] - fraction_used)
+            me["used_fraction"] = min(1.0, me["used_fraction"] + fraction_used)
+            me["remaining_cap"] = me["daily_tokens_cap"] * me["remaining_fraction"]
             me["served_tokens"] += actual_take
             per_model_served.append((me, useful_take, actual_take, c["success_rate"]))
-            internal_cost += (actual_take / 1e6) * me["internal_pm"]
+            internal_cost += (actual_take / 1e6) * c["shape_internal_pm"]
             tpt_m = me.get("tokens_per_task", 0.0)
             if tpt_m > 0:
                 co2_g_day_project += (actual_take / tpt_m) * me.get("co2_g_per_task_day", 0.0)
@@ -2906,7 +3019,8 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
         # Value of internally served tokens reflects the cheapest substitute (cloud price);
         # when cloud is blocked there's no substitute, so use WTP as the realized value.
         value_basis = wtp if cloud_blocked else cloud_pm
-        value_served = sum((useful_t / 1e6) * value_basis * sr for _, useful_t, _, sr in per_model_served)
+        # useful_t is completed work; retry cost and capacity were already charged.
+        value_served = sum((useful_t / 1e6) * value_basis for _, useful_t, _, _sr in per_model_served)
         baseline_tokens_per_task = max(float(project_profile["tokens_per_request"]), 1.0)
         tasks_served_day = served / baseline_tokens_per_task
         co2_g_per_task_project = (co2_g_day_project / tasks_served_day) if tasks_served_day > 0 else 0.0
@@ -3015,10 +3129,15 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
     model_rows = []
     total_cap = sum(me["daily_tokens_cap"] for me in supply)
     total_actual_served = sum(me["served_tokens"] for me in supply)
+    total_gpu_weight = sum(max(me["gpu_count"], 0) for me in supply)
+    time_utilization = (
+        sum(me.get("used_fraction", 0.0) * max(me["gpu_count"], 0) for me in supply) / total_gpu_weight
+        if total_gpu_weight > 0 else 0.0
+    )
     for me in supply:
         cap = me["daily_tokens_cap"]
-        util = (me["served_tokens"] / cap) if cap > 0 else 0.0
-        saturated = cap > 0 and me["remaining_cap"] <= max(cap * 0.01, 1.0)
+        util = me.get("used_fraction", 0.0)
+        saturated = cap > 0 and me.get("remaining_fraction", 1.0) <= 0.01
         tpt = me.get("tokens_per_task", 0.0)
         co2_day_g = me.get("co2_g_per_task_day", 0.0)
         co2_night_g = me.get("co2_g_per_task_night", 0.0)
@@ -3113,7 +3232,7 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
         "total_gpus": sum(gp.count for gp in state.gpus),
         "total_cap_tokens_day": total_cap,
         "actual_served_tokens": total_actual_served,
-        "utilization": (total_actual_served / total_cap) if total_cap > 0 else 0.0,
+        "utilization": time_utilization,
         "workload_in_len": profile["in_len"],
         "workload_out_len": profile["out_len"],
     }

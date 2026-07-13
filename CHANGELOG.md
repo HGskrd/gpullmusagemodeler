@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2026-07-13
+
+### Added
+
+- Added versioned full-scenario JSON export/import, a blank-start workflow, and a visitor-controlled action that deletes stored scenarios and in-memory state.
+- Added transactional SQLite snapshot storage with complete A/B payloads, one-time legacy JSON migration, corruption quarantine, paginated admin reads, optional retention controls, and a health endpoint.
+- Added regression coverage for planner numerical invariants, context limits, economics, scenario round trips, input validation, state isolation, persistence, migration, retention, and admin hardening.
+- Added CI checks for Python 3.10 and 3.12 and a container health check.
+
+### Changed
+
+- Corrected MLA KV-cache sizing, attention FLOPs, full-step decode latency, uneven data-parallel loading, pipeline-stage capacity and bubble estimates, combined context validation, retry economics, and workload-specific projected capacity.
+- Hardened mutable settings with explicit allowlists and finite bounds; added request/import limits, scoped locking and state caps, tab limits, mutation/login throttling, secure cookie controls, and fail-closed admin configuration.
+- Pinned the production Flask and Gunicorn versions for reproducible deployments.
+- Clarified the planner workflow and scenario-storage behavior, gated incomplete economics when TCO is unset, improved recommendation wording, and strengthened keyboard, screen-reader, focus, contrast, target-size, reduced-motion, and mobile-table behavior.
+- Kept complete scenario-history retention enabled and unlimited by default; deployments can opt into age or per-tab limits through environment variables.
+
 ## 2026-05-28
 
 ### Added

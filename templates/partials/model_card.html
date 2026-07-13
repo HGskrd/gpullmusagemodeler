@@ -1,6 +1,6 @@
 {# Single model card #}
 <div class="card" style="position:relative;" data-fast-card>
-  <button class="ghost sm" style="position:absolute;top:3px;right:3px;color:var(--red);padding:1px 4px;"
+  <button class="ghost sm" aria-label="{{ 'Exclude' if state.auto_mode else 'Remove' }} {{ m.name }}" title="{{ 'Exclude from recommendations' if state.auto_mode else 'Remove model' }}" style="position:absolute;top:3px;right:3px;color:var(--red);padding:1px 7px;"
           hx-post="{{ '/model/auto-exclude' if state.auto_mode else '/model/remove' }}"
           hx-target="#main-content"
           data-fast-remove
@@ -9,7 +9,7 @@
   <div style="display:flex;align-items:center;gap:4px;margin-bottom:4px;">
     <span class="dot" style="background:{{ m.color }};"></span>
     <span style="font-size:11px;font-weight:600;">{{ m.name }}</span>
-    <select class="prec-select" name="prec" title="{{ PRECISION_DESCRIPTIONS[am.prec] }}"
+    <select class="prec-select" name="prec" aria-label="Precision for {{ m.name }}" title="{{ PRECISION_DESCRIPTIONS[am.prec] }}"
             style="margin-left:auto;"
             hx-post="/model/prec" hx-target="#main-content" hx-trigger="change" hx-include="this"
             hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}'>
@@ -23,6 +23,11 @@
   <div class="T" style="margin-bottom:3px;">
     {{ "%.1f"|format(m.weight_gb(am.prec)) }} GB weights{% if info.mixed_weight_precision %} · ~{{ "%.2f"|format(info.weight_bpp) }} B/param avg{% endif %}{{ ' · MLA KV' if m.is_mla else '' }}{% if m.attention_label %} · {{ m.attention_label }}{% endif %}
   </div>
+  {% if not m.is_embedding_model and not m.is_realtime_only %}
+  <div class="T" style="margin-bottom:3px;" title="Maximum supported combined prompt and generated-token length used by planner feasibility checks.">
+    Context limit {{ m.max_context_tokens|fmt_num }} tokens (prompt + output)
+  </div>
+  {% endif %}
   {% if info.quant_profile %}
   <div class="T" style="margin-bottom:3px;" title="{{ info.quant_profile.notes }}{% if info.quant_profile.storage_summary %} Storage: {{ info.quant_profile.storage_summary }}.{% endif %}">
     {{ info.quant_profile.label }} LUT · {{ info.quant_profile.source_repo }}{% if info.quant_profile.source_kind != 'exact' %} · {{ info.quant_profile.source_kind }}{% endif %} · {{ info.quant_profile.compute_summary }} · KV {{ info.quant_profile.kv_cache_format }}
@@ -84,7 +89,7 @@
   {% if state.gpus|length > 1 %}
   <div class="flex" style="margin-bottom:3px;gap:3px;">
     <span class="T" style="min-width:28px;">On</span>
-    <select hx-post="/model/gpu_pool" hx-target="#main-content"
+    <select aria-label="GPU pool for {{ m.name }}" hx-post="/model/gpu_pool" hx-target="#main-content"
             hx-trigger="change" hx-include="this"
             hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}'
             name="gpu_uid">
@@ -100,13 +105,13 @@
   <div class="flex" style="margin-bottom:3px;gap:2px;">
     <span class="T" style="min-width:28px;">GPUs</span>
     {% for i in info.gpu_count_options %}
-      <button class="sm" style="min-width:20px;padding:2px 3px;{{ 'background:var(--fg0);color:var(--bg0);border-color:var(--fg0);' if i == am.gpu_count else '' }}"
+      <button class="sm" aria-label="Assign {{ i }} GPUs to {{ m.name }}" aria-pressed="{{ 'true' if i == am.gpu_count else 'false' }}" style="min-width:28px;padding:2px 5px;{{ 'background:var(--fg0);color:var(--bg0);border-color:var(--fg0);' if i == am.gpu_count else '' }}"
               hx-post="/model/count" hx-target="#main-content"
               hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}","count":"{{ i }}"}'>{{ i }}</button>
     {% endfor %}
     <input class="sm" type="number" min="0" max="{{ info.max_avail }}" step="1" value="{{ am.gpu_count }}"
            style="width:54px;min-width:54px;padding:2px 4px;"
-           title="Assigned GPUs"
+           title="Assigned GPUs" aria-label="Custom GPU count assigned to {{ m.name }}"
            hx-post="/model/count" hx-target="#main-content" hx-trigger="change"
            hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}' name="count" />
   </div>
@@ -126,7 +131,7 @@
       {% else %}
         {% set strat_label = 'TP' + tp_val|string + '×PP' + pp_val|string + '×DP' + dp_val|string %}
       {% endif %}
-      <button class="sm" style="padding:2px 4px;{{ 'background:'+m.color+';color:white;border-color:'+m.color+';' if sel else '' }}"
+      <button class="sm" aria-label="Use {{ strat_label }} embedding topology for {{ m.name }}" aria-pressed="{{ 'true' if sel else 'false' }}" style="padding:2px 6px;{{ 'background:'+m.color+';color:white;border-color:'+m.color+';' if sel else '' }}"
               hx-post="/model/strat" hx-target="#main-content"
               hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}","phase":"prefill","tp":"{{ tp_val }}","pp":"{{ pp_val }}","dp":"{{ dp_val }}"}'>
         {{ strat_label }}
@@ -156,7 +161,7 @@
       {% else %}
         {% set strat_label = 'TP' + tp_val|string + '×PP' + pp_val|string + '×DP' + dp_val|string %}
       {% endif %}
-      <button class="sm" style="padding:2px 4px;{{ 'background:'+m.color+';color:white;border-color:'+m.color+';' if sel else '' }}"
+      <button class="sm" aria-label="Use {{ strat_label }} prefill topology for {{ m.name }}" aria-pressed="{{ 'true' if sel else 'false' }}" style="padding:2px 6px;{{ 'background:'+m.color+';color:white;border-color:'+m.color+';' if sel else '' }}"
               hx-post="/model/strat" hx-target="#main-content"
               hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}","phase":"prefill","tp":"{{ tp_val }}","pp":"{{ pp_val }}","dp":"{{ dp_val }}"}'>
         {{ strat_label }}
@@ -186,7 +191,7 @@
       {% else %}
         {% set strat_label = 'TP' + tp_val|string + '×PP' + pp_val|string + '×DP' + dp_val|string %}
       {% endif %}
-      <button class="sm" style="padding:2px 4px;{{ 'background:'+m.color+';color:white;border-color:'+m.color+';' if sel else '' }}"
+      <button class="sm" aria-label="Use {{ strat_label }} decode topology for {{ m.name }}" aria-pressed="{{ 'true' if sel else 'false' }}" style="padding:2px 6px;{{ 'background:'+m.color+';color:white;border-color:'+m.color+';' if sel else '' }}"
               hx-post="/model/strat" hx-target="#main-content"
               hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}","phase":"decode","tp":"{{ tp_val }}","pp":"{{ pp_val }}","dp":"{{ dp_val }}"}'>
         {{ strat_label }}

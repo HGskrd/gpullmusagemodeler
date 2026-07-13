@@ -66,7 +66,7 @@
     padding: 1px 3px; width: 76px; text-align: right;
   }
   .def-card .pc-row .val-input:hover,
-  .def-card .pc-row .val-input:focus { border-color: var(--acc); background: var(--bg0); outline: none; }
+  .def-card .pc-row .val-input:focus { border-color: var(--acc); background: var(--bg0); }
   .def-row { display: grid; grid-template-columns: 78px 1fr; align-items: center; gap: 6px; }
   .def-text {
     font-family: var(--sans); font-size: 10px; color: var(--fg0);
@@ -135,18 +135,20 @@
   {%- endif -%}
 {%- endmacro %}
 
-<div id="toast" class="toast" hidden></div>
+<div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
 
-<div class="docs-hdr">
+<div class="topbar">
   <div>
-    <h1>vLLM multi-model planner &middot; use cases</h1>
-    <div class="sub">Edit reusable use-case kinds here; set organization scale in the calculator.</div>
+    <h1>vLLM multi-model planner</h1>
+    <p class="T">Use cases · edit reusable definitions here and set organization scale in the calculator</p>
   </div>
-  <nav class="app-tabs" aria-label="Primary">
-    <a href="{{ url_for('index') }}">Calculator</a>
-    <a href="{{ url_for('explainer') }}">User guide</a>
-    <a href="{{ url_for('use_cases') }}" class="on">Use cases</a>
-  </nav>
+  <div class="flex" style="gap:6px;">
+    <nav class="app-tabs" aria-label="Primary">
+      <a href="{{ url_for('index') }}">Calculator</a>
+      <a href="{{ url_for('explainer') }}" title="What this calculator does and how to use it">User guide</a>
+      <a href="{{ url_for('use_cases') }}" class="on" title="Detailed explanation of the built-in use-case presets">Use cases</a>
+    </nav>
+  </div>
 </div>
 
 <section class="docs-section panel">
