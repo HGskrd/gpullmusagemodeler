@@ -1,23 +1,23 @@
 {# Single model card #}
-<div class="card" style="position:relative;" data-fast-card>
-  <button class="ghost sm" aria-label="{{ 'Exclude' if state.auto_mode else 'Remove' }} {{ m.name }}" title="{{ 'Exclude from recommendations' if state.auto_mode else 'Remove model' }}" style="position:absolute;top:3px;right:3px;color:var(--red);padding:1px 7px;"
-          hx-post="{{ '/model/auto-exclude' if state.auto_mode else '/model/remove' }}"
-          hx-target="#main-content"
-          data-fast-remove
-          hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}'>✕</button>
-
-  <div style="display:flex;align-items:center;gap:4px;margin-bottom:4px;">
+<div class="card" data-fast-card>
+  <div class="model-card-head">
     <span class="dot" style="background:{{ m.color }};"></span>
-    <span style="font-size:11px;font-weight:600;">{{ m.name }}</span>
-    <select class="prec-select" name="prec" aria-label="Precision for {{ m.name }}" title="{{ PRECISION_DESCRIPTIONS[am.prec] }}"
-            style="margin-left:auto;"
-            hx-post="/model/prec" hx-target="#main-content" hx-trigger="change" hx-include="this"
-            hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}'>
-      {% for prec in PRECISIONS %}
-      {% set opt_profile = info.quant_profiles_by_precision.get(prec) %}
-      <option value="{{ prec }}" {{ 'selected' if am.prec == prec else '' }}>{{ PRECISION_LABELS[prec] }}{% if opt_profile %} · LUT{% endif %}</option>
-      {% endfor %}
-    </select>
+    <span class="model-card-name">{{ m.name }}</span>
+    <div class="model-card-actions">
+      <select class="prec-select" name="prec" aria-label="Precision for {{ m.name }}" title="{{ PRECISION_DESCRIPTIONS[am.prec] }}"
+              hx-post="/model/prec" hx-target="#main-content" hx-trigger="change" hx-include="this"
+              hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}'>
+        {% for prec in PRECISIONS %}
+        {% set opt_profile = info.quant_profiles_by_precision.get(prec) %}
+        <option value="{{ prec }}" {{ 'selected' if am.prec == prec else '' }}>{{ PRECISION_LABELS[prec] }}{% if opt_profile %} · LUT{% endif %}</option>
+        {% endfor %}
+      </select>
+      <button class="ghost sm model-card-remove" aria-label="{{ 'Exclude' if state.auto_mode else 'Remove' }} {{ m.name }}" title="{{ 'Exclude from recommendations' if state.auto_mode else 'Remove model' }}"
+              hx-post="{{ '/model/auto-exclude' if state.auto_mode else '/model/remove' }}"
+              hx-target="#main-content"
+              data-fast-remove
+              hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}'>✕</button>
+    </div>
   </div>
 
   <div class="T" style="margin-bottom:3px;">

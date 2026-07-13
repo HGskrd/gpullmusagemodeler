@@ -233,6 +233,36 @@ input[type="range"]::-webkit-slider-thumb {
   line-height: 1;
 }
 
+.model-card-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.model-card-name {
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.model-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.model-card-remove {
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
+  padding: 1px;
+  color: var(--red);
+  line-height: 1;
+}
+
 .auto-strategy-select {
   width: 126px;
   min-width: 126px;
