@@ -31,6 +31,58 @@ from data import (
 
 
 class ModelCatalogTests(unittest.TestCase):
+    def test_kimi_k3_preview_uses_only_published_specs_as_facts(self):
+        model = MODELS["kimi-k3-preview"]
+
+        self.assertEqual(model.name, "Kimi K3 2.8T-A90B (Preview Proxy)")
+        self.assertEqual(model.cat, "Kimi")
+        self.assertEqual(model.total_params, 2.8e12)
+        self.assertEqual(model.active_params, 90e9)
+        self.assertTrue(model.is_moe)
+        self.assertEqual(model.max_context_tokens, 1_048_576)
+        self.assertEqual(model.linear_attention_layer_count, 60)
+        self.assertEqual(model.attention_layer_count, 20)
+        self.assertIn("preview proxy", model.attention_label)
+        self.assertIn("active/config undisclosed", model.attention_label)
+        self.assertTrue({"tools", "ctx_128k", "images", "reasoning"} <= model.capabilities)
+        self.assertNotIn("audio", model.capabilities)
+        self.assertAlmostEqual(model.quality_confidence, 0.30)
+
+    def test_inkling_family_captures_release_and_preview_boundaries(self):
+        model = MODELS["inkling"]
+        small = MODELS["inkling-small-preview"]
+
+        self.assertEqual(model.name, "Inkling 975B-A41B")
+        self.assertEqual(model.cat, "Thinking Machines")
+        self.assertEqual(model.total_params, 975e9)
+        self.assertEqual(model.active_params, 41e9)
+        self.assertEqual(model.layers, 66)
+        self.assertEqual(model.hidden_size, 6144)
+        self.assertEqual(model.num_heads, 64)
+        self.assertEqual(model.kv_heads, 16)
+        self.assertEqual(model.global_kv_heads, 8)
+        self.assertEqual(model.local_attention_layers, 55)
+        self.assertEqual(model.local_attention_window, 512)
+        self.assertEqual(model.max_context_tokens, 1_048_576)
+        self.assertTrue({"tools", "ctx_128k", "images", "audio", "reasoning"} <= model.capabilities)
+        expected_kv_bytes = ((55 * 2 * 16 * 128) + (11 * 2 * 8 * 128)) * 2
+        self.assertEqual(kv_bytes_per_token(model, "bf16"), expected_kv_bytes)
+
+        profile = get_quantization_profile("inkling", "nvfp4")
+        self.assertIsNotNone(profile)
+        self.assertEqual(profile.source_repo, "thinkingmachines/Inkling-NVFP4")
+        self.assertEqual(profile.source_kind, "exact")
+        self.assertAlmostEqual(model.weight_gb("nvfp4"), 592.005, places=3)
+
+        self.assertEqual(small.name, "Inkling-Small 276B-A12B (Preview)")
+        self.assertEqual(small.total_params, 276e9)
+        self.assertEqual(small.active_params, 12e9)
+        self.assertEqual(small.max_context_tokens, 1_048_576)
+        self.assertIn("architecture proxy", small.attention_label)
+        self.assertIn("config pending", small.attention_label)
+        self.assertTrue({"tools", "ctx_128k", "images", "audio", "reasoning"} <= small.capabilities)
+        self.assertAlmostEqual(small.quality_confidence, 0.50)
+
     def test_command_a_plus_catalog_entry_matches_public_specs(self):
         model = MODELS["command-a-plus-05-2026"]
 

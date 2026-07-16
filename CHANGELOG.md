@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2026-07-16
+
+### Added
+
+- Added Kimi K3 as an API-launch preview proxy with its published 2.8T size, Kimi Delta Attention, native vision, and 1M-token context; unpublished active-parameter and layer details remain explicitly labeled as assumptions.
+- Added the open-weight Inkling 975B-A41B model with exact hybrid-attention config, multimodal capabilities, 1M context, and an artifact-backed NVFP4 storage profile.
+- Added Inkling-Small 276B-A12B as a preview entry with conservative architecture assumptions pending its promised weight/config release.
+
 ## 2026-07-13
 
 ### Added

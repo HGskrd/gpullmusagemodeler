@@ -2165,6 +2165,38 @@ MODELS: dict[str, Model] = {
         bf16_weight_bytes_per_param=MIXED_NATIVE_BF16_WEIGHT_BPP,
         fp8_weight_bytes_per_param=MIXED_NATIVE_FP8_WEIGHT_BPP,
     ),
+    # K3 launched API-first. Moonshot publishes the 2.8T total size, KDA hybrid
+    # attention, native vision, and 1M context, but not the active parameter count
+    # or checkpoint config yet. Preserve K2's ~3.2% activation ratio and scale the
+    # public Kimi Linear 3:1 KDA/MLA layout as an explicit capacity-planning proxy.
+    "kimi-k3-preview": Model(
+        "kimi-k3-preview",
+        "Kimi K3 2.8T-A90B (Preview Proxy)",
+        "Kimi",
+        "#6D45E8",
+        2.8e12,
+        90e9,
+        True,
+        80,
+        128,
+        1,
+        128,
+        True,
+        512,
+        64,
+        mla_tp_supported=True,
+        kv_layers=20,
+        hidden_dim=8192,
+        attention_layers=20,
+        linear_attention_layers=60,
+        linear_attention_heads=128,
+        linear_attention_head_dim=128,
+        linear_attention_k_heads=128,
+        linear_attention_k_head_dim=128,
+        linear_attention_conv_kernel=4,
+        attention_label="60 KDA + 20 MLA preview proxy; active/config undisclosed",
+        max_context_tokens=1_048_576,
+    ),
     "kimi-linear-48b": Model(
         "kimi-linear-48b",
         "Kimi Linear 48B-A3B",
@@ -2191,6 +2223,54 @@ MODELS: dict[str, Model] = {
         linear_attention_k_head_dim=128,
         linear_attention_conv_kernel=4,
         attention_label="20 KDA + 7 MLA",
+    ),
+
+    "inkling": Model(
+        "inkling",
+        "Inkling 975B-A41B",
+        "Thinking Machines",
+        "#D9485F",
+        975e9,
+        41e9,
+        True,
+        66,
+        64,
+        16,
+        128,
+        False,
+        hidden_dim=6144,
+        local_attention_layers=55,
+        local_attention_window=512,
+        local_attention_heads=64,
+        global_kv_heads=8,
+        global_head_dim=128,
+        attention_label="55 SWA 512 + 11 global; relative position + SConv",
+        max_context_tokens=1_048_576,
+    ),
+    # Thinking Machines has announced the preview's size and benchmark results,
+    # but has not released its weights/config. Scale the published Inkling 5:1
+    # local/global pattern down to a conservative 48-layer capacity proxy.
+    "inkling-small-preview": Model(
+        "inkling-small-preview",
+        "Inkling-Small 276B-A12B (Preview)",
+        "Thinking Machines",
+        "#E36A73",
+        276e9,
+        12e9,
+        True,
+        48,
+        32,
+        8,
+        128,
+        False,
+        hidden_dim=4096,
+        local_attention_layers=40,
+        local_attention_window=512,
+        local_attention_heads=32,
+        global_kv_heads=4,
+        global_head_dim=128,
+        attention_label="40 SWA + 8 global architecture proxy; preview config pending",
+        max_context_tokens=1_048_576,
     ),
 
     "command-a-plus-05-2026": Model(
@@ -2910,6 +2990,23 @@ MODEL_QUANTIZATION_PROFILES: dict[tuple[str, str], QuantizationProfile] = dict([
         notes="HF quant config is mixed precision with NVFP4 experts and FP8 dense projections; bytes use repository storage.",
     ),
     _nvfp4_profile(
+        model_key="inkling",
+        source_repo="thinkingmachines/Inkling-NVFP4",
+        source_revision="d11961f515e883e37796edb9dd6ec1bf0e0e8212",
+        source_downloads=4,
+        storage_format_counts={
+            "I64": 378,
+            "F32": 48_704,
+            "BF16": 39_160_185_992,
+            "F8_E4M3": 57_076_088_832,
+            "U8": 456_608_710_656,
+        },
+        compute_precision_shares={"nvfp4": 0.82, "fp8": 0.10, "bf16": 0.08},
+        quantized=("MoE/feed-forward tensors: packed NVFP4 payload + FP8 scales",),
+        retained=("attention and SConv tensors BF16/FP8", "routers BF16", "multimodal towers BF16", "lm_head BF16"),
+        notes="Exact base-checkpoint repository storage; excludes the optional 10.5 GB MTP drafter artifact.",
+    ),
+    _nvfp4_profile(
         model_key="minimax25",
         source_repo="nvidia/MiniMax-M2.5-NVFP4",
         source_revision="b6220d658389629b9d507d4b2bb314f41fea7898",
@@ -3027,17 +3124,20 @@ def get_quantization_profile(model_key: str, prec: str) -> QuantizationProfile |
 # (tools + ctx_128k). Kept conservative — annotate models with well-documented support.
 _VISION_MODELS = (
     "ge2", "ge4", "g12", "g26", "g31",
+    "kimi-k3-preview", "inkling", "inkling-small-preview",
     "command-a-plus-05-2026",
     "ms24", "ms32", "mistral-medium-3.5-preview",
     "minimax25", "minimax27", "nem3no", "mimo-v2.5",
 )
 _AUDIO_INPUT_MODELS = (
     "ge2", "ge4", "g12",
+    "inkling", "inkling-small-preview",
 )
 _REASONING_MODELS = (
     "g12", "q35", "q122", "q397",
     "glm45", "glm45a", "glm46", "glm47", "glm47f", "glm5", "glm51",
-    "k25", "ds3", "deepseek-v4-pro", "deepseek-v4-flash",
+    "k25", "kimi-k3-preview", "inkling", "inkling-small-preview",
+    "ds3", "deepseek-v4-pro", "deepseek-v4-flash",
     "lfm2.5-1.2b-thinking",
     "command-a-plus-05-2026",
     "mistral-medium-3.5-preview", "ml3",
@@ -3096,7 +3196,10 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "glm47f": (30.0, 64.0),
     "glm5": (50.0, 110.0),
     "glm51": (51.0, 110.0),
+    "kimi-k3-preview": (51.0, 110.0),  # Frontier-quality proxy; no AA row or public K3 benchmarks at API launch.
     "kimi-linear-48b": (37.0, 100.0),  # Proxy from Qwen 3.5 35B-A3B until AA publishes Kimi Linear.
+    "inkling": (45.0, 70.0),           # Official broad benchmark suite; AA-scale/verbosity proxy pending a direct row.
+    "inkling-small-preview": (44.0, 70.0),  # Preview benchmarks track Inkling closely; weights/config remain pending.
     "command-a-plus-05-2026": (37.0, 66.0),
     "command-a-03-2025": (32.0, 70.0),       # Conservative proxy until AA publishes a directly comparable Command A row.
     "command-r7b-12-2024": (12.0, 8.3),      # Size-class proxy from compact open instruction models; no AA row found.
@@ -3154,7 +3257,10 @@ AA_MODEL_QUALITY_CONFIDENCE: dict[str, float] = {
     "rwkv7-g1f-29b": 0.35,
     "rwkv7-g1g-72b": 0.35,
     "rwkv7-g1g-133b": 0.35,
+    "kimi-k3-preview": 0.30,
     "kimi-linear-48b": 0.55,
+    "inkling": 0.65,
+    "inkling-small-preview": 0.50,
     "command-a-03-2025": 0.65,
     "command-r7b-12-2024": 0.60,
     "north-mini-code-1-0": 0.45,
