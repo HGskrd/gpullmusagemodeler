@@ -10,6 +10,10 @@ All notable changes to this project will be documented in this file.
 - Added the open-weight Inkling 975B-A41B model with exact hybrid-attention config, multimodal capabilities, 1M context, and an artifact-backed NVFP4 storage profile.
 - Added Inkling-Small 276B-A12B as a preview entry with conservative architecture assumptions pending its promised weight/config release.
 
+### Changed
+
+- Updated Kimi K3 for its public launch with Stable LatentMoE 16-of-896 expert routing, MXFP4-weight/MXFP8-activation QAT, a revised 60B-active capacity proxy, and the official $0.30 cached-input / $3 input / $15 output API pricing. The layer layout and active parameter count remain labeled estimates until the weights and technical report arrive.
+
 ## 2026-07-13
 
 ### Added

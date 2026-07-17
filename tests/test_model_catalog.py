@@ -31,22 +31,35 @@ from data import (
 
 
 class ModelCatalogTests(unittest.TestCase):
-    def test_kimi_k3_preview_uses_only_published_specs_as_facts(self):
+    def test_kimi_k3_launch_entry_uses_published_specs_and_labeled_config_proxy(self):
         model = MODELS["kimi-k3-preview"]
 
-        self.assertEqual(model.name, "Kimi K3 2.8T-A90B (Preview Proxy)")
+        self.assertEqual(model.name, "Kimi K3 2.8T-A60B (Config Proxy)")
         self.assertEqual(model.cat, "Kimi")
         self.assertEqual(model.total_params, 2.8e12)
-        self.assertEqual(model.active_params, 90e9)
+        self.assertEqual(model.active_params, 60e9)
         self.assertTrue(model.is_moe)
         self.assertEqual(model.max_context_tokens, 1_048_576)
         self.assertEqual(model.linear_attention_layer_count, 60)
         self.assertEqual(model.attention_layer_count, 20)
-        self.assertIn("preview proxy", model.attention_label)
-        self.assertIn("active/config undisclosed", model.attention_label)
+        self.assertIn("Stable LatentMoE 16/896", model.attention_label)
+        self.assertIn("MXFP4/MXFP8", model.attention_label)
+        self.assertIn("≥64 accelerators", model.attention_label)
         self.assertTrue({"tools", "ctx_128k", "images", "reasoning"} <= model.capabilities)
         self.assertNotIn("audio", model.capabilities)
         self.assertAlmostEqual(model.quality_confidence, 0.30)
+
+    def test_kimi_k3_cloud_api_pricing_and_procurement_preset(self):
+        cloud = CLOUD_MODELS["kimi-k3"]
+        preset = CORPO_CLOUD_PRESETS["with_kimi"]
+
+        self.assertEqual(cloud["vendor"], "Moonshot AI")
+        self.assertEqual(cloud["in_per_m"], 3.00)
+        self.assertEqual(cloud["cached_in_per_m"], 0.30)
+        self.assertEqual(cloud["out_per_m"], 15.00)
+        self.assertEqual(cloud["max_context_tokens"], 1_048_576)
+        self.assertTrue({"tools", "ctx_128k", "images", "reasoning"} <= set(cloud["capabilities"]))
+        self.assertIn("kimi-k3", preset["models"])
 
     def test_inkling_family_captures_release_and_preview_boundaries(self):
         model = MODELS["inkling"]

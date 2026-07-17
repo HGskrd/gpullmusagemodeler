@@ -2165,17 +2165,18 @@ MODELS: dict[str, Model] = {
         bf16_weight_bytes_per_param=MIXED_NATIVE_BF16_WEIGHT_BPP,
         fp8_weight_bytes_per_param=MIXED_NATIVE_FP8_WEIGHT_BPP,
     ),
-    # K3 launched API-first. Moonshot publishes the 2.8T total size, KDA hybrid
-    # attention, native vision, and 1M context, but not the active parameter count
-    # or checkpoint config yet. Preserve K2's ~3.2% activation ratio and scale the
-    # public Kimi Linear 3:1 KDA/MLA layout as an explicit capacity-planning proxy.
+    # K3 is live in Kimi products/API; full weights and the technical report are due
+    # by 2026-07-27. Moonshot now publishes Stable LatentMoE routing (16/896 experts),
+    # MXFP4-weight/MXFP8-activation QAT, KDA + Gated MLA, native vision, and 1M context,
+    # but not the layer config or active parameter count. The 60B-active estimate adds
+    # a conservative non-expert allowance to the ~50B routed share (2.8T * 16/896).
     "kimi-k3-preview": Model(
         "kimi-k3-preview",
-        "Kimi K3 2.8T-A90B (Preview Proxy)",
+        "Kimi K3 2.8T-A60B (Config Proxy)",
         "Kimi",
         "#6D45E8",
         2.8e12,
-        90e9,
+        60e9,
         True,
         80,
         128,
@@ -2194,7 +2195,7 @@ MODELS: dict[str, Model] = {
         linear_attention_k_heads=128,
         linear_attention_k_head_dim=128,
         linear_attention_conv_kernel=4,
-        attention_label="60 KDA + 20 MLA preview proxy; active/config undisclosed",
+        attention_label="KDA + Gated MLA proxy · Stable LatentMoE 16/896 · MXFP4/MXFP8 · serve ≥64 accelerators",
         max_context_tokens=1_048_576,
     ),
     "kimi-linear-48b": Model(
@@ -3475,6 +3476,17 @@ CLOUD_MODELS = {
         "quality": 0.5,
         "token_efficiency": 1.0,
     },
+    "kimi-k3": {
+        "label": "Kimi K3",
+        "vendor": "Moonshot AI",
+        "in_per_m": 3.00,
+        "cached_in_per_m": 0.30,
+        "out_per_m": 15.00,
+        "quality": 0.5,
+        "token_efficiency": 1.0,
+        "max_context_tokens": 1_048_576,
+        "capabilities": ("tools", "ctx_128k", "images", "reasoning"),
+    },
     "command-a-03-2025": {
         "label": "Command A 03-2025",
         "vendor": "Cohere",
@@ -3510,6 +3522,7 @@ AA_CLOUD_METRICS: dict[str, tuple[float, float]] = {
     "mistral-large-2": (15.0, 2.6),
     "codestral-2501": (15.0, 4.4),       # Proxy from Devstral Small (Jul '25'); no AA page for Codestral 2501 found.
     "deepseek-v3": (16.0, 2.6),
+    "kimi-k3": (51.0, 110.0),          # Launch-benchmark proxy pending a direct AA Intelligence Index row.
     "command-a-03-2025": (32.0, 70.0),   # Conservative proxy until AA publishes a directly comparable Command A row.
     "command-r7b-12-2024": (12.0, 8.3),  # Size-class proxy from compact open instruction models; no AA row found.
 }
@@ -3547,6 +3560,7 @@ CLOUD_MODEL_ZONES: dict[str, tuple[str, ...]] = {
     "mistral-large-2": _MISTRAL_ZONES,
     "codestral-2501": _MISTRAL_ZONES,
     "deepseek-v3": (),
+    "kimi-k3": (),
     "command-a-03-2025": (),
     "command-r7b-12-2024": (),
 }
@@ -3623,6 +3637,19 @@ CORPO_CLOUD_PRESETS = {
             "mistral-large-2",
             "command-r7b-12-2024",
             "command-a-03-2025",
+        ),
+    },
+    "with_kimi": {
+        "label": "Current + Kimi K3 API",
+        "models": (
+            "gemini-flash-lite",
+            "gemini-flash",
+            "gemini-pro",
+            "codestral-2501",
+            "mistral-medium",
+            "mistral-large",
+            "mistral-large-2",
+            "kimi-k3",
         ),
     },
 }
