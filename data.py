@@ -2897,6 +2897,10 @@ MODELS: dict[str, Model] = {
         attention_label="16 global + 48 SWA 512 (proxy)",
     ),
     "laguna-xs2": Model("laguna-xs2", "Laguna XS.2 33B-A3B", "Poolside", "#0891B2", 33e9, 3e9, True, 40, 48, 8, 128, False, hidden_dim=2048, local_attention_layers=30, local_attention_window=512, local_attention_heads=64, attention_label="10 global + 30 SWA 512"),
+    # Poolside states that XS 2.1 retains the XS.2 architecture.  Its public release
+    # confirms 33B total / 3B activated parameters and 256K served context; detailed
+    # layer dimensions remain unpublished, so retain the documented family proxy.
+    "laguna-xs-2-1": Model("laguna-xs-2-1", "Laguna XS 2.1 33B-A3B", "Poolside", "#0891B2", 33e9, 3e9, True, 40, 48, 8, 128, False, hidden_dim=2048, local_attention_layers=30, local_attention_window=512, local_attention_heads=64, attention_label="10 global + 30 SWA 512 (XS.2 architecture proxy)", max_context_tokens=256 * 1024),
 
     "mimo-v2.5-pro": Model(
         "mimo-v2.5-pro",
@@ -3217,7 +3221,7 @@ _REASONING_MODELS = (
     "mistral-medium-3.5-preview", "ml3",
     "minimax25", "minimax27",
     "nem3s", "nem3n", "nem3no",
-    "zaya1-8b", "zaya1-74b-preview", "laguna-m1", "laguna-xs2",
+    "zaya1-8b", "zaya1-74b-preview", "laguna-m1", "laguna-xs2", "laguna-xs-2-1",
     "mimo-v2.5-pro", "mimo-v2.5",
 )
 for _k in _VISION_MODELS:
@@ -3310,6 +3314,7 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "zaya1-74b-preview": (37.0, 100.0),  # Preview is pre-RL; proxy from Qwen 3.5 35B-A3B until AA publishes it.
     "laguna-m1": (44.0, 95.0),       # Proxy from Qwen 3.5 397B-A17B adjusted against Poolside coding-agent benchmarks; no AA row found.
     "laguna-xs2": (37.0, 100.0),     # Proxy from Qwen 3.5 35B-A3B; no AA page for Laguna XS.2 found.
+    "laguna-xs-2-1": (37.0, 100.0),  # Same Qwen 3.5 35B-A3B proxy pending a directly comparable AA row.
     "mimo-v2.5-pro": (54.0, 92.0),
     "mimo-v2.5": (49.0, 74.0),
     "cr13": (12.0, 8.3),   # Proxy from Gemma 4 E2B (Non-reasoning); no AA page for Croissant 1.3B found.
@@ -3352,6 +3357,7 @@ AA_MODEL_QUALITY_CONFIDENCE: dict[str, float] = {
     "zaya1-74b-preview": 0.35,
     "laguna-m1": 0.55,
     "laguna-xs2": 0.45,
+    "laguna-xs-2-1": 0.45,
     "cr13": 0.25,
 }
 for _k, _confidence in AA_MODEL_QUALITY_CONFIDENCE.items():

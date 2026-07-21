@@ -301,6 +301,27 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertAlmostEqual(model.token_efficiency, aa_output_tokens_to_efficiency(95.0))
         self.assertAlmostEqual(model.quality_confidence, 0.55)
 
+    def test_laguna_xs_21_catalog_entry_uses_public_poolside_specs(self):
+        model = MODELS["laguna-xs-2-1"]
+
+        self.assertEqual(model.name, "Laguna XS 2.1 33B-A3B")
+        self.assertEqual(model.cat, "Poolside")
+        self.assertEqual(model.size_label, "33B-A3B")
+        self.assertTrue(model.is_moe)
+        self.assertEqual(model.total_params, 33e9)
+        self.assertEqual(model.active_params, 3e9)
+        self.assertEqual(model.max_context_tokens, 256 * 1024)
+        self.assertEqual(model.layers, 40)
+        self.assertEqual(model.hidden_size, 2048)
+        self.assertEqual(model.local_attention_layers, 30)
+        self.assertEqual(model.local_attention_window, 512)
+        self.assertIn("proxy", model.attention_label)
+        self.assertTrue({"tools", "ctx_128k", "reasoning"} <= model.capabilities)
+        self.assertNotIn("images", model.capabilities)
+        self.assertAlmostEqual(model.quality, aa_intelligence_to_quality(37.0))
+        self.assertAlmostEqual(model.token_efficiency, aa_output_tokens_to_efficiency(100.0))
+        self.assertAlmostEqual(model.quality_confidence, 0.45)
+
     def test_gemma4_12b_unified_catalog_entry_uses_encoder_free_specs(self):
         model = MODELS["g12"]
 

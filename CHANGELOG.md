@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Added Poolside Laguna XS 2.1, the latest 33B-A3B MoE release, with its 256K served context window and the XS.2 architecture proxy pending a published configuration; XS.2 remains available for existing scenarios.
 - Added an optional deployment-level corporate cloud policy (`PLANNER_CLOUD_POLICY`) with model allowlists, negotiated input/cached-input/output price overrides, custom gateway presets, fail-fast validation, UI status, and report provenance.
 - Added current July 2026 cloud/API offerings and dated first-party pricing provenance for OpenAI GPT-5.6, Anthropic Claude 5/4.8, Google Gemini 3.x, Mistral, xAI Grok 4.1 Fast, and DeepSeek V4 families.
 - Added a preliminary NVIDIA Vera Rubin NVL72 rack profile and a dated preview-assumptions registry/guard for non-Kimi preview hardware and models.
