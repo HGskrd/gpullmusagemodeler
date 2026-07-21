@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -13,8 +14,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from data import GPUS, MODELS
-from state import PlannerState
+from data import GPUS, MODELS, PROJECT_PRESETS
+from state import PlannerState, _normalize_use_case_def
 
 
 def _utc_now() -> str:
@@ -69,13 +70,86 @@ def _state_summary(state: Optional[PlannerState]) -> dict:
     }
 
 
+def _builtin_use_case_forms() -> dict[str, frozenset]:
+    """Map each preset key to the JSON-normalized forms of its built-in def.
+
+    Live states carry defs normalized by state.normalize_use_case_defs, which
+    coerces numbers and fills default keys, so an unmodified preset def can
+    appear in either its raw (data.py) or normalized form; accept both.
+    """
+    forms: dict[str, set] = {}
+    for preset in PROJECT_PRESETS:
+        key = str(preset.get("key", ""))
+        if not key:
+            continue
+        bucket = forms.setdefault(key, set())
+        bucket.add(_json_dump(preset))
+        bucket.add(_json_dump(_normalize_use_case_def(copy.deepcopy(preset))))
+    return {key: frozenset(values) for key, values in forms.items()}
+
+
+_BUILTIN_USE_CASE_FORMS = _builtin_use_case_forms()
+
+
+def _slim_panel_state(panel: Optional[dict]) -> Optional[dict]:
+    """Drop use_case_defs entries identical to a built-in PROJECT_PRESETS def.
+
+    Every state embeds the full use-case library -- by default all ten
+    PROJECT_PRESETS -- so each snapshot row repeated the same preset dicts per
+    panel. Entries whose JSON-normalized content matches a built-in form are
+    omitted from the stored row and reattached on read by
+    _restore_panel_state; custom or modified defs are always kept.
+    """
+    if panel is None:
+        return None
+    defs = panel.get("use_case_defs")
+    if not isinstance(defs, list) or not defs:
+        return panel
+    kept = []
+    for entry in defs:
+        forms = _BUILTIN_USE_CASE_FORMS.get(str(entry.get("key", ""))) if isinstance(entry, dict) else None
+        if forms and _json_dump(entry) in forms:
+            continue
+        kept.append(entry)
+    if len(kept) == len(defs):
+        return panel
+    slimmed = dict(panel)
+    slimmed["use_case_defs"] = kept
+    return slimmed
+
+
+def _restore_panel_state(panel: Optional[dict]) -> Optional[dict]:
+    """Reattach built-in use-case defs omitted by _slim_panel_state.
+
+    Missing entries are restored from the canonical PROJECT_PRESETS so readers
+    (e.g. the admin snapshot viewer) always see the full library. Rows written
+    before payload slimming already contain every key and pass through
+    unchanged. Restored entries are the built-in definitions, which may differ
+    cosmetically from the user's normalized copies (e.g. int vs float)."""
+    if panel is None:
+        return None
+    defs = panel.get("use_case_defs")
+    if not isinstance(defs, list):
+        return panel
+    present = {str(entry.get("key", "")) for entry in defs if isinstance(entry, dict)}
+    missing = [preset for preset in PROJECT_PRESETS if str(preset.get("key", "")) not in present]
+    if not missing:
+        return panel
+    restored = dict(panel)
+    restored["use_case_defs"] = [copy.deepcopy(preset) for preset in missing] + defs
+    return restored
+
+
 class SnapshotStore:
     """SQLite snapshot store with one-time import of the legacy JSON log.
 
     Passing the historical ``planner_snapshots.json`` path remains supported: the
     database is created beside it as ``planner_snapshots.sqlite3`` and the JSON
-    file is imported once. Full A/B state payloads are retained. Retention is
-    unlimited unless explicitly configured through environment variables.
+    file is imported once. Full A/B state payloads are retained, except that
+    use-case definitions identical to the built-in presets are omitted from
+    stored rows and restored on read. Retention defaults to 90 days and 250
+    snapshots per tab; set PLANNER_SNAPSHOT_RETENTION_DAYS or
+    PLANNER_SNAPSHOT_MAX_PER_TAB to 0 for unlimited history.
     """
 
     def __init__(self, path: Path, legacy_path: Optional[Path] = None):
@@ -86,8 +160,8 @@ class SnapshotStore:
         else:
             self.path = path
             self.legacy_path = Path(legacy_path) if legacy_path else path.with_name("planner_snapshots.json")
-        self.retention_days = _env_nonnegative_int("PLANNER_SNAPSHOT_RETENTION_DAYS", 0)
-        self.max_per_tab = _env_nonnegative_int("PLANNER_SNAPSHOT_MAX_PER_TAB", 0)
+        self.retention_days = _env_nonnegative_int("PLANNER_SNAPSHOT_RETENTION_DAYS", 90)
+        self.max_per_tab = _env_nonnegative_int("PLANNER_SNAPSHOT_MAX_PER_TAB", 250)
         self._lock = threading.RLock()
         self._initialized = False
 
@@ -216,12 +290,14 @@ class SnapshotStore:
             (f"imported:{imported}:{_utc_now()}",),
         )
 
-    def _apply_retention(self, connection: sqlite3.Connection, visitor_id: str, tab_id: str) -> None:
+    def _apply_retention(self, connection: sqlite3.Connection, visitor_id: str, tab_id: str) -> int:
+        deleted = 0
         if self.retention_days > 0:
             cutoff = (datetime.now(timezone.utc) - timedelta(days=self.retention_days)).isoformat(timespec="seconds")
-            connection.execute("DELETE FROM snapshots WHERE last_seen < ?", (cutoff,))
+            cursor = connection.execute("DELETE FROM snapshots WHERE last_seen < ?", (cutoff,))
+            deleted += max(0, cursor.rowcount)
         if self.max_per_tab > 0:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 DELETE FROM snapshots
                 WHERE visitor_id = ? AND tab_id = ? AND sequence NOT IN (
@@ -232,6 +308,8 @@ class SnapshotStore:
                 """,
                 (visitor_id, tab_id, visitor_id, tab_id, self.max_per_tab),
             )
+            deleted += max(0, cursor.rowcount)
+        return deleted
 
     def record_snapshot(
         self, *, visitor_id: str, tab_id: str, reason: str, path: str,
@@ -241,7 +319,11 @@ class SnapshotStore:
         now = _utc_now()
         panel_a = _serialize_state(state_a)
         panel_b = _serialize_state(state_b)
+        # Hash the full payload so dedup stays consistent with rows written
+        # before payload slimming; only the stored JSON is slimmed.
         state_hash = hashlib.sha256(_json_dump({"panel_a": panel_a, "panel_b": panel_b}).encode("utf-8")).hexdigest()
+        stored_a = _slim_panel_state(panel_a)
+        stored_b = _slim_panel_state(panel_b)
         summary_a = _state_summary(state_a)
         summary_b = _state_summary(state_b)
         summary = {
@@ -273,10 +355,16 @@ class SnapshotStore:
                     """,
                     (
                         str(uuid.uuid4()), visitor_id, tab_id, now, now, reason, path, state_hash,
-                        _json_dump(summary), _json_dump(panel_a), _json_dump(panel_b) if panel_b is not None else None,
+                        _json_dump(summary), _json_dump(stored_a), _json_dump(stored_b) if stored_b is not None else None,
                     ),
                 )
-            self._apply_retention(connection, visitor_id, tab_id)
+            retention_deleted = self._apply_retention(connection, visitor_id, tab_id)
+        if retention_deleted:
+            # Retention deletions only reclaim database file space once the WAL
+            # is checkpointed; run it outside the write transaction, matching
+            # the delete_visitor pattern.
+            with self._connect() as connection:
+                connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
     @staticmethod
     def _decode_row(row: sqlite3.Row) -> dict:
@@ -289,8 +377,8 @@ class SnapshotStore:
             "reason": row["reason"],
             "path": row["path"],
             "summary": json.loads(row["summary_json"]),
-            "panel_a": json.loads(row["panel_a_json"]),
-            "panel_b": json.loads(row["panel_b_json"]) if row["panel_b_json"] else None,
+            "panel_a": _restore_panel_state(json.loads(row["panel_a_json"])),
+            "panel_b": _restore_panel_state(json.loads(row["panel_b_json"])) if row["panel_b_json"] else None,
         }
 
     def list_snapshots(

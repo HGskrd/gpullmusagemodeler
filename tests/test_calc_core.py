@@ -14,7 +14,8 @@ from calc import (
     valid_strategies,
 )
 from data import DIST_PRESETS, GPUS, MODELS, GPU, Model, success_rate
-from state import GpuPool, ModelAssignment, PlannerState, Project, retune_models
+from placement import retune_models
+from state import GpuPool, ModelAssignment, PlannerState, Project
 
 
 class CoreCapacityMathTests(unittest.TestCase):

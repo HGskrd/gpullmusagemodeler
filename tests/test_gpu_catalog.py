@@ -7,9 +7,9 @@ from state import (
     add_model,
     add_models,
     change_gpu_qty,
-    get_model_info,
     set_model_gpu_count,
 )
+from viewmodels import get_model_info
 
 
 class GPUCatalogTests(unittest.TestCase):

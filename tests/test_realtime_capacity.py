@@ -12,6 +12,7 @@ from calc import (
     get_decode_bs,
 )
 from data import ASR_WER_PLACEHOLDER, DIST_PRESETS, MODELS, PUBLISHED_ASR_WER
+from placement import retune_models
 from state import (
     GpuPool,
     ModelAssignment,
@@ -19,7 +20,6 @@ from state import (
     Project,
     VISIBLE_PLOT_MODES,
     normalize_plot_mode,
-    retune_models,
 )
 
 

@@ -63,6 +63,18 @@ from calc import (
     strategy_label,
     valid_strategies,
 )
+from placement import (
+    auto_select_models,
+    retune_models,
+)
+from scenarios import (
+    deserialize_scenario,
+    replace_project_set,
+    replace_use_case_defs,
+    serialize_project_set,
+    serialize_scenario,
+    serialize_use_case_defs,
+)
 from state import (
     AUTO_MODEL_STRATEGIES,
     AUTO_MODEL_STRATEGY_LABELS,
@@ -76,33 +88,23 @@ from state import (
     allow_visitor_scope,
     auto_exclude_model,
     auto_reallow_model,
-    auto_select_models,
     change_gpu_qty,
     clear_compare_state,
     create_default_state,
     duplicate_compare_state,
     delete_visitor_states,
-    deserialize_scenario,
     get_scope_lock,
     get_compare_state,
-    get_model_info,
-    get_model_infos,
     get_state,
     get_use_case_defs,
     remove_gpu,
     remove_model,
     remove_project,
     remove_use_case_def,
-    retune_models,
     normalize_plot_mode,
     normalize_auto_strategy,
-    replace_project_set,
     replace_scope_states,
     reset_state,
-    serialize_scenario,
-    replace_use_case_defs,
-    serialize_project_set,
-    serialize_use_case_defs,
     project_scale_config,
     format_scale_value,
     scale_decimals,
@@ -128,6 +130,10 @@ from state import (
     set_projection_toggle,
 )
 from tracking import SnapshotStore
+from viewmodels import (
+    get_model_info,
+    get_model_infos,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent

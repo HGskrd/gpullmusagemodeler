@@ -1,11 +1,13 @@
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
 from dataclasses import asdict
 from pathlib import Path
 from unittest.mock import patch
 
+from data import PROJECT_PRESETS
 from state import create_default_state
 from tracking import SnapshotStore
 
@@ -70,6 +72,45 @@ class SnapshotStoreTests(unittest.TestCase):
             self.assertEqual(store.list_snapshots(), [])
             self.assertFalse(legacy.exists())
             self.assertEqual(len(list(Path(directory).glob("planner_snapshots.corrupt-*.json"))), 1)
+
+    def test_bounded_retention_defaults_when_env_unset(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ) as env:
+            env.pop("PLANNER_SNAPSHOT_RETENTION_DAYS", None)
+            env.pop("PLANNER_SNAPSHOT_MAX_PER_TAB", None)
+            store = SnapshotStore(Path(directory) / "snapshots.sqlite3")
+            self.assertEqual(store.retention_days, 90)
+            self.assertEqual(store.max_per_tab, 250)
+
+    def test_zero_retention_still_means_unlimited(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {"PLANNER_SNAPSHOT_RETENTION_DAYS": "0", "PLANNER_SNAPSHOT_MAX_PER_TAB": "0"},
+        ):
+            store = SnapshotStore(Path(directory) / "snapshots.sqlite3")
+            self.assertEqual(store.retention_days, 0)
+            self.assertEqual(store.max_per_tab, 0)
+
+    def test_snapshot_rows_slim_builtin_use_case_defs_but_restore_on_read(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = SnapshotStore(Path(directory) / "snapshots.sqlite3")
+            state = create_default_state()
+            custom_def = {"key": "custom-uc", "label": "Custom", "wtp_per_m": 5.0}
+            state.use_case_defs = list(state.use_case_defs) + [custom_def]
+            store.record_snapshot(
+                visitor_id="visitor", tab_id="tab", reason="edit", path="/",
+                state_a=state, state_b=None,
+            )
+
+            with sqlite3.connect(store.path) as connection:
+                raw = json.loads(connection.execute("SELECT panel_a_json FROM snapshots").fetchone()[0])
+            stored_keys = {entry["key"] for entry in raw["use_case_defs"]}
+            preset_keys = {preset["key"] for preset in PROJECT_PRESETS}
+            self.assertEqual(stored_keys, {"custom-uc"})
+            self.assertFalse(stored_keys & preset_keys)
+
+            rows = store.list_snapshots()
+            restored_keys = {entry["key"] for entry in rows[0]["panel_a"]["use_case_defs"]}
+            self.assertEqual(restored_keys, preset_keys | {"custom-uc"})
 
     def test_pagination_and_configured_per_tab_retention(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(

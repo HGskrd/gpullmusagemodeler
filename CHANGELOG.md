@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2026-07-18
+
+### Added
+
+- Anchored Kimi K2.5 and DeepSeek V3 to their Artificial Analysis rows: K2.5 (Reasoning) scores 35 on the Intelligence Index with 87M verbosity tokens (artificialanalysis.ai/models/kimi-k2-5); DeepSeek V3 (Dec '24) scores 14 with 3.3M tokens (artificialanalysis.ai/models/deepseek-v3). Both were the last text models routing on the undiscounted quality=0.5 fallback.
+- Updated the Kimi K2.5 catalog entry for its published 256k context window and text/image/video input, matching the AA model page.
+- Added catalog coverage guards: `text_models_missing_quality_anchors()` / `cloud_models_missing_quality_anchors()` plus an explicit `AA_QUALITY_PLACEHOLDER` registry, with regression tests asserting every servable model carries a quality anchor and no quality/GPU side-table key dangles.
+- Added snapshot-store tests covering bounded-retention defaults, explicit-zero unlimited opt-in, preset-def slimming with restore-on-read, and legacy fat-row reads.
+
+### Changed
+
+- Snapshot retention now defaults to 90 days and 250 snapshots per browser tab instead of unlimited; setting either variable to `0` still keeps the full history.
+- Snapshot rows no longer embed copies of the ten built-in use-case presets: stored payloads keep only custom or modified definitions and reattach built-ins on read, shrinking per-row size while leaving the admin viewer and legacy fat rows fully readable. Retention deletions now trigger a WAL checkpoint so space is actually reclaimed.
+- Split the state module along its fault lines: `state.py` keeps the state model, CRUD, and session registry (2,720 → 1,460 lines); the placement/auto-selection engine moved to `placement.py`, scenario import/export to `scenarios.py`, and the model view-model builder to `viewmodels.py`. Callers were migrated directly with no re-export shims, and the duplicated loaded-state normalization block in `get_state`/`get_compare_state` is now a single shared helper.
+- Extracted the calculator's inline script (~1,260 lines) into cacheable `static/app.js`; `templates/base.html` is now an 84-line skeleton with no inline JavaScript. Removed the dead project-chart code and an always-false scroll-behavior feature detect.
+- Vendored HTMX 2.0.4 and Apache ECharts 5.5.1 under `static/vendor/`, removing the CDN dependency and its no-SRI supply-chain exposure.
+- Unified the use-cases page on the shared `static/app.js` plus a 50-line `static/use_cases.js`, deleting its drifted copy of the calculator's JavaScript.
+
 ## 2026-07-16
 
 ### Added

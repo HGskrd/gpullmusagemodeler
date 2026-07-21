@@ -13,6 +13,10 @@ from calc import (
     valid_strategies,
 )
 from data import (
+    AA_CLOUD_METRICS,
+    AA_MODEL_METRICS,
+    AA_MODEL_QUALITY_CONFIDENCE,
+    AA_QUALITY_PLACEHOLDER,
     CLOUD_MODELS,
     CORPO_CLOUD_PRESETS,
     EMBEDDING_DOC_BUCKETS,
@@ -20,13 +24,17 @@ from data import (
     EMBEDDING_DECONTAMINATED_BEIR_SOURCES,
     EMBEDDING_QUALITY_PLACEHOLDER,
     EMBEDDING_QUALITY_SOURCES,
+    GPU_FP4_FLOPS,
+    GPU_TDP_WATTS,
     GPUS,
     MODELS,
     PUBLISHED_EMBEDDING_DECONTAMINATED_BEIR,
     PUBLISHED_EMBEDDING_QUALITY,
     aa_intelligence_to_quality,
     aa_output_tokens_to_efficiency,
+    cloud_models_missing_quality_anchors,
     get_quantization_profile,
+    text_models_missing_quality_anchors,
 )
 
 
@@ -568,6 +576,34 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertGreater(result.rps, 0)
         self.assertEqual(result.seq_len, round(stats.mean_seq_len))
         self.assertEqual(result.p90_seq_len, stats.p90_seq_len)
+
+    def test_flagship_moe_models_have_direct_aa_anchors(self):
+        k25 = MODELS["k25"]
+        ds3 = MODELS["ds3"]
+
+        self.assertAlmostEqual(k25.quality, aa_intelligence_to_quality(35.0))
+        self.assertAlmostEqual(k25.token_efficiency, aa_output_tokens_to_efficiency(87.0))
+        self.assertAlmostEqual(k25.quality_confidence, 1.0)
+        self.assertEqual(k25.max_context_tokens, 262144)
+        self.assertIn("images", k25.capabilities)
+        self.assertIn("reasoning", k25.capabilities)
+
+        self.assertAlmostEqual(ds3.quality, aa_intelligence_to_quality(14.0))
+        self.assertAlmostEqual(ds3.token_efficiency, aa_output_tokens_to_efficiency(3.3))
+        self.assertAlmostEqual(ds3.quality_confidence, 1.0)
+
+    def test_every_servable_model_has_a_quality_anchor(self):
+        self.assertEqual(text_models_missing_quality_anchors(), [])
+        self.assertEqual(cloud_models_missing_quality_anchors(), [])
+        self.assertTrue(AA_QUALITY_PLACEHOLDER <= MODELS.keys())
+        self.assertFalse(set(AA_QUALITY_PLACEHOLDER) & set(AA_MODEL_METRICS))
+
+    def test_quality_side_tables_have_no_dangling_keys(self):
+        self.assertTrue(set(AA_MODEL_METRICS) <= set(MODELS))
+        self.assertTrue(set(AA_MODEL_QUALITY_CONFIDENCE) <= set(MODELS))
+        self.assertTrue(set(AA_CLOUD_METRICS) <= set(CLOUD_MODELS))
+        self.assertTrue(set(GPU_FP4_FLOPS) <= set(GPUS))
+        self.assertTrue(set(GPU_TDP_WATTS) <= set(GPUS))
 
 
 if __name__ == "__main__":

@@ -1,12 +1,12 @@
 import unittest
 
+from placement import auto_select_models
 from state import (
     AUTO_MODEL_STRATEGIES,
     DEFAULT_AUTO_MODEL_STRATEGY,
     GpuPool,
     PlannerState,
     Project,
-    auto_select_models,
     normalize_auto_strategy,
 )
 

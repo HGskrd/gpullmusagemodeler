@@ -132,8 +132,8 @@ For local debugging, add `DEBUG=1` or `FLASK_DEBUG=1`.
 | `GUNICORN_THREADS` | Gunicorn thread count; defaults to `4` |
 | `GUNICORN_TIMEOUT` | Gunicorn request timeout in seconds; defaults to `120` |
 | `PLANNER_TRACKING_ENABLED` | Persist complete planner scenario snapshots; defaults to `true` |
-| `PLANNER_SNAPSHOT_RETENTION_DAYS` | Delete snapshots older than this many days; `0` keeps the full history indefinitely |
-| `PLANNER_SNAPSHOT_MAX_PER_TAB` | Maximum snapshots retained per browser tab; `0` keeps every snapshot |
+| `PLANNER_SNAPSHOT_RETENTION_DAYS` | Delete snapshots older than this many days; defaults to `90`; `0` keeps the full history indefinitely |
+| `PLANNER_SNAPSHOT_MAX_PER_TAB` | Maximum snapshots retained per browser tab; defaults to `250`; `0` keeps every snapshot |
 | `PLANNER_ADMIN_PAGE_SIZE` | Snapshots rendered per admin page; defaults to `100` |
 | `PLANNER_STATE_TTL_SECONDS` | Idle lifetime for an in-memory planner scope; defaults to `86400` |
 | `PLANNER_STATE_MAX_SCOPES` | Maximum active in-memory browser scopes; defaults to `5000` |
@@ -147,7 +147,7 @@ For local debugging, add `DEBUG=1` or `FLASK_DEBUG=1`.
 
 ## Scenario Data and Privacy
 
-The planner stores complete A/B scenario snapshots—including hardware, model assignments, topology, costs, workload shapes, and use-case economics—so administrators can inspect how planning decisions evolve. Snapshot persistence is enabled by default and the default retention settings preserve the complete history.
+The planner stores complete A/B scenario snapshots—including hardware, model assignments, topology, costs, workload shapes, and use-case economics—so administrators can inspect how planning decisions evolve. Snapshot persistence is enabled by default, bounded to 90 days and 250 snapshots per browser tab; set either limit to `0` for unlimited history. Stored rows omit use-case definitions that match the built-in presets and reattach them on read, so custom libraries are preserved without duplicating preset content in every row.
 
 Snapshots are stored transactionally in `instance/planner_snapshots.sqlite3`; the legacy JSON file is imported on first use when present. The calculator discloses this behavior and provides a **Delete my scenarios** action that removes the current visitor's persisted snapshots and in-memory state. Set `PLANNER_TRACKING_ENABLED=false` when a deployment should not retain scenarios, or configure the optional retention limits above.
 

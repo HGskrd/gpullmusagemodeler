@@ -9,7 +9,7 @@ import re
 import threading
 import time
 import weakref
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from data import (
@@ -26,35 +26,16 @@ from data import (
     PROJECT_PRESETS,
     CORPO_CLOUD_PRESETS,
     CORPO_CLOUD_DEFAULT,
-    COUNTRIES,
     MODEL_CAPABILITIES,
     SCALE_MODELS,
     PRECISIONS,
     PRECISION_LABELS,
     normalize_gpu_count,
     normalize_precision,
-    effective_quality,
-    model_success_rate,
-    required_quality,
 )
 from calc import (
     EfficiencyParams,
     avg_dist,
-    communication_breakdown,
-    compute_decode,
-    compute_embedding_distribution,
-    compute_memory,
-    compute_prefill,
-    compute_realtime_capacity,
-    compute_realtime_max_users,
-    default_strategy,
-    embedding_doc_stats,
-    embedding_sequence_length,
-    effective_prefill_length,
-    gpu_supports_mxfp4,
-    gpu_supports_nvfp4,
-    per_replica_kv_cache_bytes,
-    strategy_label,
     valid_strategies,
 )
 
@@ -426,267 +407,9 @@ class PlannerState:
         return next((p for p in self.projects if p.uid == uid), None)
 
 
-def _min_gpu_count_for_pool(
-    m: Model,
-    g: GPU,
-    mu: float,
-    profiled_non_kv_gb: float,
-    prec: str,
-    max_gpu_count: int,
-) -> float:
-    for gpu_count in range(1, max_gpu_count + 1):
-        if valid_strategies(m, gpu_count, g, mu, profiled_non_kv_gb, prec):
-            return gpu_count
-    return math.inf
-
-
-def _finite_gpu_need(*needs: float) -> float:
-    finite = [need for need in needs if not math.isinf(need)]
-    return min(finite) if finite else math.inf
-
-
-def _best_precision_need(needs: dict[str, float]) -> tuple[Optional[str], float]:
-    finite = [(prec, need) for prec, need in needs.items() if not math.isinf(need)]
-    if not finite:
-        return None, math.inf
-    return min(finite, key=lambda item: (item[1], PRECISIONS.index(item[0])))
-
-
-def _gpu_count_options(max_avail: int, current_count: int, gpu: Optional[GPU]) -> list[int]:
-    max_count = max(0, int(max_avail or 0))
-    current = min(max(0, int(current_count or 0)), max_count)
-    options = {0, current, max_count}
-
-    options.update(range(1, min(max_count, 8) + 1))
-    options.update(range(10, min(max_count, 16) + 1, 2))
-
-    for count in (24, 32, 48, 64, 96, 128, 192, 256):
-        if count <= max_count:
-            options.add(count)
-
-    if gpu is not None:
-        node_size = max(int(getattr(gpu, "node_size", 1) or 1), 1)
-        for count in range(node_size, max_count + 1, node_size):
-            options.add(count)
-
-    return sorted(count for count in options if 0 <= count <= max_count)
-
-
-def _probe_batch_sizes(dp: int) -> list[int]:
-    values = {max(1, dp)}
-    while max(values) < 128:
-        values.add(max(values) * 2)
-    return sorted(values)
-
-
-def _preferred_strategy(state: PlannerState, am: ModelAssignment, gpu: GPU, phase: str) -> tuple[int, int, int]:
-    model = MODELS[am.model_key]
-    candidates = valid_strategies(model, am.gpu_count, gpu, state.mu, state.profiled_non_kv_gb, am.prec)
-    if not candidates:
-        return default_strategy(model, am.gpu_count, gpu, state.mu, state.profiled_non_kv_gb, am.prec)
-
-    best = candidates[0]
-    best_score = None
-    probe_prefill_len = max(1, effective_prefill_length(max(state.task_il, avg_dist(state.in_dist, INPUT_BUCKETS)), state.prefix_hit_rate))
-    is_embedding = getattr(model, "embedding_profile", None) is not None
-    for tp, pp, dp in candidates:
-        mem = compute_memory(
-            model,
-            tp,
-            pp,
-            gpu,
-            state.mu,
-            state.profiled_non_kv_gb,
-            am.prec,
-            state.prefill_efficiency if phase == "prefill" else state.decode_efficiency,
-        )
-        kv_headroom = mem.kv_budget if mem else 0.0
-        local_tp = 1 if tp <= gpu.node_size else 0
-        peak_tps = -1
-        aux = float("-inf")
-
-        for bs in _probe_batch_sizes(dp):
-            if is_embedding:
-                result = compute_embedding_distribution(
-                    model,
-                    (tp, pp, dp),
-                    bs,
-                    state.embedding_doc_dist,
-                    EMBEDDING_DOC_BUCKETS,
-                    gpu,
-                    state.mu,
-                    state.profiled_non_kv_gb,
-                    am.prec,
-                    state.prefill_efficiency,
-                )
-                if result is None:
-                    continue
-                metric = (result.tps, result.rps)
-            elif phase == "prefill":
-                result = compute_prefill(
-                    model,
-                    tp,
-                    pp,
-                    bs,
-                    dp,
-                    probe_prefill_len,
-                    gpu,
-                    state.mu,
-                    state.profiled_non_kv_gb,
-                    am.prec,
-                    state.prefill_efficiency,
-                )
-                if result is None:
-                    continue
-                metric = (result.tps, result.rps)
-            else:
-                result = compute_decode(
-                    model,
-                    tp,
-                    pp,
-                    bs,
-                    dp,
-                    gpu,
-                    state.mu,
-                    state.profiled_non_kv_gb,
-                    am.prec,
-                    state.in_dist,
-                    state.out_dist,
-                    state.decode_efficiency,
-                )
-                if result is None:
-                    continue
-                metric = (result.tps, -result.lat)
-
-            if metric[0] > peak_tps or (metric[0] == peak_tps and metric[1] > aux):
-                peak_tps = metric[0]
-                aux = metric[1]
-
-        if peak_tps < 0:
-            score = (local_tp, min(tp, gpu.node_size), dp, -pp, kv_headroom)
-        else:
-            score = (peak_tps, aux, local_tp, min(tp, gpu.node_size), dp, -pp, kv_headroom)
-
-        if best_score is None or score > best_score:
-            best = (tp, pp, dp)
-            best_score = score
-
-    return best
-
-
-def _retune_model(state: PlannerState, am: ModelAssignment, preserve_existing: bool = False):
-    if am.gpu_count <= 0:
-        am.tp = 1
-        am.pp = 1
-        am.dp = 1
-        am.prefill_tp = 1
-        am.prefill_pp = 1
-        am.prefill_dp = 1
-        return
-
-    gp = state.find_gpu(am.gpu_uid)
-    if gp is None:
-        return
-
-    model = MODELS[am.model_key]
-    if getattr(model, "embedding_profile", None) is not None:
-        embedding_default = _preferred_strategy(state, am, gp.gpu, "prefill")
-        if not preserve_existing:
-            am.tp, am.pp, am.dp = embedding_default
-            am.prefill_tp, am.prefill_pp, am.prefill_dp = embedding_default
-            return
-
-        valid = valid_strategies(
-            model,
-            am.gpu_count,
-            gp.gpu,
-            state.mu,
-            state.profiled_non_kv_gb,
-            am.prec,
-        )
-        if (am.prefill_tp, am.prefill_pp, am.prefill_dp) not in valid:
-            am.prefill_tp, am.prefill_pp, am.prefill_dp = embedding_default
-        am.tp, am.pp, am.dp = am.prefill_tp, am.prefill_pp, am.prefill_dp
-        return
-
-    decode_default = _preferred_strategy(state, am, gp.gpu, "decode")
-    prefill_default = _preferred_strategy(state, am, gp.gpu, "prefill")
-    if not preserve_existing:
-        am.tp, am.pp, am.dp = decode_default
-        am.prefill_tp, am.prefill_pp, am.prefill_dp = prefill_default
-        return
-
-    decode_valid = valid_strategies(
-        model,
-        am.gpu_count,
-        gp.gpu,
-        state.mu,
-        state.profiled_non_kv_gb,
-        am.prec,
-    )
-    if (am.tp, am.pp, am.dp) not in decode_valid:
-        am.tp, am.pp, am.dp = decode_default
-
-    prefill_valid = valid_strategies(
-        model,
-        am.gpu_count,
-        gp.gpu,
-        state.mu,
-        state.profiled_non_kv_gb,
-        am.prec,
-    )
-    if (am.prefill_tp, am.prefill_pp, am.prefill_dp) not in prefill_valid:
-        am.prefill_tp, am.prefill_pp, am.prefill_dp = prefill_default
-
-
-def retune_models(state: PlannerState, preserve_existing: bool = True):
-    for am in state.models:
-        if am.gpu_count > 0:
-            _retune_model(state, am, preserve_existing=preserve_existing)
-
-
-def _assignment_memories(state: PlannerState, am: ModelAssignment, gpu: GPU):
-    model = MODELS[am.model_key]
-    prefill_mem = compute_memory(
-        model,
-        am.prefill_tp,
-        am.prefill_pp,
-        gpu,
-        state.mu,
-        state.profiled_non_kv_gb,
-        am.prec,
-        state.prefill_efficiency,
-    )
-    decode_mem = compute_memory(
-        model,
-        am.tp,
-        am.pp,
-        gpu,
-        state.mu,
-        state.profiled_non_kv_gb,
-        am.prec,
-        state.decode_efficiency,
-    )
-    return prefill_mem, decode_mem
-
-
-def get_deployed(state: PlannerState, phase: str = "decode") -> list[ModelAssignmentProxy]:
-    deployed = []
-    for am in state.models:
-        if am.gpu_count <= 0:
-            continue
-        gp = state.find_gpu(am.gpu_uid)
-        if gp is None:
-            continue
-        prefill_mem, decode_mem = _assignment_memories(state, am, gp.gpu)
-        mem = prefill_mem if phase == "prefill" else decode_mem
-        if mem is None:
-            continue
-        deployed.append(ModelAssignmentProxy(am, gp.gpu, phase, prefill_mem, decode_mem))
-    return deployed
-
-
 def create_default_state() -> PlannerState:
+    from placement import _retune_model
+
     state = PlannerState()
     gpu_uid = _next_uid()
     state.gpus.append(GpuPool(gpu_uid, "MI355X", 8))
@@ -1144,57 +867,6 @@ def _sync_projects_from_use_case_defs(state: PlannerState):
     _sync_aggregate_distribution(state)
 
 
-def serialize_use_case_defs(state: PlannerState) -> dict:
-    return {
-        "type": "gpullm-use-case-library",
-        "version": 1,
-        "use_cases": copy.deepcopy(get_use_case_defs(state)),
-    }
-
-
-def replace_use_case_defs(state: PlannerState, payload: Any) -> int:
-    if isinstance(payload, list):
-        items = payload
-    elif isinstance(payload, dict):
-        items = payload.get("use_cases")
-    else:
-        items = None
-    if not isinstance(items, list):
-        raise ValueError("Use-case JSON must contain a use_cases array.")
-    if len(items) > 256:
-        raise ValueError("Use-case JSON may contain at most 256 definitions.")
-
-    normalized = []
-    seen = set()
-    for idx, item in enumerate(items):
-        if not isinstance(item, dict):
-            raise ValueError("Each use case must be a JSON object.")
-        raw = dict(item.get("definition", item)) if isinstance(item.get("definition"), dict) else dict(item)
-        # Accept the earlier selected-instance export shape by folding scale into seed values.
-        scale = item.get("scale") if isinstance(item.get("scale"), dict) else {}
-        if "tokens_day" not in raw and "tokens_day" in scale:
-            raw["tokens_day"] = scale["tokens_day"]
-        if "scale_value" not in raw and "value" in scale:
-            raw["scale_value"] = scale["value"]
-        if "latent_jobs_day" not in raw and "latent_jobs_day" in scale:
-            raw["latent_jobs_day"] = scale["latent_jobs_day"]
-        raw["key"] = item.get("kind_key") or item.get("key") or raw.get("key") or item.get("name") or f"use_case_{idx + 1}"
-        raw["name"] = item.get("name") or raw.get("name") or raw["key"]
-        normalized_item = _normalize_use_case_def(raw, fallback_key=f"use_case_{idx + 1}")
-        base_key = normalized_item["key"]
-        if base_key in seen:
-            i = 2
-            while f"{base_key}_{i}" in seen:
-                i += 1
-            normalized_item["key"] = f"{base_key}_{i}"
-        seen.add(normalized_item["key"])
-        normalized.append(normalized_item)
-
-    state.use_case_defs = normalized
-    _sync_projects_from_use_case_defs(state)
-    return len(normalized)
-
-
 def add_use_case_def(state: PlannerState) -> dict[str, Any]:
     key = _unique_use_case_key(state, "new_use_case")
     item = _normalize_use_case_def({
@@ -1295,54 +967,6 @@ def set_use_case_def_capability(state: PlannerState, key: str, capability: str, 
     _sync_projects_from_use_case_defs(state)
 
 
-def _project_definition_payload(proj: Project) -> dict:
-    return {
-        "difficulty": float(proj.difficulty),
-        "scale_kind": copy.deepcopy(getattr(proj, "scale_kind", DEFAULT_SCALE_KIND)),
-        "wtp_per_m": float(proj.wtp_per_m),
-        "requires": sorted(proj.requires),
-        "min_success_rate": float(proj.min_success_rate),
-        "quality_floor": float(getattr(proj, "quality_floor", 0.0)),
-        "batch_eligible": bool(proj.batch_eligible),
-        "unlock_price_per_m": float(proj.unlock_price_per_m),
-        "in_pre": proj.in_pre,
-        "out_pre": proj.out_pre,
-    }
-
-
-def _project_scale_payload(proj: Project) -> dict:
-    return {
-        "value": float(getattr(proj, "scale_value", tokens_to_scale_value(proj.tokens_day, getattr(proj, "scale_kind", {})))),
-        "tokens_day": float(proj.tokens_day),
-        "latent_jobs_day": float(proj.latent_jobs_day),
-    }
-
-
-def serialize_project_set(state: PlannerState) -> dict:
-    """JSON-save format for the demand side only.
-
-    Each row keeps definition and scale separate so a saved file can contain many
-    use-case kinds while each organization chooses its own deployment scale.
-    """
-    return {
-        "type": "gpullm-use-case-set",
-        "version": 1,
-        "use_cases": [
-            {
-                "name": proj.name,
-                "kind_key": getattr(proj, "kind_key", "custom"),
-                "scale": _project_scale_payload(proj),
-                "definition": _project_definition_payload(proj),
-            }
-            for proj in state.projects
-        ],
-    }
-
-
-def _payload_dict(value: Any) -> dict:
-    return value if isinstance(value, dict) else {}
-
-
 def _payload_float(source: dict, key: str, default: float) -> float:
     try:
         value = float(source.get(key, default))
@@ -1357,112 +981,6 @@ def _bounded_project_value(field_name: str, value: float) -> float:
     if not math.isfinite(numeric):
         raise ValueError(f"{field_name} must be finite.")
     return min(max(numeric, lo), hi)
-
-
-def _project_from_payload(state: PlannerState, item: dict) -> Project:
-    kind_key = str(item.get("kind_key") or item.get("kind") or "custom")
-    preset = _find_use_case_def(state, kind_key) if kind_key != "custom" else None
-    if preset is None and kind_key != "custom":
-        preset = _find_preset(kind_key)
-    base = preset or {
-        "key": "custom",
-        "name": "Custom use case",
-        "difficulty": 0.3,
-        "tokens_day": 500e6,
-        "scale_value": 500.0,
-        "scale_kind": copy.deepcopy(DEFAULT_SCALE_KIND),
-        "wtp_per_m": 1.0,
-        "requires": (),
-        "min_success_rate": 0.85,
-        "quality_floor": 0.0,
-        "batch_eligible": False,
-        "latent_jobs_day": 0.0,
-        "unlock_price_per_m": 0.0,
-        "in_pre": "Chat",
-        "out_pre": "Chat",
-    }
-    definition = _payload_dict(item.get("definition")) or item
-    scale = _payload_dict(item.get("scale")) or item
-    requires_raw = definition.get("requires", base.get("requires", ()))
-    if isinstance(requires_raw, str):
-        requires_iter = (requires_raw,)
-    else:
-        requires_iter = requires_raw or ()
-    requires = frozenset(c for c in requires_iter if c in ALLOWED_CAPABILITIES)
-    scale_kind_source = definition if isinstance(definition.get("scale_kind"), dict) else base
-    scale_kind = _normalize_scale_kind(scale_kind_source)
-    scale_value = _payload_optional_float(scale, "value")
-    if scale_value is None:
-        scale_value = _payload_optional_float(definition, "scale_value")
-    if scale_value is None:
-        scale_value = tokens_to_scale_value(
-            _payload_float(scale, "tokens_day", float(base.get("tokens_day", 500e6))),
-            scale_kind,
-        )
-
-    proj = Project(
-        uid=_next_uid(),
-        name=str(item.get("name") or base["name"])[:60],
-        difficulty=_bounded_project_value(
-            "difficulty",
-            _payload_float(definition, "difficulty", float(base["difficulty"])),
-        ),
-        tokens_day=_bounded_project_value(
-            "tokens_day",
-            scale_value_to_tokens(scale_value, scale_kind),
-        ),
-        wtp_per_m=_bounded_project_value(
-            "wtp_per_m",
-            _payload_float(definition, "wtp_per_m", float(base["wtp_per_m"])),
-        ),
-        scale_value=max(0.0, float(scale_value)),
-        scale_kind=copy.deepcopy(scale_kind),
-        kind_key=str(base["key"]) if preset else "custom",
-        batch_eligible=bool(definition.get("batch_eligible", base.get("batch_eligible", False))),
-        requires=requires,
-        min_success_rate=_bounded_project_value(
-            "min_success_rate",
-            _payload_float(definition, "min_success_rate", float(base.get("min_success_rate", 0.85))),
-        ),
-        quality_floor=_bounded_project_value(
-            "quality_floor",
-            _payload_float(definition, "quality_floor", float(base.get("quality_floor", 0.0))),
-        ),
-        latent_jobs_day=_bounded_project_value(
-            "latent_jobs_day",
-            _payload_float(scale, "latent_jobs_day", float(base.get("latent_jobs_day", 0.0))),
-        ),
-        unlock_price_per_m=_bounded_project_value(
-            "unlock_price_per_m",
-            _payload_float(definition, "unlock_price_per_m", float(base.get("unlock_price_per_m", 0.0))),
-        ),
-        in_pre=str(definition.get("in_pre", base.get("in_pre", "Chat"))),
-        out_pre=str(definition.get("out_pre", base.get("out_pre", "Chat"))),
-    )
-    return proj
-
-
-def replace_project_set(state: PlannerState, payload: Any) -> int:
-    if isinstance(payload, list):
-        items = payload
-    elif isinstance(payload, dict):
-        items = payload.get("use_cases")
-    else:
-        items = None
-    if not isinstance(items, list):
-        raise ValueError("Use-case JSON must contain a use_cases array.")
-    if len(items) > 256:
-        raise ValueError("Use-case JSON may contain at most 256 use cases.")
-
-    projects = []
-    for item in items:
-        if not isinstance(item, dict):
-            raise ValueError("Each use case must be a JSON object.")
-        projects.append(_project_from_payload(state, item))
-
-    state.projects = projects
-    _sync_aggregate_distribution(state)
-    return len(projects)
 
 
 def _infer_project_kind(state: PlannerState, proj: Project) -> str:
@@ -1521,6 +1039,8 @@ def remove_gpu(state: PlannerState, gpu_uid: int):
 
 
 def change_gpu_qty(state: PlannerState, gpu_uid: int, delta: int):
+    from placement import _retune_model
+
     gp = state.find_gpu(gpu_uid)
     if gp is None:
         return
@@ -1544,6 +1064,13 @@ def change_gpu_qty(state: PlannerState, gpu_uid: int, delta: int):
 
 
 def add_model(state: PlannerState, model_key: str):
+    from placement import (
+        _best_precision_need,
+        _finite_gpu_need,
+        _min_gpu_count_for_pool,
+        _retune_model,
+    )
+
     if not state.gpus:
         raise ValueError("Add a GPU pool before adding a model.")
     if model_key not in MODELS or MODELS[model_key].hidden:
@@ -1619,338 +1146,6 @@ def add_models(state: PlannerState, model_keys: list[str]) -> list[str]:
     return added
 
 
-def _model_serves_project(model: Model, project: Project) -> bool:
-    if getattr(model, "is_realtime_only", False) or getattr(model, "embedding_profile", None) is not None:
-        return False
-    return (
-        project.requires <= model.capabilities
-        and effective_quality(model) + 1e-9 >= float(getattr(project, "quality_floor", 0.0))
-        and model_success_rate(model, project.difficulty) >= project.min_success_rate
-    )
-
-
-def _active_project_demand(project: Project) -> float:
-    return max(0.0, float(project.tokens_day or 0.0)) + 0.25 * max(0.0, float(project.latent_jobs_day or 0.0))
-
-
-def _best_available_placement(state: PlannerState, model: Model) -> Optional[tuple[GpuPool, int, str]]:
-    placements: list[tuple[tuple[int, int, float, int, int, int], GpuPool, str]] = []
-    for pool_order, gp in enumerate(state.gpus):
-        avail = state.free_gpu_for_pool(gp.uid)
-        if avail <= 0:
-            continue
-        for prec in PRECISIONS:
-            need = _min_gpu_count_for_pool(model, gp.gpu, state.mu, state.profiled_non_kv_gb, prec, avail)
-            if math.isinf(need):
-                continue
-            placements.append((
-                (int(need), PRECISIONS.index(prec), -gp.gpu.mem, -avail, gp.uid, pool_order),
-                gp,
-                prec,
-            ))
-    if not placements:
-        return None
-    key, gp, prec = min(placements, key=lambda placement: placement[0])
-    need = key[0]
-    return gp, need, prec
-
-
-def _best_available_placement_on_pool(
-    state: PlannerState,
-    model: Model,
-    gp: GpuPool,
-) -> Optional[tuple[int, str]]:
-    avail = state.free_gpu_for_pool(gp.uid)
-    if avail <= 0:
-        return None
-
-    placements: list[tuple[int, int, str]] = []
-    for prec in PRECISIONS:
-        need = _min_gpu_count_for_pool(model, gp.gpu, state.mu, state.profiled_non_kv_gb, prec, avail)
-        if not math.isinf(need):
-            placements.append((int(need), PRECISIONS.index(prec), prec))
-    if not placements:
-        return None
-
-    need, _, prec = min(placements)
-    return need, prec
-
-
-def _auto_assignment_demand(state: PlannerState, am: ModelAssignment) -> float:
-    model = MODELS[am.model_key]
-    demand = sum(_active_project_demand(project) for project in state.projects if _model_serves_project(model, project))
-    return demand or model.quality * 1e6
-
-
-def _auto_model_value(model: Model, projects: list[Project]) -> float:
-    value = 0.0
-    for project in projects:
-        if not _model_serves_project(model, project):
-            continue
-        sr = model_success_rate(model, project.difficulty)
-        value += _active_project_demand(project) * max(0.0, float(project.wtp_per_m or 0.0)) * sr
-    return value
-
-
-def _auto_model_value_density(model: Model, projects: list[Project], gpu_count: int) -> float:
-    return _auto_model_value(model, projects) / max(int(gpu_count or 0), 1)
-
-
-def _auto_served_projects(model: Model, projects: list[Project]) -> list[Project]:
-    return [project for project in projects if _model_serves_project(model, project)]
-
-
-def _auto_weighted_success(model: Model, projects: list[Project]) -> float:
-    served = _auto_served_projects(model, projects)
-    total = sum(_active_project_demand(project) for project in served)
-    if total <= 0:
-        return 0.0
-    return sum(
-        _active_project_demand(project) * model_success_rate(model, project.difficulty)
-        for project in served
-    ) / total
-
-
-def _auto_quality_margin(model: Model, projects: list[Project]) -> float:
-    served = _auto_served_projects(model, projects)
-    if not served:
-        return 0.0
-    return min(
-        model_success_rate(model, project.difficulty) - float(project.min_success_rate)
-        for project in served
-    )
-
-
-def _auto_covered_demand(model: Model, projects: list[Project]) -> float:
-    return sum(_active_project_demand(project) for project in _auto_served_projects(model, projects))
-
-
-def _auto_required_capability_count(projects: list[Project]) -> int:
-    required: set[str] = set()
-    for project in projects:
-        required.update(getattr(project, "requires", frozenset()) or frozenset())
-    return len(required)
-
-
-def _auto_model_work_size(model: Model) -> float:
-    return model.active_params / max(float(model.token_efficiency), 1e-6)
-
-
-def _auto_model_kv_size(model: Model) -> float:
-    return max(model.kv_layer_count, 1) * max(model.kv_heads, 1) * max(model.head_dim, 1)
-
-
-def _auto_candidate_key(
-    model: Model,
-    projects: list[Project],
-    gpu_count: int,
-    prec: str,
-    strategy: str,
-) -> tuple:
-    strategy = normalize_auto_strategy(strategy)
-    value = _auto_model_value(model, projects)
-    value_density = value / max(int(gpu_count or 0), 1)
-    served = _auto_served_projects(model, projects)
-    served_count = len(served)
-    covered_demand = _auto_covered_demand(model, projects)
-    weighted_success = _auto_weighted_success(model, served)
-    quality_margin = _auto_quality_margin(model, served)
-    quality = effective_quality(model)
-    work_size = _auto_model_work_size(model)
-    kv_size = _auto_model_kv_size(model)
-    prec_idx = PRECISIONS.index(prec) if prec in PRECISIONS else len(PRECISIONS)
-
-    if strategy == "coverage":
-        return (
-            -served_count,
-            -covered_demand,
-            -_auto_required_capability_count(served),
-            -value_density,
-            -weighted_success,
-            gpu_count,
-            work_size,
-            model.total_params,
-            prec_idx,
-            model.key,
-        )
-    if strategy == "quality":
-        return (
-            -quality,
-            -weighted_success,
-            -quality_margin,
-            -value_density,
-            gpu_count,
-            work_size,
-            model.total_params,
-            prec_idx,
-            model.key,
-        )
-    if strategy == "lean":
-        return (
-            gpu_count,
-            work_size,
-            model.total_params,
-            -quality_margin,
-            -weighted_success,
-            -value_density,
-            prec_idx,
-            model.key,
-        )
-    if strategy == "throughput":
-        return (
-            work_size,
-            kv_size,
-            gpu_count,
-            model.total_params,
-            -value_density,
-            -weighted_success,
-            -quality,
-            prec_idx,
-            model.key,
-        )
-
-    return (
-        -value_density,
-        -value,
-        -quality,
-        work_size,
-        gpu_count,
-        model.total_params,
-        prec_idx,
-        model.key,
-    )
-
-
-def _seed_empty_auto_pools(state: PlannerState, projects: list[Project], strategy: str):
-    for gp in state.gpus:
-        if state.free_gpu_for_pool(gp.uid) <= 0:
-            continue
-        if any(am.gpu_uid == gp.uid for am in state.models):
-            continue
-
-        candidates = []
-        for model in MODELS.values():
-            if model.hidden or model.key in state.auto_excluded:
-                continue
-            value = _auto_model_value(model, projects)
-            if value <= 0:
-                continue
-            placement = _best_available_placement_on_pool(state, model, gp)
-            if placement is None:
-                continue
-            gpu_count, prec = placement
-            candidates.append((
-                _auto_candidate_key(model, projects, gpu_count, prec, strategy),
-                model,
-                prec,
-            ))
-
-        if not candidates:
-            continue
-
-        _, model, prec = min(candidates)
-        gpu_count, _ = _best_available_placement_on_pool(state, model, gp) or (0, prec)
-        if gpu_count <= 0:
-            continue
-        state.models.append(ModelAssignment(_next_uid(), model.key, gp.uid, gpu_count, 1, 1, prec))
-        _retune_model(state, state.models[-1])
-
-
-def _auto_assignment_growth_key(state: PlannerState, am: ModelAssignment, strategy: str) -> tuple:
-    model = MODELS[am.model_key]
-    demand = _auto_assignment_demand(state, am)
-    served_projects = [project for project in state.projects if _model_serves_project(model, project)]
-    if strategy == "coverage":
-        return (-len(served_projects), -demand, am.gpu_count, am.uid)
-    if strategy == "quality":
-        return (-effective_quality(model), -demand, am.gpu_count, am.uid)
-    if strategy == "throughput":
-        demand_per_work = demand / max(_auto_model_work_size(model), 1.0)
-        return (-demand_per_work, -demand, am.gpu_count, am.uid)
-    return (-demand, am.gpu_count, am.uid)
-
-
-def _grow_auto_assignments(state: PlannerState, strategy: str):
-    for gp in state.gpus:
-        while state.free_gpu_for_pool(gp.uid) > 0:
-            candidates = [am for am in state.models if am.gpu_uid == gp.uid]
-            candidates.sort(key=lambda am: _auto_assignment_growth_key(state, am, strategy))
-            grew = False
-            for am in candidates:
-                next_count = am.gpu_count + 1
-                if not valid_strategies(MODELS[am.model_key], next_count, gp.gpu, state.mu, state.profiled_non_kv_gb, am.prec):
-                    continue
-                am.gpu_count = next_count
-                _retune_model(state, am)
-                grew = True
-                break
-            if not grew:
-                break
-
-
-def auto_select_models(state: PlannerState, strategy: Optional[str] = None):
-    if not state.gpus:
-        raise ValueError("Add a GPU pool before auto-selecting models.")
-
-    strategy = normalize_auto_strategy(strategy or getattr(state, "auto_strategy", DEFAULT_AUTO_MODEL_STRATEGY))
-    state.auto_strategy = strategy
-    original_models = list(state.models)
-    state.models = []
-    projects = [project for project in state.projects if _active_project_demand(project) > 0]
-    if not projects:
-        projects = [
-            Project(_next_uid(), "Balanced chat", 0.30, 1.0, 1.0, min_success_rate=0.90, quality_floor=0.55),
-            Project(_next_uid(), "Coding / reasoning", 0.55, 1.0, 4.0, requires=frozenset({"tools", "ctx_128k"}), min_success_rate=0.85, quality_floor=0.70),
-            Project(_next_uid(), "Frontier reasoning", 0.90, 1.0, 20.0, requires=frozenset({"tools", "reasoning"}), min_success_rate=0.95, quality_floor=0.90),
-        ]
-
-    selected_keys: set[str] = set()
-    ordered_projects = sorted(
-        projects,
-        key=lambda project: (
-            -required_quality(project.difficulty, project.min_success_rate, quality_floor=getattr(project, "quality_floor", 0.0)),
-            -_active_project_demand(project),
-            -len(project.requires),
-        ),
-    )
-
-    for project in ordered_projects:
-        if strategy in {"coverage", "lean"} and any(
-            _model_serves_project(MODELS[am.model_key], project) for am in state.models
-        ):
-            continue
-        candidates = []
-        for model in MODELS.values():
-            if model.hidden or model.key in selected_keys or model.key in state.auto_excluded or not _model_serves_project(model, project):
-                continue
-            placement = _best_available_placement(state, model)
-            if placement is None:
-                continue
-            _, gpu_count, prec = placement
-            candidates.append((
-                _auto_candidate_key(model, projects if strategy == "coverage" else [project], gpu_count, prec, strategy),
-                model,
-                placement,
-            ))
-        if not candidates:
-            continue
-
-        _, model, placement = min(candidates)
-        gp, gpu_count, prec = placement
-        state.models.append(ModelAssignment(_next_uid(), model.key, gp.uid, gpu_count, 1, 1, prec))
-        selected_keys.add(model.key)
-        _retune_model(state, state.models[-1])
-
-    if not state.models:
-        state.models = original_models
-        raise ValueError("No eligible model fits the configured GPU pools and use-case SLOs.")
-
-    if strategy != "lean":
-        _seed_empty_auto_pools(state, projects, strategy)
-        _grow_auto_assignments(state, strategy)
-    state.auto_mode = True
-
-
 def auto_exclude_model(state: PlannerState, model_uid: int):
     am = state.find_model(model_uid)
     if am is None:
@@ -1973,6 +1168,8 @@ def remove_model(state: PlannerState, model_uid: int):
 
 
 def set_model_prec(state: PlannerState, model_uid: int, prec: str):
+    from placement import _retune_model
+
     am = state.find_model(model_uid)
     if am is None:
         return
@@ -1981,6 +1178,8 @@ def set_model_prec(state: PlannerState, model_uid: int, prec: str):
 
 
 def set_model_gpu_count(state: PlannerState, model_uid: int, count: int):
+    from placement import _retune_model
+
     am = state.find_model(model_uid)
     if am is None:
         return
@@ -2042,6 +1241,8 @@ def set_model_strat(state: PlannerState, model_uid: int, tp: int, pp: int, dp: i
 
 
 def set_model_gpu_pool(state: PlannerState, model_uid: int, gpu_uid: int):
+    from placement import _retune_model
+
     am = state.find_model(model_uid)
     if am is None:
         return
@@ -2197,15 +1398,7 @@ def delete_visitor_states(visitor_id: str) -> int:
         return len(keys)
 
 
-def get_state(session_id: str) -> PlannerState:
-    now = time.monotonic()
-    with _state_guard:
-        _prune_states_locked(now, preserve=session_id)
-        if session_id not in _states:
-            _states[session_id] = create_default_state()
-        _state_last_seen[session_id] = now
-        _prune_states_locked(now, preserve=session_id)
-        s = _states[session_id]
+def _normalize_loaded_state(s: PlannerState) -> PlannerState:
     for am in s.models:
         am.prec = normalize_precision(getattr(am, "prec", "bf16"))
     s.mode = normalize_plot_mode(s.mode)
@@ -2221,24 +1414,25 @@ def get_state(session_id: str) -> PlannerState:
     return s
 
 
+def get_state(session_id: str) -> PlannerState:
+    now = time.monotonic()
+    with _state_guard:
+        _prune_states_locked(now, preserve=session_id)
+        if session_id not in _states:
+            _states[session_id] = create_default_state()
+        _state_last_seen[session_id] = now
+        _prune_states_locked(now, preserve=session_id)
+        s = _states[session_id]
+    return _normalize_loaded_state(s)
+
+
 def get_compare_state(session_id: str) -> Optional[PlannerState]:
     with _state_guard:
         state = _compare_states.get(session_id)
         if state is not None:
             _state_last_seen[session_id] = time.monotonic()
     if state is not None:
-        for am in state.models:
-            am.prec = normalize_precision(getattr(am, "prec", "bf16"))
-        state.mode = normalize_plot_mode(state.mode)
-        state.projection_day_shape = normalize_day_shape(state.projection_day_shape)
-        state.corpo_cloud = normalize_corpo_cloud(getattr(state, "corpo_cloud", CORPO_CLOUD_DEFAULT))
-        if not hasattr(state, "auto_excluded"):
-            state.auto_excluded = []
-        if not hasattr(state, "auto_mode"):
-            state.auto_mode = False
-        state.auto_strategy = normalize_auto_strategy(getattr(state, "auto_strategy", DEFAULT_AUTO_MODEL_STRATEGY))
-        normalize_embedding_doc_distribution(state)
-        normalize_projects(state)
+        _normalize_loaded_state(state)
     return state
 
 
@@ -2255,174 +1449,6 @@ def clear_compare_state(session_id: str) -> bool:
         return _compare_states.pop(session_id, None) is not None
 
 
-def _json_compatible(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {str(key): _json_compatible(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_compatible(item) for item in value]
-    if isinstance(value, (set, frozenset)):
-        return sorted(_json_compatible(item) for item in value)
-    return value
-
-
-def serialize_scenario(state_a: PlannerState, state_b: Optional[PlannerState]) -> dict[str, Any]:
-    """Return a versioned, complete A/B planner scenario."""
-    return {
-        "type": "gpullm-scenario",
-        "version": 1,
-        "panel_a": _json_compatible(asdict(state_a)),
-        "panel_b": _json_compatible(asdict(state_b)) if state_b is not None else None,
-    }
-
-
-def _scenario_float(raw: dict, key: str, default: float, lo: float, hi: float) -> float:
-    try:
-        value = float(raw.get(key, default))
-    except (TypeError, ValueError):
-        value = default
-    if not math.isfinite(value):
-        value = default
-    return min(max(value, lo), hi)
-
-
-def _scenario_int(raw: dict, key: str, default: int, lo: int, hi: int) -> int:
-    try:
-        value = int(raw.get(key, default))
-    except (TypeError, ValueError):
-        value = default
-    return min(max(value, lo), hi)
-
-
-def _scenario_dist(raw: Any, expected: int, fallback: list[int]) -> list[int]:
-    if not isinstance(raw, list):
-        return list(fallback)
-    values = []
-    for idx in range(expected):
-        try:
-            value = int(raw[idx]) if idx < len(raw) else 0
-        except (TypeError, ValueError):
-            value = 0
-        values.append(min(max(value, 0), 1_000_000))
-    return values if any(values) else list(fallback)
-
-
-def deserialize_planner_state(payload: Any) -> PlannerState:
-    """Validate and reconstruct one panel from a scenario payload."""
-    if not isinstance(payload, dict):
-        raise ValueError("Each scenario panel must be a JSON object.")
-    state = PlannerState()
-
-    use_case_defs = payload.get("use_case_defs")
-    if isinstance(use_case_defs, list):
-        if len(use_case_defs) > 256:
-            raise ValueError("A scenario may contain at most 256 use-case definitions.")
-        replace_use_case_defs(state, {"use_cases": use_case_defs})
-
-    projects = payload.get("projects", [])
-    if not isinstance(projects, list) or len(projects) > 256:
-        raise ValueError("A scenario panel may contain at most 256 use cases.")
-    replace_project_set(state, {"use_cases": projects})
-
-    gpu_rows = payload.get("gpus", [])
-    if not isinstance(gpu_rows, list) or len(gpu_rows) > 64:
-        raise ValueError("A scenario panel may contain at most 64 GPU pools.")
-    uid_map: dict[str, int] = {}
-    state.gpus = []
-    for row in gpu_rows:
-        if not isinstance(row, dict) or row.get("gpu_type") not in GPUS:
-            raise ValueError("Scenario contains an invalid GPU pool.")
-        gpu_type = str(row["gpu_type"])
-        count = normalize_gpu_count(gpu_type, _scenario_int(row, "count", 1, 1, 100_000))
-        new_uid = _next_uid()
-        old_uid = str(row.get("uid", new_uid))
-        if old_uid in uid_map:
-            raise ValueError("Scenario GPU pool identifiers must be unique.")
-        uid_map[old_uid] = new_uid
-        country = str(row.get("country", "FR"))
-        if country not in COUNTRIES:
-            country = "FR"
-        state.gpus.append(GpuPool(
-            new_uid, gpu_type, count,
-            _scenario_float(row, "cost_per_gpu_hour", 0.0, 0.0, 1_000_000.0),
-            country,
-        ))
-
-    model_rows = payload.get("models", [])
-    if not isinstance(model_rows, list) or len(model_rows) > 512:
-        raise ValueError("A scenario panel may contain at most 512 model assignments.")
-    state.models = []
-    for row in model_rows:
-        if not isinstance(row, dict) or row.get("model_key") not in MODELS:
-            raise ValueError("Scenario contains an invalid model assignment.")
-        gpu_uid = uid_map.get(str(row.get("gpu_uid")))
-        pool = state.find_gpu(gpu_uid) if gpu_uid is not None else None
-        if pool is None:
-            raise ValueError("Every scenario model must reference a valid GPU pool.")
-        available = max(0, pool.count - state.used_gpu_for_pool(pool.uid))
-        gpu_count = min(_scenario_int(row, "gpu_count", 0, 0, pool.count), available)
-        assignment = ModelAssignment(
-            _next_uid(), str(row["model_key"]), pool.uid, gpu_count,
-            _scenario_int(row, "tp", 1, 1, max(1, gpu_count)),
-            _scenario_int(row, "dp", 1, 1, max(1, gpu_count)),
-            normalize_precision(str(row.get("prec", "bf16"))),
-            _scenario_int(row, "pp", 1, 1, max(1, gpu_count)),
-            _scenario_int(row, "prefill_tp", 1, 1, max(1, gpu_count)),
-            _scenario_int(row, "prefill_pp", 1, 1, max(1, gpu_count)),
-            _scenario_int(row, "prefill_dp", 1, 1, max(1, gpu_count)),
-        )
-        state.models.append(assignment)
-
-    for key, default, lo, hi in (
-        ("mu", 0.90, 0.01, 1.0), ("profiled_non_kv_gb", 4.0, 0.0, 4096.0),
-        ("kv_slack", 0.02, 0.0, 1.0), ("moe_imbalance", 1.15, 0.1, 10.0),
-        ("pd_interference", 0.0, 0.0, 1.0), ("prefix_hit_rate", 0.0, 0.0, 1.0),
-        ("prefill_bw_eff", 0.80, 0.01, 1.0), ("prefill_comp_eff", 0.75, 0.01, 1.0),
-        ("prefill_overhead", 0.08, 0.0, 1.0), ("prefill_paged_oh", 0.10, 0.0, 1.0),
-        ("prefill_ar_overlap", 0.30, 0.0, 1.0), ("decode_bw_eff", 0.80, 0.01, 1.0),
-        ("decode_comp_eff", 0.75, 0.01, 1.0), ("decode_overhead", 0.08, 0.0, 1.0),
-        ("decode_paged_oh", 0.10, 0.0, 1.0), ("decode_ar_overlap", 0.30, 0.0, 1.0),
-        ("projection_demand_level", 0.65, 0.05, 1.20),
-        ("projection_night_discount", 0.30, 0.0, 0.80),
-        ("projection_batch_eligible", 0.35, 0.0, 1.0),
-        ("projection_elasticity", 2.0, 0.0, 4.0),
-    ):
-        setattr(state, key, _scenario_float(payload, key, default, lo, hi))
-    state.decode_sched_budget = _scenario_int(payload, "decode_sched_budget", 16384, 1, 10_000_000)
-    state.task_il = _scenario_int(payload, "task_il", 2048, 1, 10_000_000)
-    state.task_ol = _scenario_int(payload, "task_ol", 32, 0, 10_000_000)
-    state.in_dist = _scenario_dist(payload.get("in_dist"), len(INPUT_BUCKETS), list(DIST_PRESETS["Chat"]["in"]))
-    state.out_dist = _scenario_dist(payload.get("out_dist"), len(OUTPUT_BUCKETS), list(DIST_PRESETS["Chat"]["out"]))
-    state.embedding_doc_dist = _scenario_dist(
-        payload.get("embedding_doc_dist"), len(EMBEDDING_DOC_BUCKETS), list(EMBEDDING_DOC_PRESETS["Doc"])
-    )
-    state.in_pre = str(payload.get("in_pre", "Chat")) if payload.get("in_pre") in DIST_PRESETS else ""
-    state.out_pre = str(payload.get("out_pre", "Chat")) if payload.get("out_pre") in DIST_PRESETS else ""
-    state.embedding_doc_pre = (
-        str(payload.get("embedding_doc_pre")) if payload.get("embedding_doc_pre") in EMBEDDING_DOC_PRESETS else ""
-    )
-    state.mode = normalize_plot_mode(payload.get("mode"))
-    state.projection_day_shape = normalize_day_shape(payload.get("projection_day_shape"))
-    state.corpo_cloud = normalize_corpo_cloud(payload.get("corpo_cloud"))
-    state.projection_night_batching = bool(payload.get("projection_night_batching", False))
-    state.auto_mode = bool(payload.get("auto_mode", False))
-    state.auto_strategy = normalize_auto_strategy(payload.get("auto_strategy"))
-    excluded = payload.get("auto_excluded", [])
-    state.auto_excluded = [str(key) for key in excluded if key in MODELS] if isinstance(excluded, list) else []
-    retune_models(state, preserve_existing=True)
-    return state
-
-
-def deserialize_scenario(payload: Any) -> tuple[PlannerState, Optional[PlannerState]]:
-    if not isinstance(payload, dict) or payload.get("type") != "gpullm-scenario":
-        raise ValueError("Scenario JSON must have type 'gpullm-scenario'.")
-    if payload.get("version") != 1:
-        raise ValueError("Unsupported scenario version.")
-    state_a = deserialize_planner_state(payload.get("panel_a"))
-    panel_b = payload.get("panel_b")
-    state_b = deserialize_planner_state(panel_b) if panel_b is not None else None
-    return state_a, state_b
-
-
 def replace_scope_states(session_id: str, state_a: PlannerState, state_b: Optional[PlannerState]) -> None:
     with _state_guard:
         _states[session_id] = state_a
@@ -2432,289 +1458,3 @@ def replace_scope_states(session_id: str, state_a: PlannerState, state_b: Option
             _compare_states[session_id] = state_b
         _state_last_seen[session_id] = time.monotonic()
         _prune_states_locked(_state_last_seen[session_id], preserve=session_id)
-
-
-def _comm_summary(tp: int, pp: int) -> str:
-    terms = []
-    if tp > 1:
-        terms.append("dense TP reductions")
-    if pp > 1:
-        terms.append("PP stage boundaries")
-    return "Comm model: " + " + ".join(terms) if terms else ""
-
-
-def _comm_alerts(model: Model, tp: int, pp: int, dp: int, gpu: Optional[GPU], avg_seq: float, eff: EfficiencyParams) -> list[str]:
-    if gpu is None:
-        return []
-
-    batch_tokens = max(1, min(32, math.ceil(32 / max(dp, 1))))
-    comm = communication_breakdown(model, tp, pp, batch_tokens, avg_seq, gpu, eff)
-    alerts: list[str] = []
-    if comm.tp_cross_node:
-        alerts.append(
-            f"{strategy_label(tp, pp, dp)} uses cross-node TP (node size {gpu.node_size}). Prefer TP within a node and scale with PP/DP."
-        )
-    if comm.ep_advisory:
-        alerts.append("MoE multi-node expert traffic is not modeled, so throughput may be optimistic.")
-    if comm.dcp_advisory:
-        alerts.append("Long-context KV sharding can shift real capacity versus this simplified estimate.")
-    return alerts
-
-
-def _precision_alerts(prec: str, gpu: Optional[GPU]) -> list[str]:
-    if gpu is None:
-        return []
-    if prec == "nvfp4" and not gpu_supports_nvfp4(gpu):
-        return [f"NVFP4 is not native on {gpu.name}; compute is discounted for dequant/packing fallback."]
-    if prec == "mxfp4" and not gpu_supports_mxfp4(gpu):
-        return [f"MXFP4 is not native on {gpu.name}; compute is discounted for dequant/packing fallback."]
-    return []
-
-
-def _quantization_profile_alerts(model: Model, prec: str) -> list[str]:
-    profile = model.quantization_profile(prec)
-    if profile is None:
-        return []
-    if profile.source_kind == "family":
-        return [f"{profile.label} uses a family proxy from {profile.source_repo}; exact artifact tensor headers are not pinned yet."]
-    return []
-
-
-def _build_model_info(state: PlannerState, am: ModelAssignment, gpu_pool: Optional[GpuPool], prefill_mem, decode_mem) -> dict:
-    model = MODELS[am.model_key]
-    gpu = gpu_pool.gpu if gpu_pool else None
-    quant_profiles_by_precision = {
-        prec: profile
-        for prec in PRECISIONS
-        if (profile := model.quantization_profile(prec)) is not None
-    }
-    quant_profile = model.quantization_profile(am.prec)
-
-    strats: list[tuple[int, int, int]] = []
-    recommended_label = ""
-    alt_prec = None
-    alt_fits_now = False
-    selected_min_gpu_count = None
-    selected_pool_min_gpu_count = None
-    alt_min_gpu_count = None
-    alt_pool_min_gpu_count = None
-    if gpu and am.gpu_count > 0:
-        strats = valid_strategies(model, am.gpu_count, gpu, state.mu, state.profiled_non_kv_gb, am.prec)
-        recommended_label = strategy_label(*_preferred_strategy(state, am, gpu, "decode"))
-
-    avg_in = avg_dist(state.in_dist, INPUT_BUCKETS)
-    avg_out = avg_dist(state.out_dist, OUTPUT_BUCKETS)
-    avg_seq = avg_in + avg_out / 2.0
-    realtime_profile = getattr(model, "realtime_profile", None)
-    embedding_profile = getattr(model, "embedding_profile", None)
-    embedding_stats = None
-    if realtime_profile is not None:
-        avg_seq = float(realtime_profile.state_tokens)
-    if embedding_profile is not None:
-        embedding_stats = embedding_doc_stats(model, state.embedding_doc_dist, EMBEDDING_DOC_BUCKETS, am.prec)
-        avg_seq = float(embedding_stats.mean_seq_len)
-
-    decode_max_slots = 0
-    if decode_mem and avg_seq > 0:
-        decode_kv = per_replica_kv_cache_bytes(model, avg_seq, am.prec, am.pp, am.tp)
-        decode_per_replica = int(decode_mem.kv_budget / decode_kv) if decode_kv > 0 else 0
-        if state.decode_efficiency.sched_budget > 0:
-            decode_per_replica = min(decode_per_replica, state.decode_efficiency.sched_budget)
-        decode_max_slots = decode_per_replica * am.dp
-
-    prefill_probe_len = max(1, effective_prefill_length(max(state.task_il, avg_in), state.prefix_hit_rate))
-    prefill_max_batch = 0
-    if prefill_mem and prefill_probe_len > 0:
-        prefill_kv = per_replica_kv_cache_bytes(model, prefill_probe_len, am.prec, am.prefill_pp, am.prefill_tp)
-        prefill_max_batch = (int(prefill_mem.kv_budget / prefill_kv) if prefill_kv > 0 else 0) * am.prefill_dp
-
-    others_used = sum(x.gpu_count for x in state.models if x.uid != am.uid and x.gpu_uid == am.gpu_uid)
-    max_avail = gpu_pool.count - others_used if gpu_pool else 0
-    if gpu:
-        needs_now = {
-            prec: _min_gpu_count_for_pool(model, gpu, state.mu, state.profiled_non_kv_gb, prec, max_avail)
-            for prec in PRECISIONS
-        }
-        needs_pool = {
-            prec: _min_gpu_count_for_pool(model, gpu, state.mu, state.profiled_non_kv_gb, prec, gpu_pool.count)
-            for prec in PRECISIONS
-        }
-        selected_need = needs_now[am.prec]
-        selected_pool_need = needs_pool[am.prec]
-        fit_now = [
-            prec for prec in PRECISIONS
-            if prec != am.prec and am.gpu_count > 0
-            and valid_strategies(model, am.gpu_count, gpu, state.mu, state.profiled_non_kv_gb, prec)
-        ]
-        if fit_now:
-            alt_prec = fit_now[0]
-            alt_fits_now = True
-            alt_need = needs_now[alt_prec]
-            alt_pool_need = needs_pool[alt_prec]
-        else:
-            alt_prec, alt_pool_need = _best_precision_need({prec: need for prec, need in needs_pool.items() if prec != am.prec})
-            alt_need = needs_now.get(alt_prec, math.inf) if alt_prec else math.inf
-        if not math.isinf(selected_need):
-            selected_min_gpu_count = int(selected_need)
-        if not math.isinf(selected_pool_need):
-            selected_pool_min_gpu_count = int(selected_pool_need)
-        if alt_prec and not math.isinf(alt_need):
-            alt_min_gpu_count = int(alt_need)
-        if alt_prec and not math.isinf(alt_pool_need):
-            alt_pool_min_gpu_count = int(alt_pool_need)
-    topology_label = strategy_label(am.tp, am.pp, am.dp)
-    mem = decode_mem
-    prefill_kv_gb = f"{prefill_mem.kv_budget / 1e9:.0f}" if prefill_mem else "0"
-    decode_kv_gb = f"{decode_mem.kv_budget / 1e9:.0f}" if decode_mem else "0"
-    realtime = None
-    if realtime_profile is not None and gpu and am.gpu_count > 0 and decode_mem is not None:
-        max_realtime_users = compute_realtime_max_users(
-            model,
-            (am.tp, am.pp, am.dp),
-            gpu,
-            state.mu,
-            state.profiled_non_kv_gb,
-            am.prec,
-            state.decode_efficiency,
-        )
-        sample_users = max(max_realtime_users, 1)
-        sample = compute_realtime_capacity(
-            model,
-            (am.tp, am.pp, am.dp),
-            sample_users,
-            gpu,
-            state.mu,
-            state.profiled_non_kv_gb,
-            am.prec,
-            state.decode_efficiency,
-        )
-        realtime = {
-            "profile": realtime_profile,
-            "max_users": max_realtime_users,
-            "sample": sample,
-        }
-
-    embedding = None
-    if embedding_profile is not None and gpu and am.gpu_count > 0 and prefill_mem is not None:
-        if embedding_stats is None:
-            embedding_stats = embedding_doc_stats(model, state.embedding_doc_dist, EMBEDDING_DOC_BUCKETS, am.prec)
-        best_embedding = None
-        for bs in _probe_batch_sizes(max(am.prefill_dp, 1)):
-            sample = compute_embedding_distribution(
-                model,
-                (am.prefill_tp, am.prefill_pp, am.prefill_dp),
-                bs,
-                state.embedding_doc_dist,
-                EMBEDDING_DOC_BUCKETS,
-                gpu,
-                state.mu,
-                state.profiled_non_kv_gb,
-                am.prec,
-                state.prefill_efficiency,
-            )
-            if sample is None:
-                continue
-            if best_embedding is None or sample.rps > best_embedding.rps:
-                best_embedding = sample
-        doc_distribution = []
-        weights = []
-        total = sum(max(int(v or 0), 0) for v in state.embedding_doc_dist) or 1
-        for i, bucket in enumerate(EMBEDDING_DOC_BUCKETS):
-            raw = state.embedding_doc_dist[i] if i < len(state.embedding_doc_dist) else 0
-            share = max(int(raw or 0), 0) / total
-            weights.append(share)
-            if share <= 0:
-                continue
-            clipped = embedding_sequence_length(model, bucket.length)
-            doc_distribution.append({
-                "label": bucket.label,
-                "length": bucket.length,
-                "clipped_length": clipped,
-                "share": share,
-                "color": bucket.color,
-            })
-        embedding = {
-            "profile": embedding_profile,
-            "seq_len": round(embedding_stats.mean_seq_len),
-            "p50_seq_len": embedding_stats.p50_seq_len,
-            "p90_seq_len": embedding_stats.p90_seq_len,
-            "p99_seq_len": embedding_stats.p99_seq_len,
-            "vectors_per_input": embedding_stats.mean_vectors_per_input,
-            "output_kb_per_input": embedding_stats.mean_output_bytes_per_input / 1e3,
-            "doc_distribution": doc_distribution,
-            "doc_distribution_weights": weights,
-            "sample": best_embedding,
-        }
-
-    return {
-        "am": am,
-        "model": model,
-        "gpu_pool": gpu_pool,
-        "gpu": gpu,
-        "mem": mem,
-        "prefill_mem": prefill_mem,
-        "decode_mem": decode_mem,
-        "strats": strats,
-        "kv_gb": f"{mem.kv_budget / 1e9:.0f}" if mem else "0",
-        "prefill_kv_gb": prefill_kv_gb,
-        "decode_kv_gb": decode_kv_gb,
-        "max_slots": decode_max_slots,
-        "decode_max_slots": decode_max_slots,
-        "requested_gb": f"{mem.requested / 1e9:.0f}" if mem else "0",
-        "profiled_non_kv_total_gb": f"{mem.profiled_non_kv / 1e9:.0f}" if mem else "0",
-        "kv_reserved_gb": f"{mem.kv_reserved / 1e9:.0f}" if mem else "0",
-        "prefill_max_batch": prefill_max_batch,
-        "prefill_probe_len": prefill_probe_len,
-        "max_avail": max_avail,
-        "gpu_count_options": _gpu_count_options(max_avail, am.gpu_count, gpu),
-        "weight_bpp": model.weight_bytes_per_param(am.prec),
-        "quant_profiles_by_precision": quant_profiles_by_precision,
-        "quant_profile": quant_profile,
-        "realtime": realtime,
-        "embedding": embedding,
-        "mixed_weight_precision": model.uses_mixed_weight_precision(am.prec),
-        "fits": mem is not None,
-        "decode_fits": decode_mem is not None,
-        "prefill_fits": prefill_mem is not None,
-        "runnable": bool(strats),
-        "recommended_label": recommended_label,
-        "topology_label": topology_label,
-        "selected_min_gpu_count": selected_min_gpu_count,
-        "selected_pool_min_gpu_count": selected_pool_min_gpu_count,
-        "alt_prec": alt_prec,
-        "alt_fits_now": alt_fits_now,
-        "alt_min_gpu_count": alt_min_gpu_count,
-        "alt_pool_min_gpu_count": alt_pool_min_gpu_count,
-        "comm_summary": _comm_summary(am.tp, am.pp),
-        "precision_alerts": _precision_alerts(am.prec, gpu) + _quantization_profile_alerts(model, am.prec),
-        "alerts": _comm_alerts(model, am.tp, am.pp, am.dp, gpu, avg_seq, state.decode_efficiency),
-        "prefill_comm_summary": _comm_summary(am.prefill_tp, am.prefill_pp),
-        "decode_comm_summary": _comm_summary(am.tp, am.pp),
-        "prefill_alerts": _comm_alerts(model, am.prefill_tp, am.prefill_pp, am.prefill_dp, gpu, prefill_probe_len, state.prefill_efficiency),
-        "decode_alerts": _comm_alerts(model, am.tp, am.pp, am.dp, gpu, avg_seq, state.decode_efficiency),
-        "decode_exceeds_node": bool(gpu and am.tp > gpu.node_size),
-        "prefill_exceeds_node": bool(gpu and am.prefill_tp > gpu.node_size),
-    }
-
-
-def get_model_info(state: PlannerState, am: ModelAssignment) -> dict:
-    gpu_pool = state.find_gpu(am.gpu_uid)
-    gpu = gpu_pool.gpu if gpu_pool else None
-    prefill_mem = None
-    decode_mem = None
-    if gpu and am.gpu_count > 0:
-        prefill_mem, decode_mem = _assignment_memories(state, am, gpu)
-    return _build_model_info(state, am, gpu_pool, prefill_mem, decode_mem)
-
-
-def get_model_infos(state: PlannerState) -> list[dict]:
-    infos = []
-    for am in state.models:
-        gpu_pool = state.find_gpu(am.gpu_uid)
-        gpu = gpu_pool.gpu if gpu_pool else None
-        prefill_mem = None
-        decode_mem = None
-        if gpu and am.gpu_count > 0:
-            prefill_mem, decode_mem = _assignment_memories(state, am, gpu)
-        infos.append(_build_model_info(state, am, gpu_pool, prefill_mem, decode_mem))
-    return infos

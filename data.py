@@ -2164,6 +2164,8 @@ MODELS: dict[str, Model] = {
         64,
         bf16_weight_bytes_per_param=MIXED_NATIVE_BF16_WEIGHT_BPP,
         fp8_weight_bytes_per_param=MIXED_NATIVE_FP8_WEIGHT_BPP,
+        # AA K2.5 page: 256k context window, text/image/video input.
+        max_context_tokens=262144,
     ),
     # K3 is live in Kimi products/API; full weights and the technical report are due
     # by 2026-07-27. Moonshot now publishes Stable LatentMoE routing (16/896 experts),
@@ -3125,7 +3127,7 @@ def get_quantization_profile(model_key: str, prec: str) -> QuantizationProfile |
 # (tools + ctx_128k). Kept conservative — annotate models with well-documented support.
 _VISION_MODELS = (
     "ge2", "ge4", "g12", "g26", "g31",
-    "kimi-k3-preview", "inkling", "inkling-small-preview",
+    "k25", "kimi-k3-preview", "inkling", "inkling-small-preview",
     "command-a-plus-05-2026",
     "ms24", "ms32", "mistral-medium-3.5-preview",
     "minimax25", "minimax27", "nem3no", "mimo-v2.5",
@@ -3197,6 +3199,7 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "glm47f": (30.0, 64.0),
     "glm5": (50.0, 110.0),
     "glm51": (51.0, 110.0),
+    "k25": (35.0, 87.0),
     "kimi-k3-preview": (51.0, 110.0),  # Frontier-quality proxy; no AA row or public K3 benchmarks at API launch.
     "kimi-linear-48b": (37.0, 100.0),  # Proxy from Qwen 3.5 35B-A3B until AA publishes Kimi Linear.
     "inkling": (45.0, 70.0),           # Official broad benchmark suite; AA-scale/verbosity proxy pending a direct row.
@@ -3210,6 +3213,7 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "nem3s": (36.0, 110.0),
     "nem3n": (24.0, 140.0),
     "nem3no": (26.0, 130.0),  # Omni preview proxy from Nano reasoning until AA publishes a dedicated page.
+    "ds3": (14.0, 3.3),
     "deepseek-v4-pro": (52.0, 190.0),
     "deepseek-v4-flash": (47.0, 240.0),
     "mi7": (7.0, 2.5),
@@ -3282,6 +3286,23 @@ AA_MODEL_QUALITY_CONFIDENCE: dict[str, float] = {
 for _k, _confidence in AA_MODEL_QUALITY_CONFIDENCE.items():
     if _k in MODELS:
         MODELS[_k].quality_confidence = _confidence
+
+# Text models whose quality anchor is intentionally not AA-sourced. Membership must be
+# justified inline; tests assert every other text model carries an AA_MODEL_METRICS row so
+# a new catalog entry cannot silently inherit the quality=0.5 / full-confidence defaults.
+AA_QUALITY_PLACEHOLDER: frozenset[str] = frozenset()
+
+
+def text_models_missing_quality_anchors() -> list[str]:
+    """Text models lacking both an AA_MODEL_METRICS row and a placeholder justification."""
+    return sorted(
+        key
+        for key, model in MODELS.items()
+        if model.embedding_profile is None
+        and model.realtime_profile is None
+        and key not in AA_MODEL_METRICS
+        and key not in AA_QUALITY_PLACEHOLDER
+    )
 
 
 @dataclass
@@ -3531,6 +3552,11 @@ for _k, (_score, _verbosity_m) in AA_CLOUD_METRICS.items():
     if _k in CLOUD_MODELS:
         CLOUD_MODELS[_k]["quality"] = aa_intelligence_to_quality(_score)
         CLOUD_MODELS[_k]["token_efficiency"] = aa_output_tokens_to_efficiency(_verbosity_m)
+
+
+def cloud_models_missing_quality_anchors() -> list[str]:
+    """Cloud/API models lacking an AA_CLOUD_METRICS row (same silent-0.5 failure mode)."""
+    return sorted(key for key in CLOUD_MODELS if key not in AA_CLOUD_METRICS)
 
 # Vertex availability matrix: GCP regions where each cloud-model family is
 # served today. Models not on Vertex Europe (e.g. OpenAI via Azure, DeepSeek)

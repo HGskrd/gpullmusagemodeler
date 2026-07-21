@@ -1464,7 +1464,7 @@ def get_decode_bs(states: Optional[list] = None) -> list[int]:
     if not states:
         return list(BATCH_SIZES)
 
-    from state import get_deployed
+    from placement import get_deployed
 
     capacities = []
     for state in states:
@@ -1497,7 +1497,7 @@ def get_realtime_bs(states: Optional[list] = None) -> list[int]:
     if not states:
         return list(REALTIME_USER_SWEEP)
 
-    from state import get_deployed
+    from placement import get_deployed
 
     capacities = []
     for state in states:
@@ -1690,7 +1690,7 @@ def _sample_user_exp_curve(points: list[dict], target_rps: float) -> Optional[di
 
 
 def chart_decode(state, batch_sizes: Optional[list[int]] = None, panel_suffix: str = "") -> list[dict]:
-    from state import get_deployed
+    from placement import get_deployed
 
     datasets = []
     eff = state.decode_efficiency
@@ -1737,7 +1737,7 @@ def chart_decode(state, batch_sizes: Optional[list[int]] = None, panel_suffix: s
 
 
 def chart_pareto(state, panel_suffix: str = "") -> list[dict]:
-    from state import get_deployed
+    from placement import get_deployed
 
     datasets = []
     eff = state.decode_efficiency
@@ -1784,7 +1784,7 @@ def chart_pareto(state, panel_suffix: str = "") -> list[dict]:
 
 
 def chart_user_pareto(state, batch_sizes: Optional[list[int]] = None, panel_suffix: str = "") -> list[dict]:
-    from state import get_deployed
+    from placement import get_deployed
 
     datasets = []
     eff = state.decode_efficiency
@@ -1838,7 +1838,7 @@ def chart_user_pareto(state, batch_sizes: Optional[list[int]] = None, panel_suff
 
 
 def chart_aggregate(state, batch_sizes: Optional[list[int]] = None, panel_suffix: str = "") -> list[dict]:
-    from state import get_deployed
+    from placement import get_deployed
 
     datasets = []
     eff = state.decode_efficiency
