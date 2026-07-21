@@ -1,6 +1,6 @@
 import unittest
 
-from data import GPU_CARDS, GPUS, MODELS
+from data import GPU_CARDS, GPUS, MODELS, PREVIEW_ASSUMPTIONS
 from state import (
     PlannerState,
     add_gpu,
@@ -13,6 +13,55 @@ from viewmodels import get_model_info
 
 
 class GPUCatalogTests(unittest.TestCase):
+    def test_vera_rubin_preview_profile_uses_preliminary_vendor_specs(self):
+        gpu = GPUS["RUBIN_NVL72"]
+        picker_keys = {
+            option.gpu_key
+            for card in GPU_CARDS
+            for option in card.planner_options
+        }
+
+        self.assertEqual(gpu.name, "Vera Rubin NVL72 Preview 288GB/GPU")
+        self.assertEqual(gpu.mem, 288e9)
+        self.assertEqual(gpu.bw, 22e12)
+        self.assertEqual(gpu.bf16, 4e15)
+        self.assertEqual(gpu.fp8, 17.5e15)
+        self.assertEqual(gpu.fp4, 50e15)
+        self.assertEqual(gpu.scale_up_p2p_bw_bidir, 3.6e12)
+        self.assertEqual(gpu.node_size, 72)
+        self.assertEqual(gpu.min_count, 72)
+        self.assertEqual(gpu.count_multiple, 72)
+        self.assertEqual(gpu.tdp_watts, 0.0)
+        self.assertIn("RUBIN_NVL72", picker_keys)
+        self.assertIn("gpu:RUBIN_NVL72", PREVIEW_ASSUMPTIONS)
+        self.assertIn("preliminary", PREVIEW_ASSUMPTIONS["gpu:RUBIN_NVL72"]["assumptions"][0])
+
+    def test_mi400_compatibility_profile_tracks_mi450x_deployment_status(self):
+        gpu = GPUS["MI400"]
+        card = next(
+            card
+            for card in GPU_CARDS
+            if any(option.gpu_key == "MI400" for option in card.planner_options)
+        )
+        assumptions = PREVIEW_ASSUMPTIONS["gpu:MI400"]
+
+        self.assertIn("MI450X", gpu.name)
+        self.assertEqual(gpu.mem, 432e9)
+        self.assertEqual(gpu.bw, 19.6e12)
+        self.assertIn("MI450X/MI455X", card.use_case)
+        self.assertIn("2H 2026", assumptions["status"])
+        self.assertIn("planner projections", assumptions["assumptions"][1])
+
+    def test_preview_gpu_picker_entries_have_assumption_records(self):
+        preview_keys = {
+            option.gpu_key
+            for card in GPU_CARDS
+            for option in card.planner_options
+            if "preview" in option.label.lower()
+        }
+
+        self.assertTrue({f"gpu:{key}" for key in preview_keys} <= set(PREVIEW_ASSUMPTIONS))
+
     def test_nvidia_a10_catalog_entry_matches_public_specs(self):
         gpu = GPUS["A10"]
 

@@ -151,7 +151,7 @@
             {% if row.cloud_blocked %}
               Cloud ref: <strong class="bad">blocked</strong>
             {% else %}
-              Cloud ref ({{ row.cloud_label }}): <strong>${{ "%.2f"|format(row.cloud_pm) }}/M</strong>{% if row.cloud_pm > proj.wtp_per_m %}<span class="bad"> · above WTP</span>{% endif %}
+              Cloud ref ({{ row.cloud_label }}): <strong>${{ "%.2f"|format(row.cloud_pm) }}/M</strong>{% if row.cloud_price_source == "override" %}<span class="good"> · negotiated</span>{% endif %}{% if row.cloud_pm > proj.wtp_per_m %}<span class="bad"> · above WTP</span>{% endif %}
               {% if row.cloud_grid_gco2_per_kwh > 0 %}
               <span class="T tip" style="margin-left:4px;" title="Averaged across Vertex zones this model is served from: {{ row.cloud_regions|map('string')|join(', ') }}">· grid {{ "%.0f"|format(row.cloud_grid_gco2_per_kwh) }} gCO₂/kWh</span>
               {% endif %}
@@ -289,10 +289,35 @@
   </div>
   {% endif %}
 
-  {# ── Advanced: day shape + night batching (collapsed by default) ─────────── #}
+  {# ── Advanced: gateway + day shape + night batching ─────────────────────── #}
   <details class="card adv-card">
-    <summary><span class="T" style="font-weight:600;">Advanced · day shape, night batching, workload</span></summary>
+    <summary><span class="T" style="font-weight:600;">Advanced · cloud gateway, day shape, night batching, workload</span></summary>
     <div class="lever-grid" style="margin-top:8px;">
+      <div class="lv">
+        <label class="T" for="corpo-cloud-{{ panel }}">Corporate cloud gateway</label>
+        <select id="corpo-cloud-{{ panel }}" name="value"
+                hx-post="/projection/choice" hx-target="#main-content" hx-trigger="change"
+                hx-vals='{"panel":"{{ panel }}","key":"corpo_cloud"}'>
+          {% for key, preset in CORPO_CLOUD_PRESETS.items() %}
+          <option value="{{ key }}" {{ "selected" if state.corpo_cloud == key else "" }}>{{ preset.label }}</option>
+          {% endfor %}
+        </select>
+        {% if CLOUD_POLICY.active %}<span class="T">Policy filtered · {{ CLOUD_POLICY.allowed_count }}/{{ CLOUD_POLICY.total_count }} models allowed</span>{% endif %}
+        {% set gateway = CORPO_CLOUD_PRESETS.get(state.corpo_cloud) %}
+        {% if gateway %}
+        <div style="display:flex;flex-wrap:wrap;gap:3px;margin-top:4px;">
+          {% for model_key in gateway.models %}
+            {% if model_key in CLOUD_MODELS %}
+              {% set cloud = CLOUD_MODELS[model_key] %}
+              <span class="tag {{ 'warn' if cloud.price_source == 'override' else 'muted' }}" title="${{ cloud.in_per_m }}/M input · ${{ cloud.out_per_m }}/M output{{ ' · negotiated override' if cloud.price_source == 'override' else '' }}">
+                {{ cloud.label }}{% if cloud.price_source == 'override' %} · negotiated{% endif %}
+              </span>
+            {% endif %}
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+
       <div class="lv">
         <label class="T" for="projection-day-shape-{{ panel }}">Day shape</label>
         <select id="projection-day-shape-{{ panel }}" name="value"

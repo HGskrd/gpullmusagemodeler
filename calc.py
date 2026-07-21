@@ -12,7 +12,6 @@ from data import (
     GPU,
     Model,
     Bucket,
-    CLOUD_MODELS,
     CORPO_CLOUD_DEFAULT,
     DIST_PRESETS,
     EMBEDDING_DOC_BUCKETS,
@@ -34,11 +33,11 @@ from data import (
     PUBLISHED_EMBEDDING_QUALITY,
     normalize_precision,
     carbon_intensity_avg,
-    corpo_cloud_models,
     effective_quality,
     model_success_rate,
     success_rate,
 )
+import cloud_policy
 
 # Wall-clock GPU draw as a fraction of published board TDP during vLLM inference.
 # vLLM-at-saturation is typically compute- or bandwidth-bound; measured draw on
@@ -212,16 +211,12 @@ def strategy_label(tp: int, pp: int, dp: int) -> str:
 
 
 def kv_bytes_per_token(m: Model, prec: str) -> float:
-    bpe = m.kv_cache_bytes_per_elem(prec)
-    full_layers, local_layers = _split_attention_layers(m.kv_layer_count, m.local_attention_layers)
-    if m.is_mla:
-        # MLA caches one joint compressed KV latent plus the decoupled RoPE key.
-        # It does not retain separate compressed K and V vectors.
-        return (full_layers + local_layers) * (m.mla_kv_dim + m.mla_rope_dim) * bpe
-    return (
-        (full_layers * _kv_elems_per_layer(m, global_layer=True))
-        + (local_layers * _kv_elems_per_layer(m, global_layer=False))
-    ) * bpe
+    """Initial KV allocation slope for one token, before any sliding-window cap.
+
+    Keep this readout on the same canonical path as sequence-level budgeting so MLA's
+    joint latent representation and local/global layer splits cannot drift apart.
+    """
+    return kv_cache_bytes_for_sequence(m, 1.0, prec)
 
 
 def _split_attention_layers(total_layers: int, local_layers: int) -> tuple[int, int]:
@@ -272,6 +267,40 @@ def linear_attention_state_bytes(m: Model, prec: str) -> float:
     return layers * (recurrent_elems + conv_elems) * bpe
 
 
+def _head_aligned_tp_shards(heads: int, tp: int) -> int:
+    """Conservative number of head-aligned state shards represented by the schema."""
+    return max(math.gcd(max(int(heads), 1), max(int(tp), 1)), 1)
+
+
+def per_tp_linear_attention_state_bytes(m: Model, prec: str, tp: int) -> float:
+    """Per-rank recurrent/conv state using the model's explicit linear-head schema.
+
+    Linear recurrent state is partitioned over its query/value heads, while the
+    convolution K/V state is partitioned over its (possibly different) K-head axis.
+    Using head-aligned shard counts avoids over-sharding state when TP exceeds or is
+    not divisible into either schema dimension.
+    """
+    layers = m.linear_attention_layer_count
+    if layers <= 0:
+        return 0.0
+
+    bpe = m.kv_cache_bytes_per_elem(prec)
+    heads = m.linear_attention_head_count
+    head_dim = m.linear_attention_head_size
+    k_heads = m.linear_attention_k_head_count
+    k_head_dim = m.linear_attention_k_head_size
+    conv_len = m.linear_attention_kernel_size - 1
+    head_shards = _head_aligned_tp_shards(heads, tp)
+    k_head_shards = _head_aligned_tp_shards(k_heads, tp)
+
+    recurrent_elems = heads * head_dim * head_dim / head_shards
+    conv_elems = conv_len * (
+        (heads * head_dim / head_shards)
+        + (2 * k_heads * k_head_dim / k_head_shards)
+    )
+    return layers * (recurrent_elems + conv_elems) * bpe
+
+
 def kv_cache_bytes_for_sequence(m: Model, seq_len: float, prec: str) -> float:
     seq = max(float(seq_len), 0.0)
     full_layers, local_layers = _split_attention_layers(m.kv_layer_count, m.local_attention_layers)
@@ -285,7 +314,7 @@ def per_replica_kv_cache_bytes(m: Model, seq_len: float, prec: str, pp: int, tp:
     pp = max(pp, 1)
     pp_fraction = _pp_peak_fraction(m, pp)
     token_cache = kv_cache_bytes_for_sequence(m, seq_len, prec) * pp_fraction / kv_shards(m, tp)
-    linear_state = linear_attention_state_bytes(m, prec) * pp_fraction / max(tp, 1)
+    linear_state = per_tp_linear_attention_state_bytes(m, prec, tp) * pp_fraction
     return token_cache + linear_state
 
 
@@ -640,8 +669,11 @@ def _dense_tp_oh(tp: int, pp: int, batch_tokens: int, m: Model, g: GPU, bw_eff: 
     collective_bw = _eff_collective_bw(tp, g) * bw_eff
     msg = batch_tokens * m.hidden_size * 2
     stage_layers = m.layers / pp
-    comm_time = stage_layers * (msg * 2 * (tp - 1) / (tp * collective_bw))
-    latency = stage_layers * 3e-6
+    # A standard tensor-parallel transformer block has one row-parallel reduction
+    # after attention and one after the MLP. The ring factor below is per collective.
+    collectives_per_layer = 2
+    comm_time = stage_layers * collectives_per_layer * (msg * 2 * (tp - 1) / (tp * collective_bw))
+    latency = stage_layers * collectives_per_layer * 3e-6
     return (comm_time + latency) * (1 - overlap)
 
 
@@ -839,7 +871,9 @@ def compute_prefill(
     if mem is None:
         return None
     if seq_len <= 0:
-        return PrefillResult(tps=0, service_time=0.0, rps=math.inf, max_batch=UNBOUNDED_BATCH)
+        # A 100% prefix hit removes prefill work. Use the planner's finite sentinel
+        # instead of infinity so charts/JSON remain numerically well-defined.
+        return PrefillResult(tps=0, service_time=0.0, rps=float(UNBOUNDED_BATCH), max_batch=UNBOUNDED_BATCH)
 
     pr = math.ceil(bs / dp)
     seq_kv = per_replica_kv_cache_bytes(m, seq_len, prec, pp, tp)
@@ -986,12 +1020,13 @@ def compute_embedding(
     if pr > max_per_replica:
         return None
 
-    ffn = 2 * m.active_params * pr * seq / max(pp, 1)
+    pp_fraction = _pp_peak_fraction(m, pp)
+    ffn = 2 * m.active_params * pr * seq * pp_fraction
     att = _prefill_attention_work(m, pr, seq, pp)
     ct = (ffn + att) / (model_gpu_flops(g, m, prec) * max(tp, 1) * eff.comp_eff)
 
     aw = _active_weight_bytes(m, prec)
-    mt = (aw / (max(tp, 1) * max(pp, 1))) / (g.effective_bw * eff.bw_eff)
+    mt = (aw * pp_fraction / max(tp, 1)) / (g.effective_bw * eff.bw_eff)
     output_time = (embedding_output_bytes_per_input(m, seq) * pr) / (g.effective_bw * eff.bw_eff)
     comm = communication_breakdown(m, tp, pp, pr * seq, seq, g, eff)
 
@@ -1048,7 +1083,8 @@ def compute_embedding_distribution(
     if pr > max_per_replica:
         return None
 
-    ffn = 2 * m.active_params * pr * stats.mean_seq_len / max(pp, 1)
+    pp_fraction = _pp_peak_fraction(m, pp)
+    ffn = 2 * m.active_params * pr * stats.mean_seq_len * pp_fraction
     att = sum(
         share * _prefill_attention_work(m, pr, seq, pp)
         for share, seq, _bucket in _embedding_weighted_sequences(m, doc_dist, buckets)
@@ -1056,7 +1092,7 @@ def compute_embedding_distribution(
     ct = (ffn + att) / (model_gpu_flops(g, m, prec) * max(tp, 1) * eff.comp_eff)
 
     aw = _active_weight_bytes(m, prec)
-    mt = (aw / (max(tp, 1) * max(pp, 1))) / (g.effective_bw * eff.bw_eff)
+    mt = (aw * pp_fraction / max(tp, 1)) / (g.effective_bw * eff.bw_eff)
     output_time = (stats.mean_output_bytes_per_input * pr) / (g.effective_bw * eff.bw_eff)
     comm = communication_breakdown(m, tp, pp, pr * stats.mean_seq_len, stats.mean_seq_len, g, eff)
 
@@ -1141,6 +1177,11 @@ def compute_data(
 ) -> Optional[DataResult]:
     if not context_supported(m, in_len, out_len):
         return None
+    # One assignment owns one GPU pool and one memory reservation. Independent P/D
+    # layouts would require two explicitly allocated pools; accepting them here would
+    # count the same GPUs and VRAM twice.
+    if prefill_strat != decode_strat:
+        return None
     prefill_tp, prefill_pp, prefill_dp = prefill_strat
     decode_tp, decode_pp, decode_dp = decode_strat
     pf_in = effective_prefill_length(in_len, prefix_hit_rate)
@@ -1206,6 +1247,8 @@ def compute_data_capacity(
 ) -> int:
     if not context_supported(m, in_len, out_len):
         return 0
+    if prefill_strat != decode_strat:
+        return 0
     prefill_tp, prefill_pp, prefill_dp = prefill_strat
     decode_tp, decode_pp, decode_dp = decode_strat
     pf_in = effective_prefill_length(in_len, prefix_hit_rate)
@@ -1261,6 +1304,8 @@ def compute_user_experience(
     prefill_eff: EfficiencyParams,
     decode_eff: EfficiencyParams,
 ) -> Optional[UserExperienceResult]:
+    if prefill_strat != decode_strat:
+        return None
     decode_tp, decode_pp, decode_dp = decode_strat
     prefill_tp, prefill_pp, prefill_dp = prefill_strat
     dec = compute_decode(
@@ -2563,40 +2608,6 @@ def _project_workload_profile(project, fallback: dict) -> dict:
     }
 
 
-def _stall_curve(load: float) -> float:
-    """Map requested load (fraction of peak capacity) → served fraction.
-    Below 100% runs clean. 100–115% thrashes (KV pressure, scheduler contention). Above 115% stalls."""
-    if load <= 0:
-        return 0.0
-    if load <= 1.0:
-        return load
-    if load <= 1.15:
-        # Linear decline from 1.0 (at load=1.0) down to 0.70 (at load=1.15).
-        return 1.0 - 2.0 * (load - 1.0)
-    return 0.55  # stall floor
-
-
-def _apply_night_batching(weights: list[float], effective_shift: float, night_hours: frozenset) -> tuple[list[float], float]:
-    """Move `effective_shift` fraction of each daytime hour's demand into the night hours (evenly).
-    Returns (new weights, total fraction of original daily demand shifted)."""
-    if effective_shift <= 0 or not weights:
-        return list(weights), 0.0
-    new = list(weights)
-    shifted_total = 0.0
-    for h, w in enumerate(weights):
-        if h in night_hours:
-            continue
-        delta = w * effective_shift
-        new[h] -= delta
-        shifted_total += delta
-    night_count = max(1, len(night_hours))
-    per_night = shifted_total / night_count
-    for h in night_hours:
-        new[h] += per_night
-    orig_total = sum(weights) or 1.0
-    return new, shifted_total / orig_total
-
-
 def _best_deployment_result_for_model(state, am, gpu: GPU, in_len: int, out_len: int, batch_sizes: list[int]) -> Optional[DeploymentPeakResult]:
     best: Optional[DeploymentPeakResult] = None
     for bs in batch_sizes:
@@ -2683,6 +2694,7 @@ def _cloud_price_per_m_in_preset(
     profile: dict,
     prefix_hit_rate: float,
     preset_name: str,
+    required_capabilities: frozenset[str] = frozenset(),
 ) -> tuple[Optional[dict], float]:
     """Cheapest cloud model in the active corpo preset that can serve a project with the
     given (difficulty, min_success_rate). Effective $/M is computed apples-to-apples with
@@ -2698,9 +2710,8 @@ def _cloud_price_per_m_in_preset(
     tokens_per_req = max(1.0, in_len + out_len)
 
     best: Optional[tuple[float, dict]] = None
-    for key in corpo_cloud_models(preset_name):
-        cloud = CLOUD_MODELS.get(key)
-        if cloud is None:
+    for key, cloud in cloud_policy.effective_corpo_models(preset_name):
+        if not (required_capabilities <= frozenset(cloud.get("capabilities", ()))):
             continue
         cloud_quality = float(cloud.get("quality", 0.5))
         cloud_eff = max(float(cloud.get("token_efficiency", 1.0)), 1e-6)
@@ -2786,8 +2797,6 @@ def _build_model_supply(state, profile, prefix_hit_rate, peak_factor_eff) -> lis
     day_shape = DAY_SHAPES.get(getattr(state, "projection_day_shape", "workday")) or DAY_SHAPES["workday"]
     day_weights = day_shape["weights"] or [1.0] * 24
     night_weights = [1.0 if h in NIGHT_HOURS else 0.0 for h in range(24)]
-    task_il = int(getattr(state, "task_il", profile["in_len"]))
-    task_ol = int(getattr(state, "task_ol", profile["out_len"]))
     supply = []
     for am, gpu in _iter_resolved_models(state):
         if getattr(am.model, "is_realtime_only", False) or getattr(am.model, "embedding_profile", None) is not None:
@@ -2819,13 +2828,9 @@ def _build_model_supply(state, profile, prefix_hit_rate, peak_factor_eff) -> lis
         )
         gpu_cost_day = pool_rate.get(am.gpu_uid, 0.0) * am.gpu_count
         internal_pm = (gpu_cost_day * 1e6 / daily_tokens_cap) if daily_tokens_cap > 0 else math.inf
-        tokens_per_sec_peak = peak_rps * tokens_per_req
-        tpt = tokens_per_task(am.model, task_il, task_ol)
         country = pool_country.get(am.gpu_uid, DEFAULT_COUNTRY)
         grid_day = carbon_intensity_avg(country, day_weights)
         grid_night = carbon_intensity_avg(country, night_weights)
-        co2_task_day = co2_g_per_task(gpu, am.gpu_count, tpt, tokens_per_sec_peak, grid_day)
-        co2_task_night = co2_g_per_task(gpu, am.gpu_count, tpt, tokens_per_sec_peak, grid_night)
         supply.append({
             "am": am,
             "am_uid": am.uid,
@@ -2845,12 +2850,13 @@ def _build_model_supply(state, profile, prefix_hit_rate, peak_factor_eff) -> lis
             "served_tokens": 0.0,
             "gpu_cost_day": gpu_cost_day,
             "internal_pm": internal_pm,
-            "tokens_per_task": tpt,
+            # These are accumulated with each project's own task shape while routing.
+            "served_tasks": 0.0,
+            "served_co2_g_day": 0.0,
+            "served_co2_g_night": 0.0,
             "country": country,
             "grid_gco2_per_kwh_day": grid_day,
             "grid_gco2_per_kwh_night": grid_night,
-            "co2_g_per_task_day": co2_task_day,
-            "co2_g_per_task_night": co2_task_night,
             "runnable": peak_rps > 0,
         })
     return supply
@@ -2899,14 +2905,15 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
         difficulty = float(getattr(p, "difficulty", 0.5))
         slo = float(getattr(p, "min_success_rate", 0.85))
         quality_floor = float(getattr(p, "quality_floor", 0.0))
+        required_caps = frozenset(getattr(p, "requires", frozenset()) or frozenset())
         project_profile = _project_workload_profile(p, profile)
         cloud_info, cloud_pm = _cloud_price_per_m_in_preset(
             difficulty, slo, quality_floor, project_profile, prefix_hit_rate, corpo_cloud,
+            required_caps,
         )
         cloud_blocked = cloud_info is None
         wtp = float(p.wtp_per_m)
         total = max(0.0, float(p.tokens_day))
-        required_caps = getattr(p, "requires", frozenset()) or frozenset()
 
         # Candidate list with capability + success-rate gates. `useful tokens` = work the
         # project needs done; token efficiency affects generated/output tokens only, so the
@@ -2940,6 +2947,10 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
             if shape_daily_cap <= 0:
                 continue
             shape_internal_pm = me["gpu_cost_day"] * 1e6 / shape_daily_cap
+            project_tpt = tokens_per_task(
+                me["model"], int(project_profile["in_len"]), int(project_profile["out_len"]),
+            )
+            project_tokens_per_sec = shape_peak_rps * project_tpt
             candidates.append({
                 "me": me,
                 "success_rate": sr,
@@ -2949,6 +2960,15 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
                 "shape_peak_rps": shape_peak_rps,
                 "shape_internal_pm": shape_internal_pm,
                 "effective_pm": shape_internal_pm * token_mult * retry_mult,
+                "tokens_per_task": project_tpt,
+                "co2_g_per_task_day": co2_g_per_task(
+                    me["gpu"], me["gpu_count"], project_tpt, project_tokens_per_sec,
+                    me["grid_gco2_per_kwh_day"],
+                ),
+                "co2_g_per_task_night": co2_g_per_task(
+                    me["gpu"], me["gpu_count"], project_tpt, project_tokens_per_sec,
+                    me["grid_gco2_per_kwh_night"],
+                ),
             })
         candidates.sort(key=lambda c: c["effective_pm"])
 
@@ -2992,9 +3012,15 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
             me["served_tokens"] += actual_take
             per_model_served.append((me, useful_take, actual_take, c["success_rate"]))
             internal_cost += (actual_take / 1e6) * c["shape_internal_pm"]
-            tpt_m = me.get("tokens_per_task", 0.0)
+            tpt_m = c["tokens_per_task"]
             if tpt_m > 0:
-                co2_g_day_project += (actual_take / tpt_m) * me.get("co2_g_per_task_day", 0.0)
+                attempt_tasks = actual_take / tpt_m
+                co2_day = attempt_tasks * c["co2_g_per_task_day"]
+                co2_night = attempt_tasks * c["co2_g_per_task_night"]
+                co2_g_day_project += co2_day
+                me["served_tasks"] += attempt_tasks
+                me["served_co2_g_day"] += co2_day
+                me["served_co2_g_night"] += co2_night
             served += useful_take
 
         unserved = max(0.0, total - served)
@@ -3034,6 +3060,7 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
             "cloud_vendor": "" if cloud_blocked else cloud_info["vendor"],
             "cloud_regions": () if cloud_blocked else cloud_info.get("regions", ()),
             "cloud_grid_gco2_per_kwh": 0.0 if cloud_blocked else cloud_info.get("grid_gco2_per_kwh", 0.0),
+            "cloud_price_source": "" if cloud_blocked else cloud_info.get("price_source", "catalog"),
             "cloud_blocked": cloud_blocked,
             "served": served,
             "spilled": spilled,
@@ -3109,12 +3136,15 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
     value_lost = value_cloud + value_destroyed  # money not captured internally
     value_opportunity = value_served + value_lost
 
+    # Procurement/TCO is a cluster commitment, so idle and unassigned pool GPUs still
+    # cost money even though per-model tariffs above allocate only assigned GPU cost.
     cost_day = sum(gp.cost_per_gpu_hour * 24.0 * gp.count for gp in state.gpus)
     cost_per_m_served = (cost_day * 1e6 / total_served) if total_served > 0 else 0.0
-    # Day-weighted gCO2/task averaged over served demand (0 if nothing served).
-    _co2_numer = sum(me["served_tokens"] * me.get("co2_g_per_task_day", 0.0) / max(me.get("tokens_per_task", 0.0), 1e-9) for me in supply)
+    # Day-weighted gCO2/task averaged across the actual routed workload mix.
+    _co2_numer = sum(me["served_co2_g_day"] for me in supply)
     co2_kg_day_total = _co2_numer / 1000.0
-    co2_g_per_task_avg = (_co2_numer / sum(me["served_tokens"] / max(me.get("tokens_per_task", 0.0), 1e-9) for me in supply)) if total_served > 0 else 0.0
+    _served_attempt_tasks = sum(me["served_tasks"] for me in supply)
+    co2_g_per_task_avg = (_co2_numer / _served_attempt_tasks) if _served_attempt_tasks > 0 else 0.0
     margin_day = value_served - cost_day
     revenue_multiple = (value_served / cost_day) if cost_day > 0 else 0.0
     token_coverage = (total_served / total_tokens) if total_tokens > 0 else 0.0
@@ -3138,10 +3168,10 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
         cap = me["daily_tokens_cap"]
         util = me.get("used_fraction", 0.0)
         saturated = cap > 0 and me.get("remaining_fraction", 1.0) <= 0.01
-        tpt = me.get("tokens_per_task", 0.0)
-        co2_day_g = me.get("co2_g_per_task_day", 0.0)
-        co2_night_g = me.get("co2_g_per_task_night", 0.0)
-        co2_g_day_total = co2_day_g * (me["served_tokens"] / tpt) if tpt > 0 else 0.0
+        served_tasks = me["served_tasks"]
+        tpt = me["served_tokens"] / served_tasks if served_tasks > 0 else 0.0
+        co2_day_g = me["served_co2_g_day"] / served_tasks if served_tasks > 0 else 0.0
+        co2_night_g = me["served_co2_g_night"] / served_tasks if served_tasks > 0 else 0.0
         model_rows.append({
             "am_uid": me["am_uid"],
             "model": me["model"],
@@ -3169,7 +3199,7 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
             "grid_gco2_per_kwh_night": me.get("grid_gco2_per_kwh_night", 0.0),
             "co2_g_per_task_day": co2_day_g,
             "co2_g_per_task_night": co2_night_g,
-            "co2_kg_day": co2_g_day_total / 1000.0,
+            "co2_kg_day": me["served_co2_g_day"] / 1000.0,
             "saturated": saturated,
             "runnable": me["runnable"],
             "status": (

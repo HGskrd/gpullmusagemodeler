@@ -39,7 +39,7 @@ By default the app listens on `0.0.0.0:5014`, so it is reachable from the local 
    ```
 
    Edit `.env` before deploying. Set a strong `PLANNER_SECRET_KEY`, and set `PLANNER_ADMIN_PASSWORD` if you want to enable `/admin`.
-   For an internet-facing deployment, terminate TLS at a reverse proxy and set `PLANNER_SECURE_COOKIES=true`.
+   For an internet-facing deployment, terminate TLS at a reverse proxy and set `PLANNER_SECURE_COOKIES=true` and `PLANNER_BEHIND_PROXY=true`. Only enable `PLANNER_BEHIND_PROXY` when the proxy sets/overwrites `X-Forwarded-For` itself; if clients can inject that header, they can spoof IPs to evade the per-IP rate limits.
 
 3. **Start the app**
 
@@ -58,7 +58,7 @@ By default the app listens on `0.0.0.0:5014`, so it is reachable from the local 
 
 The Compose setup stores planner snapshots in the named Docker volume `gpullmusagemodeler_planner-instance`, mounted at `/app/instance` inside the container.
 
-The interactive planner state is currently held in process memory. Keep `WEB_CONCURRENCY=1` in production and use `GUNICORN_THREADS` for request concurrency. Running more than one worker process can make a browser session appear to swap between different planner states because separate workers do not share memory.
+The interactive planner state is currently held in process memory. Keep `WEB_CONCURRENCY=1` in production and use `GUNICORN_THREADS` for request concurrency. The shipped Docker command refuses a `WEB_CONCURRENCY` value other than `1`, because separate worker processes do not share memory and would make a browser session appear to swap between different planner states. `compose.yaml` pins it to `1`. If you use a different WSGI command or process manager, you must likewise configure exactly one process.
 
 ### Manual Docker Run
 
@@ -128,7 +128,7 @@ For local debugging, add `DEBUG=1` or `FLASK_DEBUG=1`.
 | `PORT` | HTTP port; defaults to `5014` |
 | `PLANNER_ADMIN_PASSWORD` | Password for the admin interface |
 | `PLANNER_SECRET_KEY` | Flask session signing key; set this to a strong random value before deployment |
-| `WEB_CONCURRENCY` | Gunicorn worker process count for Docker/systemd deployments; keep this at `1` while planner state is in process memory |
+| `WEB_CONCURRENCY` | Gunicorn worker count used by the shipped Docker command; must stay at `1` while planner state is in process memory |
 | `GUNICORN_THREADS` | Gunicorn thread count; defaults to `4` |
 | `GUNICORN_TIMEOUT` | Gunicorn request timeout in seconds; defaults to `120` |
 | `PLANNER_TRACKING_ENABLED` | Persist complete planner scenario snapshots; defaults to `true` |
@@ -143,7 +143,34 @@ For local debugging, add `DEBUG=1` or `FLASK_DEBUG=1`.
 | `PLANNER_RATE_LIMIT_PER_MINUTE` | Per-IP mutation-request limit; defaults to `600` |
 | `PLANNER_ADMIN_LOGIN_ATTEMPTS_PER_MINUTE` | Per-IP admin login attempt limit; defaults to `10` |
 | `PLANNER_SECURE_COOKIES` | Require HTTPS-only session and visitor cookies; enable behind an HTTPS reverse proxy |
+| `PLANNER_BEHIND_PROXY` | Trust `X-Forwarded-For` and `X-Forwarded-Proto` from exactly one reverse-proxy hop; defaults to `false`. Only enable when the proxy overwrites these headers, otherwise clients can spoof IPs to evade rate limits |
+| `PLANNER_CLOUD_POLICY` | Optional path to a JSON policy that restricts corporate-cloud models, adds gateway presets, and overrides negotiated input/output prices; invalid policies fail at startup |
 | `DEBUG` / `FLASK_DEBUG` | Enable Flask debug mode for local development |
+
+### Corporate Cloud Policy
+
+Set `PLANNER_CLOUD_POLICY` to a JSON file when procurement exposes only part of the public cloud catalog or negotiated prices differ from catalog prices. All sections are optional; model keys must already exist in `data.py`.
+
+```json
+{
+  "allowed_models": ["gemini-flash-lite", "gemini-pro"],
+  "price_overrides": {
+    "gemini-pro": {
+      "in_per_m": 1.0,
+      "cached_in_per_m": 0.1,
+      "out_per_m": 8.0
+    }
+  },
+  "corpo_presets": {
+    "negotiated": {
+      "label": "Negotiated gateway",
+      "models": ["gemini-flash-lite", "gemini-pro"]
+    }
+  }
+}
+```
+
+The policy is validated and loaded once at startup. Unknown models, invalid prices, malformed sections, or custom presets outside the allowlist stop startup with a clear error. Restart the app after changing the file.
 
 ## Scenario Data and Privacy
 

@@ -13,6 +13,7 @@ from collections import defaultdict, deque
 from pathlib import Path
 
 from flask import Flask, g, jsonify, make_response, redirect, render_template, request, session, url_for
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from data import (
     GPUS,
@@ -25,8 +26,6 @@ from data import (
     OUTPUT_BUCKETS,
     BATCH_SIZES,
     DAY_SHAPES,
-    CLOUD_MODELS,
-    CORPO_CLOUD_PRESETS,
     PROJECT_PRESETS,
     MODEL_CAPABILITIES,
     CAPABILITY_LABELS,
@@ -45,6 +44,8 @@ from data import (
     effective_quality,
     success_rate,
 )
+import cloud_policy
+
 from calc import (
     avg_dist,
     chart_embedding_quality,
@@ -163,6 +164,7 @@ def _load_dotenv(path: Path) -> None:
 
 
 _load_dotenv(BASE_DIR / ".env")
+cloud_policy.configure_from_env()
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -179,9 +181,31 @@ def _env_positive_int(name: str, default: int) -> int:
         return default
 
 
+def _enforce_single_worker() -> None:
+    # Planner state and per-scope locks live in this process; multiple gunicorn
+    # workers would silently split visitor state across processes. Refuse to
+    # boot rather than serve inconsistent sessions.
+    raw = os.environ.get("WEB_CONCURRENCY", "").strip()
+    if raw not in {"", "1"}:
+        raise RuntimeError(
+            f"WEB_CONCURRENCY={raw!r} is not supported: planner state and per-scope locks "
+            "are held in a single process. Run one worker (WEB_CONCURRENCY=1) and use "
+            "GUNICORN_THREADS for request concurrency."
+        )
+
+
+_enforce_single_worker()
+
 app = Flask(__name__)
+# Only trust X-Forwarded-* when PLANNER_BEHIND_PROXY=true, i.e. when a reverse
+# proxy sets/overwrites those headers. Otherwise clients could spoof their IP
+# to evade the per-IP rate limits.
+if _env_bool("PLANNER_BEHIND_PROXY", False):
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 _configured_secret = os.environ.get("PLANNER_SECRET_KEY", "").strip()
 app.secret_key = _configured_secret or secrets.token_urlsafe(48)
+# SameSite=Lax reduces cross-site request risk. Deploy this app on a dedicated
+# site/origin; sibling subdomains remain same-site and are outside that defense.
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
@@ -551,8 +575,9 @@ def _template_context() -> dict:
         "EMBEDDING_DOC_PRESETS": EMBEDDING_DOC_PRESETS,
         "TASK_PRESETS": TASK_PRESETS,
         "DAY_SHAPES": DAY_SHAPES,
-        "CLOUD_MODELS": CLOUD_MODELS,
-        "CORPO_CLOUD_PRESETS": CORPO_CLOUD_PRESETS,
+        "CLOUD_MODELS": cloud_policy.effective_catalog(),
+        "CORPO_CLOUD_PRESETS": cloud_policy.corpo_presets(),
+        "CLOUD_POLICY": cloud_policy.summary(),
         "PROJECT_PRESETS": PROJECT_PRESETS,
         "MODEL_CAPABILITIES": MODEL_CAPABILITIES,
         "CAPABILITY_LABELS": CAPABILITY_LABELS,
@@ -658,6 +683,7 @@ def _projection_diagnostic(row: dict) -> str:
 
 def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
     p = compute_revenue_projection(state)
+    policy = cloud_policy.summary()
     f = p["fates"]
     lines = [
         label,
@@ -671,9 +697,16 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
         f"- Profiled non-KV runtime memory: {state.profiled_non_kv_gb:g} GB/GPU",
         f"- Prefix hit rate: {state.prefix_hit_rate * 100:.0f}%",
     ]
+    gateway = cloud_policy.corpo_presets().get(getattr(state, "corpo_cloud", ""), {})
+    lines.append(f"- Cloud gateway: {gateway.get('label', getattr(state, 'corpo_cloud', 'current'))}")
     if state.auto_excluded:
         excluded = [MODELS[key].name if key in MODELS else key for key in state.auto_excluded]
         lines.append(f"- Excluded from auto: {', '.join(excluded)}")
+    if policy["active"]:
+        lines.append(
+            f"- Cloud policy: active; {policy['allowed_count']}/{policy['total_count']} models allowed, "
+            f"{len(policy['overridden'])} price override(s)"
+        )
 
     if state.gpus:
         lines.append("- GPU pools:")

@@ -523,6 +523,9 @@ GPUS: dict[str, GPU] = {
     "B300": GPU("B300", "B300 Blackwell Ultra 288GB HGX/DGX", "nv", 288e9, 8e12, 2.5e15, 5e15, 1.8e12, 8, min_count=8, count_multiple=8),
     "GB300": GPU("GB300", "GB300 NVL72 Blackwell Ultra 288GB/GPU", "nv", 288e9, 8e12, 2.5e15, 5e15, 3.6e12, 72, min_count=72, count_multiple=72),
     "DGX_STATION_GB300": GPU("DGX_STATION_GB300", "DGX Station GB300 Blackwell Ultra 252GB", "nv", 252e9, 7.1e12, 2.5e15, 5e15, 100e9, 2),
+    # NVIDIA labels every Rubin figure below preliminary and subject to change.
+    # The profile models one GPU inside the rack-only 72-GPU NVLink 6 domain.
+    "RUBIN_NVL72": GPU("RUBIN_NVL72", "Vera Rubin NVL72 Preview 288GB/GPU", "nv", 288e9, 22e12, 4e15, 17.5e15, 3.6e12, 72, min_count=72, count_multiple=72),
     "A40": GPU("A40", "A40 48GB", "nv", 48e9, 696e9, 149.7e12, 149.7e12, 112.5e9, 2),
     "A30": GPU("A30", "A30 24GB", "nv", 24e9, 933e9, 165e12, 165e12, 200e9, 2),
     "A6000": GPU("A6000", "RTX A6000 48GB", "nv", 48e9, 768e9, 154.85e12, 154.85e12, 112.5e9, 2),
@@ -536,7 +539,7 @@ GPUS: dict[str, GPU] = {
     "MI325X": GPU("MI325X", "MI325X 256GB", "amd", 256e9, 6e12, 1307e12, 2615e12, 896e9, 8),
     "MI350X": GPU("MI350X", "MI350X 288GB", "amd", 288e9, 8e12, 2010e12, 4020e12, 1075.2e9, 8),
     "MI355X": GPU("MI355X", "MI355X 288GB", "amd", 288e9, 8e12, 2512e12, 5037e12, 1075.2e9, 8),
-    "MI400": GPU("MI400", "MI400 Series Preview 432GB", "amd", 432e9, 19.6e12, 10e15, 20e15, 260e12 / 72.0, 72),
+    "MI400": GPU("MI400", "MI450X (MI400 Series) Preview 432GB", "amd", 432e9, 19.6e12, 10e15, 20e15, 260e12 / 72.0, 72),
     "RadeonProW7900": GPU("RadeonProW7900", "Radeon PRO W7900 48GB", "amd", 48e9, 864e9, 123e12, 123e12, 64e9, 1),
     "RadeonAIProR9700": GPU("RadeonAIProR9700", "Radeon AI PRO R9700 32GB", "amd", 32e9, 640e9, 96e12, 96e12, 128e9, 1),
     # Intel does not publish dense BF16/FP8 peak figures for these public pages, so the planner
@@ -568,6 +571,7 @@ GPU_FP4_FLOPS = {
     "B300": 15e15,
     "GB300": 15e15,
     "DGX_STATION_GB300": 15e15,
+    "RUBIN_NVL72": 50e15,
     "JETSON_AGX_THOR": 1035e12,
     "MI350X": 9.2e15,
     "MI355X": 10.1e15,
@@ -595,6 +599,64 @@ for _k, _w in GPU_TDP_WATTS.items():
         GPUS[_k].tdp_watts = float(_w)
 
 
+# Announced/preview catalog entries must keep their uncertainty reviewable.  Kimi
+# launch debt is intentionally outside this registry: it has its own explicit
+# config-proxy tests and should not block unrelated catalog refreshes.
+PREVIEW_ASSUMPTIONS_CAPTURED_AT = "2026-07-21"
+PREVIEW_ASSUMPTIONS: dict[str, dict[str, object]] = {
+    "gpu:RUBIN_NVL72": {
+        "status": "full-production ramp; production shipments announced for fall 2026",
+        "source": "https://www.nvidia.com/en-us/data-center/vera-rubin-nvl72/",
+        "assumptions": (
+            "all per-GPU performance, memory, bandwidth, and NVLink figures remain preliminary",
+            "rack-only pool sizes are constrained to multiples of 72",
+            "board power is omitted until NVIDIA publishes a per-GPU figure",
+        ),
+    },
+    "gpu:MI400": {
+        "status": "MI450X/MI455X Helios volume deployments expected in 2H 2026",
+        "source": "https://www.amd.com/en/products/rackscale-solutions/helios.html",
+        "assumptions": (
+            "MI400 compatibility key represents AMD's named MI450X/MI455X generation",
+            "10 PF BF16, 20 PF FP8, 40 PF FP4, interconnect, and 1.5 kW are planner projections",
+            "432 GB HBM4 and 19.6 TB/s are public AMD specifications",
+        ),
+    },
+    "gpu:CrescentIsland": {
+        "status": "announced inference GPU; public launch configuration pending",
+        "source": "https://newsroom.intel.com/artificial-intelligence/intel-to-expand-ai-accelerator-portfolio-with-new-gpu",
+        "assumptions": (
+            "160 GB LPDDR5X is public; bandwidth, tensor rooflines, topology, and power are planner proxies",
+        ),
+    },
+    "model:inkling-small-preview": {
+        "status": "preview weights and architecture configuration not released",
+        "source": "https://thinkingmachines.ai/news/introducing-inkling/",
+        "assumptions": (
+            "48-layer layout scales the released Inkling local/global attention pattern",
+            "276B total and 12B active parameters are public preview facts",
+        ),
+    },
+    "model:mistral-medium-3.5-preview": {
+        "status": "API and model card live; full architecture configuration not public",
+        "source": "https://docs.mistral.ai/models/model-cards/mistral-medium-3-5-26-04",
+        "assumptions": (
+            "128B dense architecture fields remain a capacity proxy",
+        ),
+    },
+    "cloud:gemini-pro": {
+        "status": "Gemini 3.1 Pro preview; production lifecycle may change with short notice",
+        "source": "https://ai.google.dev/gemini-api/docs/models",
+        "assumptions": (
+            "planner uses standard pricing for prompts at or below 200k tokens",
+            "requests above 200k use higher input, cached-input, and output rates not modeled here",
+        ),
+    },
+}
+for _preview in PREVIEW_ASSUMPTIONS.values():
+    _preview["captured_at"] = PREVIEW_ASSUMPTIONS_CAPTURED_AT
+
+
 def normalize_gpu_count(gpu_type: str, count: int, allow_zero: bool = False) -> int:
     """Snap pool sizes to set-only hardware constraints."""
     try:
@@ -617,6 +679,15 @@ def normalize_gpu_count(gpu_type: str, count: int, allow_zero: bool = False) -> 
 
 GPU_CARDS: list[GPUCard] = [
     # ── NVIDIA: flagship Blackwell → Hopper → Ampere datacenter → Ada → professional → desktop ──
+    GPUCard(
+        "Vera Rubin NVL72",
+        "NVIDIA",
+        "Rubin",
+        "72-GPU rack: 288 GB HBM4/GPU (preliminary)",
+        "Next-generation rack-scale agentic inference and training; production shipments announced for fall 2026",
+        (GPUPlannerOption("Add 72-GPU Preview", "RUBIN_NVL72"),),
+        "NVIDIA says the platform is in full-production ramp, but still labels the 288GB/22TB/s/50PF NVFP4 per-GPU specifications preliminary and subject to change. Pool sizes snap to multiples of 72.",
+    ),
     GPUCard(
         "GB300 NVL72",
         "NVIDIA",
@@ -861,13 +932,13 @@ GPU_CARDS: list[GPUCard] = [
     ),
     # ── AMD: newest generation first ────────────────────────────────────────
     GPUCard(
-        "MI400 series",
+        "MI450X / MI400 series",
         "AMD",
-        "CDNA 5 (projected)",
-        "432 GB HBM4, ~19.6 TB/s",
-        "Expected H2 2026, 2× perf over MI355X",
+        "CDNA next generation (preliminary)",
+        "432 GB HBM4, 19.6 TB/s",
+        "MI450X/MI455X Helios volume deployments expected in 2H 2026",
         (GPUPlannerOption("Add Preview", "MI400"),),
-        "Preview profile based on AMD's public MI400-series roadmap disclosures.",
+        "Compatibility key MI400 now tracks AMD's named MI450X/MI455X Helios generation. Memory and bandwidth are public; planner compute, interconnect, and power remain preliminary assumptions.",
     ),
     GPUCard(
         "MI355X",
@@ -3367,94 +3438,135 @@ TASK_PRESETS = {
     "Score": {"i": 4096, "o": 8},
 }
 
-# Cloud model registry with representative public API pricing in $/M tokens.
+# Cloud model registry with representative standard public API pricing in $/M tokens.
 # `quality` and `token_efficiency` are calibrated below from Artificial Analysis'
 # Intelligence Index and Intelligence Index output-token usage (verbosity).
+CLOUD_PRICING_CAPTURED_AT = "2026-07-21"
+CLOUD_PRICING_SOURCES = {
+    "OpenAI": "https://developers.openai.com/api/docs/models/compare",
+    "Anthropic": "https://platform.claude.com/docs/en/about-claude/models/overview",
+    "Google": "https://ai.google.dev/gemini-api/docs/pricing",
+    "Mistral": "https://mistral.ai/pricing/api/",
+    "xAI": "https://x.ai/news/grok-4-1-fast",
+    "DeepSeek": "https://api-docs.deepseek.com/quick_start/pricing/",
+    "Cohere": "https://cohere.com/pricing",
+}
 CLOUD_MODELS = {
-    "gpt-5": {
-        "label": "GPT-5",
+    "gpt-5.6-sol": {
+        "label": "GPT-5.6 Sol",
         "vendor": "OpenAI",
-        "in_per_m": 1.25,
-        "cached_in_per_m": 0.125,
-        "out_per_m": 10.00,
+        "api_model": "gpt-5.6-sol",
+        "in_per_m": 5.00,
+        "cached_in_per_m": 0.50,
+        "out_per_m": 30.00,
+        "max_context_tokens": 1_050_000,
         "quality": 0.5,
         "token_efficiency": 1.0,
     },
-    "gpt-5-mini": {
-        "label": "GPT-5 mini",
+    "gpt-5.6-terra": {
+        "label": "GPT-5.6 Terra",
         "vendor": "OpenAI",
-        "in_per_m": 0.25,
-        "cached_in_per_m": 0.025,
-        "out_per_m": 2.00,
+        "api_model": "gpt-5.6-terra",
+        "in_per_m": 2.50,
+        "cached_in_per_m": 0.25,
+        "out_per_m": 15.00,
+        "max_context_tokens": 1_050_000,
         "quality": 0.5,
         "token_efficiency": 1.0,
     },
-    "gpt-5-nano": {
-        "label": "GPT-5 nano",
+    "gpt-5.6-luna": {
+        "label": "GPT-5.6 Luna",
         "vendor": "OpenAI",
-        "in_per_m": 0.05,
-        "cached_in_per_m": 0.005,
-        "out_per_m": 0.40,
+        "api_model": "gpt-5.6-luna",
+        "in_per_m": 1.00,
+        "cached_in_per_m": 0.10,
+        "out_per_m": 6.00,
+        "max_context_tokens": 1_050_000,
+        "quality": 0.5,
+        "token_efficiency": 1.0,
+    },
+    "claude-fable": {
+        "label": "Claude Fable 5",
+        "vendor": "Anthropic",
+        "api_model": "claude-fable-5",
+        "in_per_m": 10.00,
+        "cached_in_per_m": 1.00,
+        "out_per_m": 50.00,
+        "max_context_tokens": 1_000_000,
         "quality": 0.5,
         "token_efficiency": 1.0,
     },
     "claude-opus": {
-        "label": "Claude Opus 4",
+        "label": "Claude Opus 4.8",
         "vendor": "Anthropic",
-        "in_per_m": 15.00,
-        "cached_in_per_m": 1.50,
-        "out_per_m": 75.00,
+        "api_model": "claude-opus-4-8",
+        "in_per_m": 5.00,
+        "cached_in_per_m": 0.50,
+        "out_per_m": 25.00,
+        "max_context_tokens": 1_000_000,
         "quality": 0.5,
         "token_efficiency": 1.0,
     },
     "claude-sonnet": {
-        "label": "Claude Sonnet 4",
+        "label": "Claude Sonnet 5",
         "vendor": "Anthropic",
-        "in_per_m": 3.00,
-        "cached_in_per_m": 0.30,
-        "out_per_m": 15.00,
+        "api_model": "claude-sonnet-5",
+        "in_per_m": 2.00,
+        "cached_in_per_m": 0.20,
+        "out_per_m": 10.00,
+        "price_note": "Introductory price through 2026-08-31; list price is $3/$15 per MTok.",
+        "max_context_tokens": 1_000_000,
         "quality": 0.5,
         "token_efficiency": 1.0,
     },
     "claude-haiku": {
-        "label": "Claude Haiku 4",
+        "label": "Claude Haiku 4.5",
         "vendor": "Anthropic",
-        "in_per_m": 0.80,
-        "cached_in_per_m": 0.08,
-        "out_per_m": 4.00,
+        "api_model": "claude-haiku-4-5",
+        "in_per_m": 1.00,
+        "cached_in_per_m": 0.10,
+        "out_per_m": 5.00,
+        "max_context_tokens": 200_000,
         "quality": 0.5,
         "token_efficiency": 1.0,
     },
     "gemini-pro": {
-        "label": "Gemini 2.5 Pro",
+        "label": "Gemini 3.1 Pro Preview",
         "vendor": "Google",
-        "in_per_m": 1.25,
-        "cached_in_per_m": 0.31,
-        "out_per_m": 10.00,
+        "api_model": "gemini-3.1-pro-preview",
+        "in_per_m": 2.00,
+        "cached_in_per_m": 0.20,
+        "out_per_m": 12.00,
+        "price_note": "Standard <=200k-token request; long-context requests use $4/$0.40/$18.",
+        "max_context_tokens": 1_048_576,
         "quality": 0.5,
         "token_efficiency": 1.0,
     },
     "gemini-flash": {
-        "label": "Gemini 2.5 Flash",
+        "label": "Gemini 3.5 Flash",
         "vendor": "Google",
-        "in_per_m": 0.30,
-        "cached_in_per_m": 0.075,
-        "out_per_m": 2.50,
+        "api_model": "gemini-3.5-flash",
+        "in_per_m": 1.50,
+        "cached_in_per_m": 0.15,
+        "out_per_m": 9.00,
+        "max_context_tokens": 1_048_576,
         "quality": 0.5,
         "token_efficiency": 1.0,
     },
     "gemini-flash-lite": {
-        "label": "Gemini 2.5 Flash Lite",
+        "label": "Gemini 3.5 Flash-Lite",
         "vendor": "Google",
-        "in_per_m": 0.10,
-        "cached_in_per_m": 0.025,
-        "out_per_m": 0.40,
+        "api_model": "gemini-3.5-flash-lite",
+        "in_per_m": 0.30,
+        "cached_in_per_m": 0.03,
+        "out_per_m": 2.50,
         "quality": 0.5,
         "token_efficiency": 1.0,
     },
     "mistral-medium": {
         "label": "Mistral Medium 3.5",
         "vendor": "Mistral",
+        "api_model": "mistral-medium-latest",
         "in_per_m": 1.50,
         "cached_in_per_m": 0.15,
         "out_per_m": 7.50,
@@ -3462,38 +3574,77 @@ CLOUD_MODELS = {
         "token_efficiency": 1.0,
     },
     "mistral-large": {
-        "label": "Mistral Large",
+        "label": "Mistral Large 3",
         "vendor": "Mistral",
-        "in_per_m": 2.00,
-        "cached_in_per_m": 0.50,
-        "out_per_m": 6.00,
-        "quality": 0.5,
-        "token_efficiency": 1.0,
-    },
-    "mistral-large-2": {
-        "label": "Mistral Large 2",
-        "vendor": "Mistral",
-        "in_per_m": 2.00,
-        "cached_in_per_m": 0.50,
-        "out_per_m": 6.00,
-        "quality": 0.5,
-        "token_efficiency": 1.0,
-    },
-    "codestral-2501": {
-        "label": "Codestral 2501",
-        "vendor": "Mistral",
-        "in_per_m": 0.20,
+        "api_model": "mistral-large-latest",
+        "in_per_m": 0.50,
         "cached_in_per_m": 0.05,
+        "out_per_m": 1.50,
+        "quality": 0.5,
+        "token_efficiency": 1.0,
+    },
+    "mistral-small": {
+        "label": "Mistral Small 4",
+        "vendor": "Mistral",
+        "api_model": "mistral-small-latest",
+        "in_per_m": 0.15,
+        "cached_in_per_m": 0.015,
         "out_per_m": 0.60,
         "quality": 0.5,
         "token_efficiency": 1.0,
     },
-    "deepseek-v3": {
-        "label": "DeepSeek V3",
+    # Compatibility-only API row retained for imported policies and presets.
+    "mistral-large-2": {
+        "label": "Mistral Large 2 (legacy)",
+        "vendor": "Mistral",
+        "api_model": "mistral-large-2411",
+        "in_per_m": 2.00,
+        "cached_in_per_m": 0.20,
+        "out_per_m": 6.00,
+        "legacy": True,
+        "quality": 0.5,
+        "token_efficiency": 1.0,
+    },
+    "codestral-2501": {
+        "label": "Codestral",
+        "vendor": "Mistral",
+        "api_model": "codestral-latest",
+        "in_per_m": 0.30,
+        "cached_in_per_m": 0.03,
+        "out_per_m": 0.90,
+        "quality": 0.5,
+        "token_efficiency": 1.0,
+    },
+    "grok-4.1-fast": {
+        "label": "Grok 4.1 Fast",
+        "vendor": "xAI",
+        "api_model": "grok-4-1-fast-reasoning",
+        "in_per_m": 0.20,
+        "cached_in_per_m": 0.05,
+        "out_per_m": 0.50,
+        "max_context_tokens": 2_000_000,
+        "quality": 0.5,
+        "token_efficiency": 1.0,
+    },
+    "deepseek-v4-flash": {
+        "label": "DeepSeek V4 Flash",
         "vendor": "DeepSeek",
-        "in_per_m": 0.27,
-        "cached_in_per_m": 0.07,
-        "out_per_m": 1.10,
+        "api_model": "deepseek-v4-flash",
+        "in_per_m": 0.14,
+        "cached_in_per_m": 0.0028,
+        "out_per_m": 0.28,
+        "max_context_tokens": 1_000_000,
+        "quality": 0.5,
+        "token_efficiency": 1.0,
+    },
+    "deepseek-v4-pro": {
+        "label": "DeepSeek V4 Pro",
+        "vendor": "DeepSeek",
+        "api_model": "deepseek-v4-pro",
+        "in_per_m": 0.435,
+        "cached_in_per_m": 0.003625,
+        "out_per_m": 0.87,
+        "max_context_tokens": 1_000_000,
         "quality": 0.5,
         "token_efficiency": 1.0,
     },
@@ -3528,21 +3679,31 @@ CLOUD_MODELS = {
     },
 }
 
+for _cloud in CLOUD_MODELS.values():
+    _pricing_source = CLOUD_PRICING_SOURCES.get(str(_cloud["vendor"]))
+    if _pricing_source:
+        _cloud["pricing_source"] = _pricing_source
+        _cloud["pricing_captured_at"] = CLOUD_PRICING_CAPTURED_AT
+
 AA_CLOUD_METRICS: dict[str, tuple[float, float]] = {
-    "gpt-5": (45.0, 76.0),
-    "gpt-5-mini": (41.0, 69.0),
-    "gpt-5-nano": (27.0, 110.0),
-    "claude-opus": (50.0, 72.0),         # Proxy from Claude Opus 4.5 (Reasoning).
-    "claude-sonnet": (39.0, 55.0),       # Claude 4 Sonnet (Reasoning).
+    "gpt-5.6-sol": (51.0, 80.0),         # Frontier-bound proxy pending a directly comparable AA row.
+    "gpt-5.6-terra": (47.0, 70.0),       # GPT-5.4-class proxy pending a directly comparable AA row.
+    "gpt-5.6-luna": (42.0, 65.0),        # Efficient frontier proxy pending a directly comparable AA row.
+    "claude-fable": (51.0, 80.0),        # Frontier-bound proxy pending a directly comparable AA row.
+    "claude-opus": (51.0, 72.0),         # Opus 4.7-class proxy pending a direct Opus 4.8 row.
+    "claude-sonnet": (49.0, 55.0),       # Sonnet 4.6-class proxy pending a direct Sonnet 5 row.
     "claude-haiku": (37.0, 87.0),        # Proxy from Claude 4.5 Haiku (Reasoning).
-    "gemini-pro": (35.0, 55.0),
-    "gemini-flash": (21.0, 17.0),
-    "gemini-flash-lite": (13.0, 36.0),
+    "gemini-pro": (51.0, 55.0),          # Preview benchmark proxy pending a stable AA row.
+    "gemini-flash": (47.0, 30.0),        # Gemini 3-family proxy pending a direct 3.5 Flash row.
+    "gemini-flash-lite": (35.0, 36.0),   # Compact Gemini 3-family proxy.
     "mistral-medium": (39.0, 90.0),      # Mistral Medium 3.5.
-    "mistral-large": (13.0, 2.6),        # Proxy from Mistral Large 2 (Jul '24), verbosity from Nov '24 refresh.
-    "mistral-large-2": (15.0, 2.6),
-    "codestral-2501": (15.0, 4.4),       # Proxy from Devstral Small (Jul '25'); no AA page for Codestral 2501 found.
-    "deepseek-v3": (16.0, 2.6),
+    "mistral-large": (37.0, 60.0),       # Mistral Large 3 family proxy pending a direct row.
+    "mistral-small": (31.0, 35.0),       # Size-class proxy pending a direct Mistral Small 4 row.
+    "mistral-large-2": (15.0, 2.6),      # Compatibility anchor for imported legacy policies.
+    "codestral-2501": (20.0, 10.0),      # Coding-model proxy; API alias now points to current Codestral.
+    "grok-4.1-fast": (41.0, 30.0),       # Grok 4.1-class proxy pending a direct Fast row.
+    "deepseek-v4-flash": (42.0, 30.0),   # V4 launch-benchmark proxy pending a direct AA row.
+    "deepseek-v4-pro": (49.0, 60.0),     # V4 launch-benchmark proxy pending a direct AA row.
     "kimi-k3": (51.0, 110.0),          # Launch-benchmark proxy pending a direct AA Intelligence Index row.
     "command-a-03-2025": (32.0, 70.0),   # Conservative proxy until AA publishes a directly comparable Command A row.
     "command-r7b-12-2024": (12.0, 8.3),  # Size-class proxy from compact open instruction models; no AA row found.
@@ -3572,9 +3733,10 @@ _CLAUDE_ZONES = ("europe-west1",)
 _MISTRAL_ZONES = ("europe-west4",)
 
 CLOUD_MODEL_ZONES: dict[str, tuple[str, ...]] = {
-    "gpt-5": (),
-    "gpt-5-mini": (),
-    "gpt-5-nano": (),
+    "gpt-5.6-sol": (),
+    "gpt-5.6-terra": (),
+    "gpt-5.6-luna": (),
+    "claude-fable": _CLAUDE_ZONES,
     "claude-opus": _CLAUDE_ZONES,
     "claude-sonnet": _CLAUDE_ZONES,
     "claude-haiku": _CLAUDE_ZONES,
@@ -3583,9 +3745,12 @@ CLOUD_MODEL_ZONES: dict[str, tuple[str, ...]] = {
     "gemini-flash-lite": _GEMINI_PRO_ZONES,
     "mistral-medium": _MISTRAL_ZONES,
     "mistral-large": _MISTRAL_ZONES,
+    "mistral-small": _MISTRAL_ZONES,
     "mistral-large-2": _MISTRAL_ZONES,
     "codestral-2501": _MISTRAL_ZONES,
-    "deepseek-v3": (),
+    "grok-4.1-fast": (),
+    "deepseek-v4-flash": (),
+    "deepseek-v4-pro": (),
     "kimi-k3": (),
     "command-a-03-2025": (),
     "command-r7b-12-2024": (),
@@ -3633,7 +3798,7 @@ CORPO_CLOUD_PRESETS = {
             "codestral-2501",
             "mistral-medium",
             "mistral-large",
-            "mistral-large-2",
+            "mistral-small",
         ),
     },
     "advocated": {
@@ -3645,7 +3810,7 @@ CORPO_CLOUD_PRESETS = {
             "codestral-2501",
             "mistral-medium",
             "mistral-large",
-            "mistral-large-2",
+            "mistral-small",
             "claude-haiku",
             "claude-sonnet",
             "claude-opus",
@@ -3660,7 +3825,7 @@ CORPO_CLOUD_PRESETS = {
             "codestral-2501",
             "mistral-medium",
             "mistral-large",
-            "mistral-large-2",
+            "mistral-small",
             "command-r7b-12-2024",
             "command-a-03-2025",
         ),

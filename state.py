@@ -24,7 +24,6 @@ from data import (
     GPU,
     Model,
     PROJECT_PRESETS,
-    CORPO_CLOUD_PRESETS,
     CORPO_CLOUD_DEFAULT,
     MODEL_CAPABILITIES,
     SCALE_MODELS,
@@ -33,6 +32,7 @@ from data import (
     normalize_gpu_count,
     normalize_precision,
 )
+import cloud_policy
 from calc import (
     EfficiencyParams,
     avg_dist,
@@ -69,7 +69,6 @@ LEGACY_PLOT_MODE_REDIRECTS = {"realtime": "asrquality", "embedding": "embedquali
 ALLOWED_PLOT_MODES = frozenset(mode for mode, _ in VISIBLE_PLOT_MODES)
 DEFAULT_DAY_SHAPE = "workday"
 ALLOWED_DAY_SHAPES = frozenset(DAY_SHAPES)
-ALLOWED_CORPO_CLOUDS = frozenset(CORPO_CLOUD_PRESETS)
 AUTO_MODEL_STRATEGIES = (
     ("balanced", "Best value / GPU", "Picks the compatible models that capture the most WTP-weighted workload value per assigned GPU."),
     ("coverage", "Most use cases", "Prefers models that satisfy the largest number of active use cases and capability gates."),
@@ -91,8 +90,8 @@ DEFAULT_SCALE_KIND = {
     "formula": "millions of tokens/day",
 }
 PROJECTION_PCT_BOUNDS = {
-    # Average share of peak capacity that internal users actually book. Max day-shape hour
-    # can run this above 100% → thrash/stall zone (see calc._stall_curve).
+    # Average share of peak capacity that internal users actually book. Values above 100%
+    # represent oversubscribed demand that routing will spill once modeled capacity is full.
     "projection_demand_level":      (0.05, 1.20),
     # Discount offered to users who batch overnight. Drives demand shift via elasticity.
     "projection_night_discount":    (0.0, 0.80),
@@ -128,7 +127,7 @@ def normalize_day_shape(shape: Optional[str]) -> str:
 
 
 def normalize_corpo_cloud(name: Optional[str]) -> str:
-    return name if name in ALLOWED_CORPO_CLOUDS else CORPO_CLOUD_DEFAULT
+    return name if name in cloud_policy.corpo_presets() else CORPO_CLOUD_DEFAULT
 
 
 def normalize_auto_strategy(strategy: Optional[str]) -> str:

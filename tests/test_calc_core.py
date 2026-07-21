@@ -1,20 +1,31 @@
+import math
 import unittest
 
 from calc import (
     EfficiencyParams,
+    _active_weight_bytes,
     _cloud_price_per_m_in_preset,
     _decode_attention_work,
+    _dense_tp_oh,
     _deployment_capacity_for_profile,
+    _pp_peak_fraction,
     _prefill_attention_work,
+    communication_breakdown,
     compute_data,
+    compute_data_capacity,
     compute_decode,
+    compute_embedding,
+    compute_memory,
     compute_prefill,
     compute_revenue_projection,
+    fixed_paged_oh,
     kv_cache_bytes_for_sequence,
+    model_gpu_flops,
+    per_tp_linear_attention_state_bytes,
     valid_strategies,
 )
-from data import DIST_PRESETS, GPUS, MODELS, GPU, Model, success_rate
-from placement import retune_models
+from data import DIST_PRESETS, GPUS, MODELS, EmbeddingProfile, GPU, Model, success_rate
+from placement import get_deployed, retune_models
 from state import GpuPool, ModelAssignment, PlannerState, Project
 
 
@@ -30,6 +41,40 @@ class CoreCapacityMathTests(unittest.TestCase):
         expected = model.kv_layer_count * seq_len * (model.mla_kv_dim + model.mla_rope_dim) * 2
 
         self.assertEqual(kv_cache_bytes_for_sequence(model, seq_len, "bf16"), expected)
+
+        roomy_gpu = GPU("roomy", "Roomy", "nv", 2e12, 1e12, 1e12, 1e12, 1e12, 8)
+        mem = compute_memory(model, 1, 1, roomy_gpu, 0.90, 2.0, "bf16", self.eff)
+        self.assertIsNotNone(mem)
+        self.assertEqual(mem.kv_per_token, kv_cache_bytes_for_sequence(model, 1, "bf16"))
+
+    def test_linear_attention_state_uses_schema_head_shards(self):
+        model = Model(
+            "linear", "Linear", "Test", "#000", 1, 1, False, 2, 4, 1, 8, False,
+            attention_layers=0,
+            linear_attention_layers=2,
+            linear_attention_heads=4,
+            linear_attention_head_dim=8,
+            linear_attention_k_heads=2,
+            linear_attention_k_head_dim=4,
+            linear_attention_conv_kernel=3,
+        )
+
+        recurrent = (4 * 8 * 8) / 4
+        convolution = 2 * ((4 * 8) / 4 + (2 * 2 * 4) / 2)
+        expected = 2 * (recurrent + convolution) * 2
+        self.assertEqual(per_tp_linear_attention_state_bytes(model, "bf16", 4), expected)
+
+    def test_dense_tp_models_two_all_reduces_per_layer(self):
+        model = Model("tiny", "Tiny", "Test", "#000", 1, 1, False, 4, 4, 4, 8, False)
+        gpu = GPU("gpu", "GPU", "nv", 1e12, 1e12, 1e12, 1e12, 200e9, 8)
+        batch_tokens = 7
+        tp = 2
+        collective_bw = gpu.scale_up_collective_bw * self.eff.bw_eff
+        msg = batch_tokens * model.hidden_size * 2
+        per_collective = msg * 2 * (tp - 1) / (tp * collective_bw)
+        expected = model.layers * 2 * (per_collective + 3e-6) * (1 - self.eff.ar_overlap)
+
+        self.assertAlmostEqual(_dense_tp_oh(tp, 1, batch_tokens, model, gpu, self.eff.bw_eff, self.eff.ar_overlap), expected)
 
     def test_attention_counts_qk_and_av_matmuls(self):
         model = Model("tiny", "Tiny", "Test", "#000", 1, 1, False, 1, 1, 1, 8, False)
@@ -105,6 +150,69 @@ class CoreCapacityMathTests(unittest.TestCase):
             0.90, 2.0, "bf16", 0.0, self.eff, self.eff,
         )
         self.assertIsNone(result)
+
+    def test_full_prefix_hit_is_finite(self):
+        result = compute_prefill(
+            MODELS["q08"], 1, 1, 8, 1, 0, GPUS["H100"], 0.90, 2.0, "bf16", self.eff,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertTrue(math.isfinite(result.rps))
+        self.assertEqual(result.service_time, 0.0)
+
+        end_to_end = compute_data(
+            MODELS["q08"], (1, 1, 1), (1, 1, 1), 8, 2048, 32, GPUS["H100"],
+            0.90, 2.0, "bf16", 1.0, self.eff, self.eff,
+        )
+        self.assertIsNotNone(end_to_end)
+        self.assertTrue(math.isfinite(end_to_end.rps))
+
+    def test_independent_pd_layouts_are_rejected_without_separate_pools(self):
+        args = (MODELS["q08"], (1, 1, 2), (2, 1, 1), 2, 2048, 32, GPUS["H100"], 0.90, 2.0, "bf16")
+
+        self.assertIsNone(compute_data(*args, 0.0, self.eff, self.eff))
+        self.assertEqual(
+            compute_data_capacity(
+                MODELS["q08"], (1, 1, 2), (2, 1, 1), 2048, 32, GPUS["H100"],
+                0.90, 2.0, "bf16", 0.0, self.eff, self.eff,
+            ),
+            0,
+        )
+
+    def test_retune_co_locates_prefill_and_decode_layouts(self):
+        assignment = ModelAssignment(2, "q08", 1, 2, 2, 1, "bf16", prefill_tp=1, prefill_pp=1, prefill_dp=2)
+        state = PlannerState(gpus=[GpuPool(1, "H100", 2)], models=[assignment])
+
+        self.assertEqual(get_deployed(state, "prefill"), [])
+        self.assertEqual(get_deployed(state, "decode"), [])
+        retune_models(state, preserve_existing=True)
+
+        self.assertEqual((assignment.prefill_tp, assignment.prefill_pp, assignment.prefill_dp), (assignment.tp, assignment.pp, assignment.dp))
+        self.assertEqual(len(get_deployed(state, "prefill")), 1)
+        self.assertEqual(len(get_deployed(state, "decode")), 1)
+
+    def test_embedding_pp_uses_busiest_stage_fraction(self):
+        model = Model(
+            "embed", "Embed", "Test", "#000", 3e6, 3e6, False, 3, 3, 3, 8, False,
+            embedding_profile=EmbeddingProfile("Embed", "single", 8, 128, "test", "test"),
+        )
+        gpu = GPUS["H100"]
+        eff = EfficiencyParams(overhead=0.0, paged_oh=0.0)
+        seq = 16
+        result = compute_embedding(model, (1, 2, 1), 1, seq, gpu, 1.0, 0.0, "bf16", eff)
+
+        self.assertIsNotNone(result)
+        pp_fraction = _pp_peak_fraction(model, 2)
+        ffn = 2 * model.active_params * seq * pp_fraction
+        att = _prefill_attention_work(model, 1, seq, 2)
+        compute_time = (ffn + att) / (model_gpu_flops(gpu, model, "bf16") * eff.comp_eff)
+        memory_time = (_active_weight_bytes(model, "bf16") * pp_fraction) / (gpu.effective_bw * eff.bw_eff)
+        output_time = result.output_bytes_per_input / (gpu.effective_bw * eff.bw_eff)
+        comm = communication_breakdown(model, 1, 2, seq, seq, gpu, eff)
+        expected = (max(compute_time, memory_time) + output_time + comm.total) * (
+            1 + fixed_paged_oh(seq, eff, 0.20)
+        )
+        self.assertAlmostEqual(result.service_time, expected)
 
 
 class ProjectionMathTests(unittest.TestCase):

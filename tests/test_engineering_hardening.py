@@ -1,4 +1,7 @@
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 import uuid
@@ -108,6 +111,68 @@ class EngineeringHardeningTests(unittest.TestCase):
                     session[app_module.ADMIN_SESSION_KEY] = True
                 response = self.client.get("/admin?page=not-a-number")
         self.assertEqual(response.status_code, 400)
+
+    def test_multi_worker_startup_is_refused(self):
+        repo_root = Path(app_module.__file__).resolve().parent
+        env = dict(os.environ, WEB_CONCURRENCY="2")
+        refused = subprocess.run(
+            [sys.executable, "-c", "import app"], cwd=repo_root, env=env,
+            capture_output=True, text=True,
+        )
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("RuntimeError", refused.stderr)
+        self.assertIn("WEB_CONCURRENCY", refused.stderr)
+
+        allowed = subprocess.run(
+            [sys.executable, "-c", "import app"], cwd=repo_root,
+            env=dict(os.environ, WEB_CONCURRENCY="1"),
+            capture_output=True, text=True,
+        )
+        self.assertEqual(allowed.returncode, 0, allowed.stderr)
+
+    def test_rate_limiter_sees_forwarded_ip_when_behind_proxy(self):
+        repo_root = Path(app_module.__file__).resolve().parent
+        script = (
+            "import app; "
+            "app.app.test_client().post('/admin/login', data={'password':'x'}, "
+            "headers={'X-Forwarded-For':'203.0.113.7'}); "
+            "print(sorted(str(k) for k in app._rate_windows))"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script], cwd=repo_root,
+            env=dict(os.environ, PLANNER_BEHIND_PROXY="true"),
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("203.0.113.7", result.stdout)
+        self.assertNotIn("127.0.0.1", result.stdout)
+
+    def test_forwarded_header_is_ignored_without_proxy_flag(self):
+        repo_root = Path(app_module.__file__).resolve().parent
+        script = (
+            "import app; "
+            "app.app.test_client().post('/admin/login', data={'password':'x'}, "
+            "headers={'X-Forwarded-For':'203.0.113.7'}); "
+            "print(sorted(str(k) for k in app._rate_windows))"
+        )
+        env = dict(os.environ)
+        env.pop("PLANNER_BEHIND_PROXY", None)
+        result = subprocess.run(
+            [sys.executable, "-c", script], cwd=repo_root, env=env,
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("127.0.0.1", result.stdout)
+        self.assertNotIn("203.0.113.7", result.stdout)
+
+    def test_visitor_cookie_is_samesite_lax_and_httponly(self):
+        self.assertEqual(app_module.app.config["SESSION_COOKIE_SAMESITE"], "Lax")
+        self.assertTrue(app_module.app.config["SESSION_COOKIE_HTTPONLY"])
+        response = app_module.app.test_client().get("/")
+        cookie = response.headers.get("Set-Cookie", "")
+        self.assertIn(app_module.VISITOR_COOKIE, cookie)
+        self.assertIn("SameSite=Lax", cookie)
+        self.assertIn("HttpOnly", cookie)
 
 
 if __name__ == "__main__":

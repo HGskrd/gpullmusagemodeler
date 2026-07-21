@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2026-07-21
+
+### Added
+
+- Added an optional deployment-level corporate cloud policy (`PLANNER_CLOUD_POLICY`) with model allowlists, negotiated input/cached-input/output price overrides, custom gateway presets, fail-fast validation, UI status, and report provenance.
+- Added current July 2026 cloud/API offerings and dated first-party pricing provenance for OpenAI GPT-5.6, Anthropic Claude 5/4.8, Google Gemini 3.x, Mistral, xAI Grok 4.1 Fast, and DeepSeek V4 families.
+- Added a preliminary NVIDIA Vera Rubin NVL72 rack profile and a dated preview-assumptions registry/guard for non-Kimi preview hardware and models.
+- Added numerical regression coverage for P/D residency, recurrent-state sharding, TP collectives, pipeline-stage embedding work, full-prefix reuse, cloud policy routing, proxy handling, and catalog provenance.
+
+### Changed
+
+- Enforced one resident TP/PP/DP layout per model assignment so independently tuned prefill/decode layouts cannot double-count the same GPUs and VRAM; automatic retuning now co-locates both phases until explicit disaggregated pools are modeled.
+- Corrected hybrid linear-attention state sharding, MLA/sliding-window KV readouts, two-per-layer tensor-parallel reductions, uneven pipeline-stage embedding work, finite full-prefix-hit output, and workload-specific CO₂ accounting.
+- Updated the AMD MI400 compatibility profile to the named MI450X/MI455X Helios generation and replaced legacy Mistral entries in active corporate presets.
+- Pinned the shipped Compose deployment to one worker and reject incompatible `WEB_CONCURRENCY` values; added opt-in one-hop proxy handling without trusting forwarded host headers.
+- Added the previously missing corporate-gateway selector and visible model/negotiated-price tags to the demand projection controls.
+
 ## 2026-07-18
 
 ### Added

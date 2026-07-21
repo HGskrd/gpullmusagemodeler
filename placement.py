@@ -222,7 +222,10 @@ def _retune_model(state: PlannerState, am: ModelAssignment, preserve_existing: b
         return
 
     decode_default = _preferred_strategy(state, am, gp.gpu, "decode")
-    prefill_default = _preferred_strategy(state, am, gp.gpu, "prefill")
+    # A ModelAssignment has one physical GPU allocation. Until separate prefill and
+    # decode pools are represented explicitly, both phases must share one resident
+    # TP/PP/DP layout or the planner would double-count the same GPUs and VRAM.
+    prefill_default = decode_default
     if not preserve_existing:
         am.tp, am.pp, am.dp = decode_default
         am.prefill_tp, am.prefill_pp, am.prefill_dp = prefill_default
@@ -247,8 +250,11 @@ def _retune_model(state: PlannerState, am: ModelAssignment, preserve_existing: b
         state.profiled_non_kv_gb,
         am.prec,
     )
-    if (am.prefill_tp, am.prefill_pp, am.prefill_dp) not in prefill_valid:
-        am.prefill_tp, am.prefill_pp, am.prefill_dp = prefill_default
+    if (
+        (am.prefill_tp, am.prefill_pp, am.prefill_dp) not in prefill_valid
+        or (am.prefill_tp, am.prefill_pp, am.prefill_dp) != (am.tp, am.pp, am.dp)
+    ):
+        am.prefill_tp, am.prefill_pp, am.prefill_dp = am.tp, am.pp, am.dp
 
 
 def retune_models(state: PlannerState, preserve_existing: bool = True):
@@ -258,6 +264,8 @@ def retune_models(state: PlannerState, preserve_existing: bool = True):
 
 
 def _assignment_memories(state: PlannerState, am: ModelAssignment, gpu: GPU):
+    if (am.prefill_tp, am.prefill_pp, am.prefill_dp) != (am.tp, am.pp, am.dp):
+        return None, None
     model = MODELS[am.model_key]
     prefill_mem = compute_memory(
         model,

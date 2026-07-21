@@ -18,6 +18,8 @@ from data import (
     AA_MODEL_QUALITY_CONFIDENCE,
     AA_QUALITY_PLACEHOLDER,
     CLOUD_MODELS,
+    CLOUD_PRICING_CAPTURED_AT,
+    CLOUD_PRICING_SOURCES,
     CORPO_CLOUD_PRESETS,
     EMBEDDING_DOC_BUCKETS,
     EMBEDDING_DOC_PRESETS,
@@ -30,6 +32,8 @@ from data import (
     MODELS,
     PUBLISHED_EMBEDDING_DECONTAMINATED_BEIR,
     PUBLISHED_EMBEDDING_QUALITY,
+    PREVIEW_ASSUMPTIONS,
+    PREVIEW_ASSUMPTIONS_CAPTURED_AT,
     aa_intelligence_to_quality,
     aa_output_tokens_to_efficiency,
     cloud_models_missing_quality_anchors,
@@ -39,6 +43,87 @@ from data import (
 
 
 class ModelCatalogTests(unittest.TestCase):
+    def test_cloud_pricing_snapshot_uses_current_july_2026_families(self):
+        expected = {
+            "gpt-5.6-sol": ("GPT-5.6 Sol", 5.00, 0.50, 30.00),
+            "gpt-5.6-terra": ("GPT-5.6 Terra", 2.50, 0.25, 15.00),
+            "gpt-5.6-luna": ("GPT-5.6 Luna", 1.00, 0.10, 6.00),
+            "claude-fable": ("Claude Fable 5", 10.00, 1.00, 50.00),
+            "claude-opus": ("Claude Opus 4.8", 5.00, 0.50, 25.00),
+            "claude-sonnet": ("Claude Sonnet 5", 2.00, 0.20, 10.00),
+            "claude-haiku": ("Claude Haiku 4.5", 1.00, 0.10, 5.00),
+            "gemini-pro": ("Gemini 3.1 Pro Preview", 2.00, 0.20, 12.00),
+            "gemini-flash": ("Gemini 3.5 Flash", 1.50, 0.15, 9.00),
+            "gemini-flash-lite": ("Gemini 3.5 Flash-Lite", 0.30, 0.03, 2.50),
+            "mistral-medium": ("Mistral Medium 3.5", 1.50, 0.15, 7.50),
+            "mistral-large": ("Mistral Large 3", 0.50, 0.05, 1.50),
+            "mistral-small": ("Mistral Small 4", 0.15, 0.015, 0.60),
+            "codestral-2501": ("Codestral", 0.30, 0.03, 0.90),
+            "grok-4.1-fast": ("Grok 4.1 Fast", 0.20, 0.05, 0.50),
+            "deepseek-v4-flash": ("DeepSeek V4 Flash", 0.14, 0.0028, 0.28),
+            "deepseek-v4-pro": ("DeepSeek V4 Pro", 0.435, 0.003625, 0.87),
+        }
+
+        self.assertEqual(CLOUD_PRICING_CAPTURED_AT, "2026-07-21")
+        for key, (label, price_in, cached_in, price_out) in expected.items():
+            with self.subTest(key=key):
+                cloud = CLOUD_MODELS[key]
+                self.assertEqual(cloud["label"], label)
+                self.assertEqual(cloud["in_per_m"], price_in)
+                self.assertEqual(cloud["cached_in_per_m"], cached_in)
+                self.assertEqual(cloud["out_per_m"], price_out)
+                self.assertIn(cloud["vendor"], CLOUD_PRICING_SOURCES)
+                self.assertEqual(cloud["pricing_captured_at"], CLOUD_PRICING_CAPTURED_AT)
+                self.assertEqual(cloud["pricing_source"], CLOUD_PRICING_SOURCES[cloud["vendor"]])
+
+        for key, cloud in CLOUD_MODELS.items():
+            if key.startswith("kimi"):
+                continue
+            with self.subTest(provenance=key):
+                self.assertEqual(cloud["pricing_captured_at"], CLOUD_PRICING_CAPTURED_AT)
+                self.assertTrue(cloud["pricing_source"].startswith("https://"))
+
+        self.assertTrue(CLOUD_MODELS["mistral-large-2"]["legacy"])
+        self.assertIn("2026-08-31", CLOUD_MODELS["claude-sonnet"]["price_note"])
+        self.assertIn("<=200k", CLOUD_MODELS["gemini-pro"]["price_note"])
+
+    def test_cloud_procurement_presets_have_no_dangling_or_legacy_keys(self):
+        for name, preset in CORPO_CLOUD_PRESETS.items():
+            with self.subTest(preset=name):
+                self.assertTrue(set(preset["models"]) <= set(CLOUD_MODELS))
+                if name != "with_kimi":
+                    self.assertFalse(
+                        any(CLOUD_MODELS[key].get("legacy") for key in preset["models"])
+                    )
+
+        self.assertIn("mistral-small", CORPO_CLOUD_PRESETS["current"]["models"])
+        self.assertNotIn("mistral-large-2", CORPO_CLOUD_PRESETS["current"]["models"])
+
+    def test_preview_entries_have_dated_assumption_records(self):
+        visible_preview_models = {
+            f"model:{key}"
+            for key, model in MODELS.items()
+            if not model.hidden
+            and not key.startswith("kimi")
+            and ("preview" in key.lower() or "preview" in model.name.lower())
+        }
+        preview_cloud_models = {
+            f"cloud:{key}"
+            for key, model in CLOUD_MODELS.items()
+            if not key.startswith("kimi") and "preview" in str(model["label"]).lower()
+        }
+
+        self.assertTrue(visible_preview_models <= set(PREVIEW_ASSUMPTIONS))
+        self.assertTrue(preview_cloud_models <= set(PREVIEW_ASSUMPTIONS))
+        self.assertEqual(PREVIEW_ASSUMPTIONS_CAPTURED_AT, "2026-07-21")
+        for key, record in PREVIEW_ASSUMPTIONS.items():
+            with self.subTest(key=key):
+                self.assertNotIn("kimi", key)
+                self.assertEqual(record["captured_at"], PREVIEW_ASSUMPTIONS_CAPTURED_AT)
+                self.assertTrue(str(record["source"]).startswith("https://"))
+                self.assertTrue(record["status"])
+                self.assertTrue(record["assumptions"])
+
     def test_kimi_k3_launch_entry_uses_published_specs_and_labeled_config_proxy(self):
         model = MODELS["kimi-k3-preview"]
 

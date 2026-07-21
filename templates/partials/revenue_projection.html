@@ -10,6 +10,9 @@
       </button>
     </div>
     <div class="T">See where demand lands: served on your GPUs, sent to cloud because capacity or model fit is insufficient, or left unserved because no option clears the price and quality gates. Reference cloud prices come from the cheapest compatible catalog model after the same gates.</div>
+    {% if CLOUD_POLICY.active %}
+      <div class="T" style="margin-top:4px;">Corporate cloud policy active: {{ CLOUD_POLICY.allowed_count }}/{{ CLOUD_POLICY.total_count }} catalog models allowed{% if CLOUD_POLICY.overridden %}; negotiated prices applied to {{ CLOUD_POLICY.overridden|length }} model(s){% endif %}.</div>
+    {% endif %}
   </div>
 
   <div class="compare-container">
