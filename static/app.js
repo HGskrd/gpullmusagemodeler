@@ -250,11 +250,13 @@ function formatLiveValue(slider, raw) {
     return Math.round(Math.pow(2, raw)).toLocaleString();
   }
   if (fmt === 'fmt_num') {
+    // Mirror of the server-side fmt_num Jinja filter — keep units and
+    // decimals identical so live slider labels match re-rendered HTML.
     const v = Number(raw);
-    if (v >= 1e9) return (v / 1e9).toFixed(2) + 'B';
-    if (v >= 1e6) return (v / 1e6).toFixed(2) + 'M';
+    if (v >= 1e9) return (v / 1e9).toFixed(1) + 'B';
+    if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
     if (v >= 1e3) return (v / 1e3).toFixed(1) + 'k';
-    return String(Math.round(v));
+    return String(Math.trunc(v));
   }
   const scale = Number(slider.dataset.liveScale || 1);
   const decimals = Number(slider.dataset.liveDecimals || 0);

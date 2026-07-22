@@ -36,21 +36,58 @@ class GPUCatalogTests(unittest.TestCase):
         self.assertIn("gpu:RUBIN_NVL72", PREVIEW_ASSUMPTIONS)
         self.assertIn("preliminary", PREVIEW_ASSUMPTIONS["gpu:RUBIN_NVL72"]["assumptions"][0])
 
-    def test_mi400_compatibility_profile_tracks_mi450x_deployment_status(self):
-        gpu = GPUS["MI400"]
+    def test_mi455x_profile_uses_named_helios_accelerator(self):
+        gpu = GPUS["MI455X"]
         card = next(
             card
             for card in GPU_CARDS
-            if any(option.gpu_key == "MI400" for option in card.planner_options)
+            if any(option.gpu_key == "MI455X" for option in card.planner_options)
         )
-        assumptions = PREVIEW_ASSUMPTIONS["gpu:MI400"]
+        assumptions = PREVIEW_ASSUMPTIONS["gpu:MI455X"]
 
-        self.assertIn("MI450X", gpu.name)
+        self.assertIn("MI455X", gpu.name)
         self.assertEqual(gpu.mem, 432e9)
         self.assertEqual(gpu.bw, 19.6e12)
-        self.assertIn("MI450X/MI455X", card.use_case)
+        self.assertIn("Helios", card.use_case)
         self.assertIn("2H 2026", assumptions["status"])
         self.assertIn("planner projections", assumptions["assumptions"][1])
+
+    def test_mi400_legacy_key_remains_available_for_saved_plans(self):
+        legacy = GPUS["MI400"]
+        mi455x = GPUS["MI455X"]
+
+        self.assertEqual(legacy.mem, mi455x.mem)
+        self.assertEqual(legacy.bw, mi455x.bw)
+        self.assertIn("compatibility", legacy.name)
+
+    def test_new_system_and_specialist_accelerator_entries_are_exposed(self):
+        picker_keys = {
+            option.gpu_key
+            for card in GPU_CARDS
+            for option in card.planner_options
+        }
+
+        for key in {
+            "HELIOS_MI455X",
+            "TT_GALAXY_BLACKHOLE",
+            "TT_BLACKHOLE_P150",
+            "TT_BLACKHOLE_P100A",
+            "FURIOSA_RNGD",
+        }:
+            self.assertIn(key, GPUS)
+            self.assertIn(key, picker_keys)
+
+        helios = GPUS["HELIOS_MI455X"]
+        self.assertEqual((helios.min_count, helios.count_multiple), (72, 72))
+        self.assertEqual(GPUS["TT_GALAXY_BLACKHOLE"].min_count, 32)
+        self.assertEqual(GPUS["FURIOSA_RNGD"].mem, 48e9)
+        self.assertEqual(GPUS["FURIOSA_RNGD"].bw, 1.5e12)
+
+    def test_unpublished_accelerators_are_reference_only(self):
+        cards = {card.name: card for card in GPU_CARDS}
+
+        self.assertFalse(cards["MI440X"].planner_options)
+        self.assertFalse(cards["VSORA Jotunn 8"].planner_options)
 
     def test_preview_gpu_picker_entries_have_assumption_records(self):
         preview_keys = {

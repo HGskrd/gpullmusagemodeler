@@ -197,7 +197,8 @@
 
 {% include "partials/use_cases_panel.html" %}
 
-{% with input_len=state.task_il %}
+{% set prefix_basis = state.task_il if state.mode == 'data' else (state.task_il if state.task_il >= avg_dist(state.in_dist, INPUT_BUCKETS) else avg_dist(state.in_dist, INPUT_BUCKETS)) %}
+{% with input_len=prefix_basis %}
   {% include "partials/prefix_reuse.html" %}
 {% endwith %}
 

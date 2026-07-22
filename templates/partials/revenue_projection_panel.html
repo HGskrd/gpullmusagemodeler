@@ -48,7 +48,13 @@
         <span class="val {{ 'bad' if f.destroyed_pct >= 10 else ('warn' if f.destroyed_pct > 0 else '') }}">
           {{ f.destroyed_pct|round(0)|int }}%
         </span>
+        {% if f.destroyed_pct > 0 %}
         <span class="sub">no compatible option within the price ceiling</span>
+        {% elif f.total_tokens > 0 %}
+        <span class="sub">every request found a compatible option</span>
+        {% else %}
+        <span class="sub">no demand routed yet</span>
+        {% endif %}
       </div>
       <div class="hs">
         <span class="T">Value / cost multiple</span>
@@ -146,7 +152,7 @@
       <div class="project-row {{ 'danger' if row.destroyed_pct >= 50 else '' }}">
         <div class="pr-fate-head">
           <span class="pr-fate-name">{{ proj.name }}</span>
-          <span class="T">ELO {{ (proj.difficulty * 3000)|round|int }} · SLO {{ (row.min_success_rate * 100)|round|int }}% · WTP ${{ "%.2f"|format(proj.wtp_per_m) }}/M</span>
+          <span class="T">AA {{ "%.1f"|format(quality_to_aa_intelligence(proj.difficulty)) }} · SLO {{ (row.min_success_rate * 100)|round|int }}% · WTP ${{ "%.2f"|format(proj.wtp_per_m) }}/M</span>
           <span class="T" style="margin-left:auto;">
             {% if row.cloud_blocked %}
               Cloud ref: <strong class="bad">blocked</strong>
@@ -190,11 +196,11 @@
           {% elif row.cap_blocked_for_project %}
             <span class="bad">✗ No deployed model supplies the required capability set {{ row.requires|join(", ") }} — {{ ((row.leaked_pct + row.destroyed_pct))|round(0)|int }}% of demand can't be served on-prem.</span>
           {% elif row.slo_blocked_for_project %}
-            <span class="bad">✗ No deployed model meets the {{ (row.min_success_rate * 100)|round|int }}% SLO at ELO {{ (proj.difficulty * 3000)|round|int }} — lower the SLO, lower the difficulty, or deploy a higher-quality model.</span>
+            <span class="bad">✗ No deployed model meets the {{ (row.min_success_rate * 100)|round|int }}% SLO at AA {{ "%.1f"|format(quality_to_aa_intelligence(proj.difficulty)) }} — lower the SLO, lower the difficulty, or deploy a higher-quality model.</span>
           {% elif row.served > 0 and row.spilled > 0 %}
-            <span class="warn">▲ Add GPUs — capacity saturated at ELO {{ (proj.difficulty * 3000)|round|int }}, {{ (row.spilled_pct)|round(0)|int }}% spills to cloud ({{ row.value_spilled|fmt_money }}/day leaking){% if row.any_suboptimal %}; some served via a stretched model (token tax in effect){% endif %}</span>
+            <span class="warn">▲ Add GPUs — capacity saturated at AA {{ "%.1f"|format(quality_to_aa_intelligence(proj.difficulty)) }}, {{ (row.spilled_pct)|round(0)|int }}% spills to cloud ({{ row.value_spilled|fmt_money }}/day leaking){% if row.any_suboptimal %}; some served via a stretched model (token tax in effect){% endif %}</span>
           {% elif row.destroyed > 0 and row.cloud_blocked %}
-            <span class="bad">✗ No cloud model in the catalog meets this use case's SLO at ELO {{ (proj.difficulty * 3000)|round|int }} — {{ (row.destroyed_pct)|round(0)|int }}% of demand is destroyed (work shelved).</span>
+            <span class="bad">✗ No cloud model in the catalog meets this use case's SLO at AA {{ "%.1f"|format(quality_to_aa_intelligence(proj.difficulty)) }} — {{ (row.destroyed_pct)|round(0)|int }}% of demand is destroyed (work shelved).</span>
           {% elif row.leaked > 0 and not row.has_compatible %}
             <span class="bad">✗ No compatible model deployed → 100% flees to cloud ({{ row.value_leaked|fmt_money }}/day leaking)</span>
           {% elif row.leaked > 0 %}

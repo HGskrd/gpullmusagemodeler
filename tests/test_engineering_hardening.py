@@ -174,6 +174,35 @@ class EngineeringHardeningTests(unittest.TestCase):
         self.assertIn("SameSite=Lax", cookie)
         self.assertIn("HttpOnly", cookie)
 
+    def test_fmt_num_uses_b_unit_above_a_billion(self):
+        # Supply capacities in the tens of billions must not render as "31795.8M".
+        self.assertEqual(app_module.fmt_num(31_795_800_000), "31.8B")
+        self.assertEqual(app_module.fmt_num(1_048_576), "1.0M")
+        self.assertEqual(app_module.fmt_num(131_072), "131.1k")
+        self.assertEqual(app_module.fmt_num(999), "999")
+
+    def test_prefix_panel_reflects_workload_distribution_basis(self):
+        # The model card probes prefill capacity at max(task_il, avg in-dist);
+        # the prefix-reuse panel must quote the same basis, not task_il alone.
+        from calc import avg_dist
+        from data import INPUT_BUCKETS
+        from state import create_default_state
+
+        state = create_default_state()
+        basis = max(state.task_il, avg_dist(state.in_dist, INPUT_BUCKETS))
+        response = self.client.get("/", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn(f"Effective prefill input: {basis:,} / {basis:,} tok", html)
+
+    def test_unserved_sublabel_is_neutral_without_demand(self):
+        self.client.post("/session/reset", data={"tab_id": self.tab_id}, headers=self.headers)
+        response = self.client.get("/", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn("no demand routed yet", html)
+        self.assertNotIn("no compatible option within the price ceiling", html)
+
 
 if __name__ == "__main__":
     unittest.main()

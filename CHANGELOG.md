@@ -2,10 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2026-07-22
+
+### Added
+
+- Expanded the built-in use-case catalog from 10 to 19 scenarios, adding document extraction, enterprise search, contact-center QA, translation, contract review, security investigation, AML/KYC casework, synthetic generation, and catalog enrichment with dated source-backed assumptions.
+
+### Changed
+
+- Recalibrated several use-case token formulas and quality gates, made deep research routable, and separated published workload evidence from low/medium-confidence planner defaults in the use-case UI.
+
+### Fixed
+
+- Formatted billion-scale token counts with a B unit in `fmt_num` (supply capacity showed "31795.8M") and aligned the live-slider JS formatter to the same units and decimals as the server filter.
+- Quoted the prefix-reuse panel's effective prefill length on the same workload basis the planner actually probes and routes on — `max(task input, mean input distribution)` — instead of the raw task input knob, and corrected the caption to state that prefill-sensitive capacity and demand estimates use the knob while pure decode and pareto charts do not.
+- Replaced the static "no compatible option within the price ceiling" unserved sub-label with demand-aware copy ("no demand routed yet" at zero demand).
+
 ## 2026-07-21
 
 ### Added
 
+- Added AMD Instinct MI455X as the selectable Helios accelerator profile; retained the MI400 compatibility key for existing saved plans.
+- Added an AMD Helios 72-GPU system profile, Tenstorrent Blackhole p100a/p150 cards and Galaxy server, and FuriosaAI RNGD. Added MI440X and VSORA Jotunn 8 as reference-only cards pending sufficient published planner specs.
+- Added Poolside Laguna S 2.1, the 118B-A8B MoE flagship released today, using its published Hugging Face configuration (48 layers, hidden 3072, 12 global + 36 sliding-window-512 layers with per-head gating, 1M context) and a conservative quality proxy above Laguna M.1 pending an Artificial Analysis row.
 - Added Poolside Laguna XS 2.1, the latest 33B-A3B MoE release, with its 256K served context window and the XS.2 architecture proxy pending a published configuration; XS.2 remains available for existing scenarios.
 - Added an optional deployment-level corporate cloud policy (`PLANNER_CLOUD_POLICY`) with model allowlists, negotiated input/cached-input/output price overrides, custom gateway presets, fail-fast validation, UI status, and report provenance.
 - Added current July 2026 cloud/API offerings and dated first-party pricing provenance for OpenAI GPT-5.6, Anthropic Claude 5/4.8, Google Gemini 3.x, Mistral, xAI Grok 4.1 Fast, and DeepSeek V4 families.

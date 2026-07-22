@@ -293,13 +293,16 @@
 
   <h3>Quality and token efficiency — why the right model matters</h3>
   <p>
-    Each use case declares a <em>Difficulty</em> (task hardness, 0..100) and a <em>Quality SLO</em>
+    Each use case declares a <em>Difficulty</em> on the Artificial Analysis (AA) Intelligence
+    Index scale and a <em>Quality SLO</em>
     (minimum success rate). The planner inverts
     <code>success_rate = sigmoid(k·(quality − difficulty))</code> to compute a
     <strong>required model quality floor</strong>, shown inline on the card
     (<code>Needs model quality ≥ 0.xx</code>). Any deployed model whose
-    <em>quality</em> falls below that floor is rejected at routing time. Model quality is
-    calibrated from Artificial Analysis' Intelligence Index into the 0.30–0.95 range.
+    <em>quality</em> falls below that floor is rejected at routing time. The planner stores a
+    0.30–0.95 routing transform for compatibility, but displays the invertible AA Index scale
+    (currently 7–60, with headroom for the public frontier) for both model anchors and task difficulty. It does not claim an Elo score:
+    Elo/Bradley–Terry ratings require pairwise comparisons, which this composite benchmark is not.
   </p>
   <p>
     Each model also has a <em>token efficiency</em> multiplier (η). A model that uses ~10M output
@@ -310,8 +313,8 @@
     cheap per token often loses to a compact one with the same headline price.
   </p>
   <p class="note">
-    Both quality (Q) and efficiency (η) are visible on every deployed model card — the two
-    numbers sit right below the weight footprint. Use them to reason about which use case
+    AA Index, confidence-adjusted quality (Q), and efficiency (η) are visible on every deployed
+    model card. Use them to reason about which use case
     will route where before running the market.
   </p>
 
@@ -394,8 +397,10 @@
       exceeds this, the use case prefers cloud; if cloud also exceeds it, the work is destroyed.
       Effective $/M scales only the output side by the routed model's token_efficiency, so verbose
       models cost more without pretending the fixed prompt grew too.</dd>
-    <dt>Difficulty</dt><dd>Task difficulty ∈ [0, 1], paired with each model's benchmark-anchored
-      <em>quality</em> via <code>success_rate(quality, difficulty)</code> to decide eligibility.</dd>
+    <dt>Difficulty</dt><dd>Calibration input displayed on the AA Intelligence Index scale and
+      converted to the internal quality axis. It is paired with each model's benchmark-anchored
+      <em>quality</em> via <code>success_rate(quality, difficulty)</code> to decide eligibility;
+      it is not an Elo rating or a claim that the benchmark directly measures your workload.</dd>
     <dt>Quality SLO</dt><dd>Floor on <code>success_rate</code>. Candidate models below this are
       rejected. The card derives a <em>Needs model quality ≥ q</em> line inline — invert
       <code>sigmoid(k·(q − difficulty)) = slo</code> to get the minimum eligible quality.</dd>

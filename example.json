@@ -2,7 +2,7 @@
   "type": "gpullm-use-case-library",
   "version": 1,
   "_meta": {
-    "description": "Default catalog of corporate low-AI-penetration use cases, grounded in 2025-2026 enterprise adoption data (McKinsey State of AI 2025, Menlo State of AI in Healthcare 2025, Wolters Kluwer Future Ready Lawyer 2026, FTI/Relativity General Counsel Report 2026, Conning AI in Insurance 2025, Roots State of AI Adoption in Insurance 2025, Wharton-GBK 2025, Deloitte State of AI 2026). Difficulty maps to ~3000 ELO max. Token multipliers come from realistic per-unit token math (input+output, including any retrieval context). WTP is gross willingness-to-pay per million tokens, anchored to value of professional time displaced.",
+    "description": "Default catalog of corporate low-AI-penetration use cases, grounded in 2025-2026 enterprise adoption data (McKinsey State of AI 2025, Menlo State of AI in Healthcare 2025, Wolters Kluwer Future Ready Lawyer 2026, FTI/Relativity General Counsel Report 2026, Conning AI in Insurance 2025, Roots State of AI Adoption in Insurance 2025, Wharton-GBK 2025, Deloitte State of AI 2026). Difficulty is displayed on the same Artificial Analysis Intelligence Index scale used for model anchors; it is a calibration input, not an Elo rating. Token multipliers come from realistic per-unit token math (input+output, including any retrieval context). WTP is gross willingness-to-pay per million tokens, anchored to value of professional time displaced.",
     "last_updated": "2026-05",
     "currency": "USD"
   },

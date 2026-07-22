@@ -119,19 +119,19 @@
     </div>
     <div class="T">Equivalent demand: {{ preset.tokens_day|fmt_num }} tokens/day</div>
 
-    <div class="pc-row" title="Task hardness on a 0-3000 ELO scale.">
+    <div class="pc-row" title="Task difficulty on the same 7–60 Artificial Analysis Intelligence Index scale used to anchor model capability. It is a calibration input, not an Elo rating.">
       <span class="T">Difficulty</span>
       <span class="val">
         <input type="text" class="val-input" inputmode="numeric"
-               aria-label="Difficulty ELO for {{ preset.name }}"
+               aria-label="Artificial Analysis difficulty index for {{ preset.name }}"
                id="def-diff-{{ key }}"
-               value="{{ (preset.difficulty * 3000)|round|int }}"
+               value="{{ '%.1f'|format(quality_to_aa_intelligence(preset.difficulty)) }}"
                name="value"
                hx-post="/use-cases/definition/set"
                hx-target="#useCaseLibrary"
                hx-trigger="change, keyup[key=='Enter']"
-               hx-vals='{"key":"{{ key }}","field":"difficulty_elo"}' />
-        <span class="T">ELO</span>
+               hx-vals='{"key":"{{ key }}","field":"difficulty_aa_index"}' />
+        <span class="T">AA index</span>
       </span>
     </div>
 
@@ -284,6 +284,11 @@
 
 <section class="docs-section panel" id="catalog">
   <h2>Catalog At A Glance</h2>
+  <p class="note">
+    These are illustrative large-enterprise scenarios, not industry medians. Sources support the workload shape,
+    adoption signal, or value anchor; token multipliers, starting volume, difficulty, SLO, WTP, and latent demand
+    remain planner assumptions to replace with telemetry. Research checked {{ USE_CASE_RESEARCH_CAPTURED_AT }}.
+  </p>
   <table class="catalog">
     <thead>
       <tr>
@@ -305,7 +310,7 @@
         <td><a href="#doc-{{ preset.key }}">{{ preset.name }}</a></td>
         <td class="num">{{ format_scale_value(preset.scale_value, scale_kind) }} {{ scale_kind.unit }}</td>
         <td>{{ preset.get("scale_hint", "Set independently for each organization.") }}</td>
-        <td class="num">ELO {{ (preset.difficulty * 3000)|round|int }}</td>
+        <td class="num">AA {{ "%.1f"|format(quality_to_aa_intelligence(preset.difficulty)) }}</td>
         <td class="num">{{ "%.0f"|format(preset.min_success_rate * 100) }}%</td>
         <td class="num">${{ "%.2f"|format(preset.wtp_per_m) }}/M</td>
         <td class="num">{{ preset.in_pre }} / {{ preset.out_pre }}</td>
@@ -323,7 +328,7 @@
 </section>
 
 {% for preset in USE_CASE_DEFS %}
-{% set detail = use_case_details.get(preset.key, {}) %}
+{% set detail = use_case_detail_for(preset) %}
 {% set requires = preset.get("requires", ()) %}
 {% set q_floor = required_quality(preset.difficulty, preset.min_success_rate, quality_floor=preset.quality_floor) %}
 {% set in_preset = DIST_PRESETS[preset.in_pre] %}
@@ -353,7 +358,7 @@
     </div>
     <div class="metric">
       <div class="label">Difficulty</div>
-      <div class="value">ELO {{ (preset.difficulty * 3000)|round|int }}</div>
+      <div class="value">AA {{ "%.1f"|format(quality_to_aa_intelligence(preset.difficulty)) }}</div>
     </div>
     <div class="metric">
       <div class="label">Quality SLO</div>
@@ -376,6 +381,20 @@
     Scale driver: {{ preset.get("scale_hint", "Set the token volume independently for the organization using this kind.") }}
     Formula: {{ scale_kind.formula }}.
   </p>
+
+  {% if detail.get("assumption") %}
+  <div class="panel" style="margin:8px 0;padding:8px;background:var(--bg0);">
+    <h3 style="margin-top:0;">Evidence &amp; assumptions</h3>
+    <p class="note"><strong>{{ detail.confidence|title }} confidence scenario.</strong> {{ detail.assumption }}</p>
+    <p class="note">
+      Sources:
+      {% for source_id in detail.get("source_ids", ()) %}
+        {% set source = USE_CASE_SOURCES[source_id] %}
+        <a href="{{ source.url }}" target="_blank" rel="noopener noreferrer">{{ source.publisher }} — {{ source.title }}</a>{{ "; " if not loop.last else "." }}
+      {% endfor %}
+    </p>
+  </div>
+  {% endif %}
 
   <h3>Capability gates</h3>
   <div class="chip-row">
@@ -456,6 +475,16 @@
         <li>{{ item }}</li>
         {% else %}
         <li>Defaults define the quality, price, shape, and capability assumptions used by routing.</li>
+        {% endfor %}
+      </ul>
+    </div>
+    <div>
+      <h3>Planner Behavior</h3>
+      <ul>
+        {% for item in detail.routing %}
+        <li>{{ item }}</li>
+        {% else %}
+        <li>Routing depends on the edited quality, price, capability, and capacity gates above.</li>
         {% endfor %}
       </ul>
     </div>

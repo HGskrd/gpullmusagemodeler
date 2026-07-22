@@ -43,6 +43,8 @@ from data import (
     required_quality,
     effective_quality,
     success_rate,
+    aa_intelligence_to_quality,
+    quality_to_aa_intelligence,
 )
 import cloud_policy
 
@@ -129,8 +131,14 @@ from state import (
     set_projection_choice,
     set_projection_pct,
     set_projection_toggle,
+    _normalize_use_case_def,
 )
 from tracking import SnapshotStore
+from use_case_evidence import (
+    USE_CASE_RESEARCH_CAPTURED_AT,
+    USE_CASE_SOURCES,
+    enrich_use_case_details,
+)
 from viewmodels import (
     get_model_info,
     get_model_infos,
@@ -362,8 +370,8 @@ USE_CASE_DETAILS = {
             "Team-wide transcription backfills or daily note generation.",
         ),
         "why": (
-            "Long-document input captures transcript ingestion; long-document output captures useful summaries.",
-            "The long-context gate prevents routing to models that cannot safely hold the source material.",
+            "RAG-shaped input captures a typical one-hour transcript while long-document output allows detailed notes.",
+            "The seed no longer imposes a 128k gate: unusually long meetings should be chunked or modeled separately.",
             "Batch eligibility reflects the fact that most summaries can be delivered minutes later or overnight.",
         ),
         "routing": (
@@ -404,15 +412,15 @@ USE_CASE_DETAILS = {
         ),
     },
     "longctx": {
-        "summary": "Analytical workflows over very large context windows, where the prompt itself is the expensive object.",
+        "summary": "Multi-pass analytical workflows over very large source packs, where repeated long prompts are the expensive object.",
         "examples": (
             "Log and trace analysis, legal discovery, financial filings, multi-document comparison, technical due diligence.",
             "Large source packs where retrieval is not enough and the model must reason across the full context.",
         ),
         "why": (
-            "High difficulty and long-context gating force routing toward models that can both ingest and reason over large inputs.",
+            "The seeded difficulty and long-context gates route toward models that can both ingest and reason over large inputs.",
             "Long input and output shapes stress memory, prefill, and sustained decode capacity.",
-            "The smaller base demand reflects a high-value workflow that is costly enough to stay constrained.",
+            "Two million tokens represents roughly sixteen passes, not a single impossible context window.",
         ),
         "routing": (
             "KV capacity can dominate here; a model that is cheap per token but memory-starved may still be the wrong fit.",
@@ -426,9 +434,9 @@ USE_CASE_DETAILS = {
             "Agent loops that combine tools, retrieval, reasoning, and long-form synthesis.",
         ),
         "why": (
-            "The highest difficulty and SLO reserve this workload for models with strong reasoning behavior.",
+            "The seeded difficulty, quality floor, and SLO reserve this workload for frontier reasoning models while leaving a viable route.",
             "Tool and reasoning requirements encode the fact that this is an agent workflow, not plain autocomplete.",
-            "RAG input plus long-document output models substantial source context and a detailed final deliverable.",
+            "The 500k-token budget represents many RAG-shaped calls plus a detailed final deliverable.",
         ),
         "routing": (
             "Low volume but high WTP means this can justify expensive frontier or large open-weight models.",
@@ -436,6 +444,17 @@ USE_CASE_DETAILS = {
         ),
     },
 }
+
+USE_CASE_DETAILS = enrich_use_case_details(USE_CASE_DETAILS)
+
+
+def use_case_detail_for(definition: dict) -> dict:
+    """Return evidence only while a definition still matches its built-in baseline."""
+    key = str(definition.get("key", ""))
+    baseline = next((item for item in PROJECT_PRESETS if item["key"] == key), None)
+    if baseline is None or definition != _normalize_use_case_def(baseline):
+        return {}
+    return USE_CASE_DETAILS.get(key, {})
 
 
 def _new_id() -> str:
@@ -591,6 +610,9 @@ def _template_context() -> dict:
         "PRECISION_LABELS": PRECISION_LABELS,
         "PRECISION_DESCRIPTIONS": PRECISION_DESCRIPTIONS,
         "AUTO_MODEL_STRATEGIES": AUTO_MODEL_STRATEGIES,
+        "USE_CASE_RESEARCH_CAPTURED_AT": USE_CASE_RESEARCH_CAPTURED_AT,
+        "USE_CASE_SOURCES": USE_CASE_SOURCES,
+        "use_case_detail_for": use_case_detail_for,
         "models_by_category": models_by_category,
         "gpu_cards_by_vendor": gpu_cards_by_vendor,
         "gpus_by_vendor": gpus_by_vendor,
@@ -606,6 +628,7 @@ def _template_context() -> dict:
         "required_quality": required_quality,
         "effective_quality": effective_quality,
         "success_rate": success_rate,
+        "quality_to_aa_intelligence": quality_to_aa_intelligence,
         "project_scale_config": project_scale_config,
         "format_scale_value": format_scale_value,
         "scale_decimals": scale_decimals,
@@ -653,7 +676,7 @@ def _fmt_pct(value: float, decimals: int = 0) -> str:
 
 def _projection_diagnostic(row: dict) -> str:
     proj = row["project"]
-    elo = round(float(proj.difficulty) * 3000)
+    difficulty_index = quality_to_aa_intelligence(float(proj.difficulty))
     slo = round(float(row["min_success_rate"]) * 100)
     if row["served_pct"] > 99.5:
         msg = "Fully served internally"
@@ -664,9 +687,9 @@ def _projection_diagnostic(row: dict) -> str:
         caps = ", ".join(row["requires"]) or "required capabilities"
         return f"No deployed model supplies {caps}; {round(row['leaked_pct'] + row['destroyed_pct'])}% cannot be served on-prem."
     if row["slo_blocked_for_project"]:
-        return f"No deployed model meets the {slo}% SLO at ELO {elo}."
+        return f"No deployed model meets the {slo}% SLO at difficulty index {difficulty_index:.1f}."
     if row["served"] > 0 and row["spilled"] > 0:
-        msg = f"Add GPUs; capacity saturated at ELO {elo}, {round(row['spilled_pct'])}% spills to cloud ({fmt_money(row['value_spilled'])}/day leaking)"
+        msg = f"Add GPUs; capacity saturated at difficulty index {difficulty_index:.1f}, {round(row['spilled_pct'])}% spills to cloud ({fmt_money(row['value_spilled'])}/day leaking)"
         if row["any_suboptimal"]:
             msg += "; some served via a stretched model"
         return msg
@@ -797,7 +820,7 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
                 f"{_fmt_pct(row['destroyed_pct'])} destroyed"
             )
             lines.append(
-                f"- {proj.name}: ELO {round(proj.difficulty * 3000)}, SLO {round(row['min_success_rate'] * 100)}%, "
+                f"- {proj.name}: AA difficulty index {quality_to_aa_intelligence(proj.difficulty):.1f}, SLO {round(row['min_success_rate'] * 100)}%, "
                 f"floor Q {row.get('quality_floor', 0.0):.2f}, "
                 f"WTP ${proj.wtp_per_m:.2f}/M; {cloud}; {fate}."
             )
@@ -936,7 +959,9 @@ def use_case_definition_set():
             set_use_case_def_field(s, key, "min_success_rate", float(raw_value or 0.0) / 100.0)
         elif field_name == "quality_floor_pct":
             set_use_case_def_field(s, key, "quality_floor", float(raw_value or 0.0) / 100.0)
-        elif field_name == "difficulty_elo":
+        elif field_name == "difficulty_aa_index":
+            set_use_case_def_field(s, key, "difficulty", aa_intelligence_to_quality(float(raw_value or 0.0)))
+        elif field_name == "difficulty_elo":  # Legacy form payloads from pre-AA-index UI.
             set_use_case_def_field(s, key, "difficulty", max(0.0, min(1.0, float(raw_value or 0.0) / 3000.0)))
         elif field_name == "scale_value":
             set_use_case_def_field(s, key, "scale_value", float(raw_value or 0.0))
@@ -1485,8 +1510,10 @@ def project_set():
         elif field_name == "difficulty_pct":
             # legacy: slider gave whole-number percent; persist as 0..1 fraction
             set_project_field(s, uid, "difficulty", float(raw_value or 0.0) / 100.0)
-        elif field_name == "difficulty_elo":
-            # slider/input gives ELO on a 0..3000 axis; persist as 0..1 fraction
+        elif field_name == "difficulty_aa_index":
+            # UI uses the same published source scale as the model anchors.
+            set_project_field(s, uid, "difficulty", aa_intelligence_to_quality(float(raw_value or 0.0)))
+        elif field_name == "difficulty_elo":  # Legacy form payloads from pre-AA-index UI.
             elo = float(raw_value or 0.0)
             set_project_field(s, uid, "difficulty", max(0.0, min(1.0, elo / 3000.0)))
         elif field_name == "capability":
@@ -1824,6 +1851,8 @@ def admin_logout():
 
 @app.template_filter("fmt_num")
 def fmt_num(n):
+    if n >= 1e9:
+        return f"{n / 1e9:.1f}B"
     if n >= 1e6:
         return f"{n / 1e6:.1f}M"
     if n >= 1e3:

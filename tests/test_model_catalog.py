@@ -35,6 +35,7 @@ from data import (
     PREVIEW_ASSUMPTIONS,
     PREVIEW_ASSUMPTIONS_CAPTURED_AT,
     aa_intelligence_to_quality,
+    quality_to_aa_intelligence,
     aa_output_tokens_to_efficiency,
     cloud_models_missing_quality_anchors,
     get_quantization_profile,
@@ -43,6 +44,20 @@ from data import (
 
 
 class ModelCatalogTests(unittest.TestCase):
+    def test_aa_quality_transform_round_trips_and_does_not_flatten_catalog_scores(self):
+        for score in (7.0, 32.0, 51.0, 54.0, 60.0):
+            with self.subTest(score=score):
+                self.assertAlmostEqual(
+                    quality_to_aa_intelligence(aa_intelligence_to_quality(score)), score
+                )
+
+        # A 54-point anchor exists in the catalog and must remain distinguishable
+        # from the former 51-point ceiling.
+        self.assertGreater(
+            MODELS["mimo-v2.5-pro"].quality,
+            MODELS["glm51"].quality,
+        )
+
     def test_cloud_pricing_snapshot_uses_current_july_2026_families(self):
         expected = {
             "gpt-5.6-sol": ("GPT-5.6 Sol", 5.00, 0.50, 30.00),
@@ -321,6 +336,31 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertAlmostEqual(model.quality, aa_intelligence_to_quality(37.0))
         self.assertAlmostEqual(model.token_efficiency, aa_output_tokens_to_efficiency(100.0))
         self.assertAlmostEqual(model.quality_confidence, 0.45)
+
+    def test_laguna_s_21_catalog_entry_uses_public_poolside_specs(self):
+        model = MODELS["laguna-s-2-1"]
+
+        self.assertEqual(model.name, "Laguna S 2.1 118B-A8B")
+        self.assertEqual(model.cat, "Poolside")
+        self.assertEqual(model.size_label, "118B-A8B")
+        self.assertTrue(model.is_moe)
+        self.assertEqual(model.total_params, 118e9)
+        self.assertEqual(model.active_params, 8e9)
+        self.assertEqual(model.max_context_tokens, 1024 * 1024)
+        self.assertEqual(model.layers, 48)
+        self.assertEqual(model.num_heads, 48)
+        self.assertEqual(model.kv_heads, 8)
+        self.assertEqual(model.head_dim, 128)
+        self.assertEqual(model.hidden_size, 3072)
+        self.assertEqual(model.local_attention_layers, 36)
+        self.assertEqual(model.local_attention_window, 512)
+        self.assertEqual(model.local_attention_heads, 72)
+        self.assertNotIn("proxy", model.attention_label)
+        self.assertTrue({"tools", "ctx_128k", "reasoning"} <= model.capabilities)
+        self.assertNotIn("images", model.capabilities)
+        self.assertAlmostEqual(model.quality, aa_intelligence_to_quality(45.0))
+        self.assertAlmostEqual(model.token_efficiency, aa_output_tokens_to_efficiency(95.0))
+        self.assertAlmostEqual(model.quality_confidence, 0.5)
 
     def test_gemma4_12b_unified_catalog_entry_uses_encoder_free_specs(self):
         model = MODELS["g12"]

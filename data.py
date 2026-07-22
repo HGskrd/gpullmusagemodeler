@@ -16,6 +16,8 @@ VENDOR_LABELS = {
     "amd": "AMD",
     "intel": "Intel",
     "apple": "Apple",
+    "tenstorrent": "Tenstorrent",
+    "furiosa": "FuriosaAI",
 }
 
 
@@ -465,7 +467,10 @@ class Model:
 
 
 AA_INTELLIGENCE_INDEX_MIN = 7.0
-AA_INTELLIGENCE_INDEX_MAX = 51.0
+# 60 provides a dated headroom ceiling: AA's public leaderboard reports a 59.9
+# top score. Keeping this above the current catalog avoids silently tying models
+# when a new frontier score arrives.
+AA_INTELLIGENCE_INDEX_MAX = 60.0
 AA_QUALITY_MIN = 0.30
 AA_QUALITY_MAX = 0.95
 AA_TOKEN_EFFICIENCY_REF_OUTPUT_TOKENS_M = 10.0
@@ -477,6 +482,19 @@ def aa_intelligence_to_quality(score: float) -> float:
     span = max(AA_INTELLIGENCE_INDEX_MAX - AA_INTELLIGENCE_INDEX_MIN, 1.0)
     t = (clipped - AA_INTELLIGENCE_INDEX_MIN) / span
     return AA_QUALITY_MIN + (AA_QUALITY_MAX - AA_QUALITY_MIN) * t
+
+
+def quality_to_aa_intelligence(quality: float) -> float:
+    """Return the AA Intelligence Index equivalent of the internal quality axis.
+
+    ``quality`` remains the routing representation for backward-compatible saved
+    scenarios; the UI uses this inverse to show the source-scale difficulty rather
+    than presenting an unrelated number as an Elo rating.
+    """
+    clipped = min(max(float(quality), AA_QUALITY_MIN), AA_QUALITY_MAX)
+    span = max(AA_QUALITY_MAX - AA_QUALITY_MIN, 1e-9)
+    t = (clipped - AA_QUALITY_MIN) / span
+    return AA_INTELLIGENCE_INDEX_MIN + (AA_INTELLIGENCE_INDEX_MAX - AA_INTELLIGENCE_INDEX_MIN) * t
 
 
 def aa_output_tokens_to_efficiency(output_tokens_m: float) -> float:
@@ -539,9 +557,19 @@ GPUS: dict[str, GPU] = {
     "MI325X": GPU("MI325X", "MI325X 256GB", "amd", 256e9, 6e12, 1307e12, 2615e12, 896e9, 8),
     "MI350X": GPU("MI350X", "MI350X 288GB", "amd", 288e9, 8e12, 2010e12, 4020e12, 1075.2e9, 8),
     "MI355X": GPU("MI355X", "MI355X 288GB", "amd", 288e9, 8e12, 2512e12, 5037e12, 1075.2e9, 8),
-    "MI400": GPU("MI400", "MI450X (MI400 Series) Preview 432GB", "amd", 432e9, 19.6e12, 10e15, 20e15, 260e12 / 72.0, 72),
+    # AMD now identifies the Helios accelerator as MI455X.  Keep MI400 below as
+    # a hidden compatibility key so previously saved planner states still load.
+    "MI455X": GPU("MI455X", "Instinct MI455X Preview 432GB", "amd", 432e9, 19.6e12, 10e15, 20e15, 260e12 / 72.0, 72),
+    "HELIOS_MI455X": GPU("HELIOS_MI455X", "AMD Helios Preview (72× MI455X) 432GB/GPU", "amd", 432e9, 19.6e12, 10e15, 20e15, 260e12 / 72.0, 72, min_count=72, count_multiple=72),
+    "MI400": GPU("MI400", "MI400 Series compatibility profile (MI455X) 432GB", "amd", 432e9, 19.6e12, 10e15, 20e15, 260e12 / 72.0, 72),
     "RadeonProW7900": GPU("RadeonProW7900", "Radeon PRO W7900 48GB", "amd", 48e9, 864e9, 123e12, 123e12, 64e9, 1),
     "RadeonAIProR9700": GPU("RadeonAIProR9700", "Radeon AI PRO R9700 32GB", "amd", 32e9, 640e9, 96e12, 96e12, 128e9, 1),
+    # Tenstorrent publishes BLOCKFP8, rather than IEEE FP8, peak performance.
+    # BF16 is a conservative half-rate planner proxy until a native BF16 peak is published.
+    "TT_BLACKHOLE_P100A": GPU("TT_BLACKHOLE_P100A", "Tenstorrent Blackhole p100a 28GB", "tenstorrent", 28e9, 448e9, 332e12, 664e12, 64e9, 1),
+    "TT_BLACKHOLE_P150": GPU("TT_BLACKHOLE_P150", "Tenstorrent Blackhole p150 32GB", "tenstorrent", 32e9, 512e9, 332e12, 664e12, 800e9, 8),
+    "TT_GALAXY_BLACKHOLE": GPU("TT_GALAXY_BLACKHOLE", "Tenstorrent Galaxy Blackhole (32×) 32GB/ASIC", "tenstorrent", 32e9, 512e9, 359.375e12, 718.75e12, 1e12, 32, min_count=32, count_multiple=32),
+    "FURIOSA_RNGD": GPU("FURIOSA_RNGD", "FuriosaAI RNGD 48GB", "furiosa", 48e9, 1.5e12, 256e12, 512e12, 64e9, 1),
     # Intel does not publish dense BF16/FP8 peak figures for these public pages, so the planner
     # uses transparent proxy rooflines derived from the nearest available official disclosures.
     "Gaudi2": GPU("Gaudi2", "Gaudi 2 96GB", "intel", 96e9, 2.45e12, 432e12, 865e12, 300e9, 8),
@@ -575,6 +603,8 @@ GPU_FP4_FLOPS = {
     "JETSON_AGX_THOR": 1035e12,
     "MI350X": 9.2e15,
     "MI355X": 10.1e15,
+    "MI455X": 40e15,
+    "HELIOS_MI455X": 40e15,
     "MI400": 40e15,
 }
 for _k, _fp4 in GPU_FP4_FLOPS.items():
@@ -589,8 +619,9 @@ GPU_TDP_WATTS = {
     "RTX5090": 575, "RTX4090": 450, "RTX3090": 350, "DGX_SPARK": 140, "GB200": 1200, "B200": 1000, "B300": 1400,
     "GB300": 1400, "DGX_STATION_GB300": 1600,
     "A40": 300, "A30": 165, "A6000": 300, "A4000": 140, "A2000_MOBILE": 95, "T4": 70, "V100": 300, "JETSON_AGX_THOR": 130,
-    "MI250X": 560, "MI300X": 750, "MI325X": 1000, "MI350X": 1000, "MI355X": 1400, "MI400": 1500,
+    "MI250X": 560, "MI300X": 750, "MI325X": 1000, "MI350X": 1000, "MI355X": 1400, "MI455X": 1500, "HELIOS_MI455X": 1500, "MI400": 1500,
     "RadeonProW7900": 295, "RadeonAIProR9700": 300,
+    "TT_BLACKHOLE_P100A": 300, "TT_BLACKHOLE_P150": 300, "TT_GALAXY_BLACKHOLE": 350, "FURIOSA_RNGD": 180,
     "Gaudi2": 600, "Gaudi3": 900, "CrescentIsland": 300, "ArcProB70": 230, "ArcProB60": 200, "ArcProB50": 70,
     "MAC_MINI_M4_PRO": 140, "MAC_STUDIO_M4_MAX": 270, "MAC_STUDIO_M3_ULTRA": 480,
 }
@@ -613,11 +644,38 @@ PREVIEW_ASSUMPTIONS: dict[str, dict[str, object]] = {
             "board power is omitted until NVIDIA publishes a per-GPU figure",
         ),
     },
-    "gpu:MI400": {
-        "status": "MI450X/MI455X Helios volume deployments expected in 2H 2026",
+    "gpu:MI455X": {
+        "status": "MI455X Helios volume deployments expected in 2H 2026",
         "source": "https://www.amd.com/en/products/rackscale-solutions/helios.html",
         "assumptions": (
-            "MI400 compatibility key represents AMD's named MI450X/MI455X generation",
+            "MI455X is the named accelerator in AMD's 72-GPU Helios rack",
+            "10 PF BF16, 20 PF FP8, 40 PF FP4, interconnect, and 1.5 kW are planner projections",
+            "432 GB HBM4 and 19.6 TB/s are public AMD specifications",
+        ),
+    },
+    "gpu:HELIOS_MI455X": {
+        "status": "AMD reference design; OEM volume deployments expected in 2H 2026",
+        "source": "https://www.amd.com/en/products/rackscale-solutions/helios.html",
+        "assumptions": (
+            "the selectable system represents the complete 72-GPU Helios rack with Venice CPUs and Vulcano networking",
+            "10 PF BF16, 20 PF FP8, 40 PF FP4 per GPU and 1.5 kW per GPU are planner projections",
+            "AMD publishes 31 TB HBM4, 2.9 EF FP4, 1.4 EF FP8, 260 TB/s scale-up, and 43 TB/s scale-out at rack level",
+        ),
+    },
+    "gpu:TT_GALAXY_BLACKHOLE": {
+        "status": "commercial 32-ASIC, 6U air-cooled server",
+        "source": "https://tenstorrent.com/hardware/galaxy",
+        "assumptions": (
+            "BLOCKFP8 peak is used for the planner FP8 path; it is not an IEEE FP8 equivalence claim",
+            "BF16 uses a conservative half-rate proxy because Tenstorrent does not publish a BF16 peak",
+            "per-ASIC fabric is derived from the published ten 400GbE links per ASIC",
+        ),
+    },
+    "gpu:MI400": {
+        "status": "legacy compatibility key for the MI455X Helios profile",
+        "source": "https://www.amd.com/en/products/rackscale-solutions/helios.html",
+        "assumptions": (
+            "existing saved plans using MI400 retain the MI455X hardware assumptions",
             "10 PF BF16, 20 PF FP8, 40 PF FP4, interconnect, and 1.5 kW are planner projections",
             "432 GB HBM4 and 19.6 TB/s are public AMD specifications",
         ),
@@ -932,13 +990,22 @@ GPU_CARDS: list[GPUCard] = [
     ),
     # ── AMD: newest generation first ────────────────────────────────────────
     GPUCard(
-        "MI450X / MI400 series",
+        "AMD Helios (72× MI455X + Venice)",
+        "AMD",
+        "CDNA 5 rackscale reference design (preliminary)",
+        "31 TB HBM4 total · 432 GB / GPU",
+        "72-GPU ORW rack with EPYC Venice, UALink and Pensando Vulcano networking; OEM volume deployments expected in 2H 2026",
+        (GPUPlannerOption("Add Preview", "HELIOS_MI455X"),),
+        "System-only profile: 2.9 EF FP4, 1.4 EF FP8, 260 TB/s scale-up, and 43 TB/s scale-out. The count is constrained to one or more 72-GPU racks.",
+    ),
+    GPUCard(
+        "Instinct MI455X",
         "AMD",
         "CDNA next generation (preliminary)",
         "432 GB HBM4, 19.6 TB/s",
-        "MI450X/MI455X Helios volume deployments expected in 2H 2026",
-        (GPUPlannerOption("Add Preview", "MI400"),),
-        "Compatibility key MI400 now tracks AMD's named MI450X/MI455X Helios generation. Memory and bandwidth are public; planner compute, interconnect, and power remain preliminary assumptions.",
+        "Helios volume deployments expected in 2H 2026",
+        (GPUPlannerOption("Add Preview", "MI455X"),),
+        "AMD names MI455X as the Helios accelerator. Memory and bandwidth are public; planner compute, interconnect, and power remain preliminary assumptions. The MI400 key is retained only for saved-plan compatibility.",
     ),
     GPUCard(
         "MI355X",
@@ -1000,6 +1067,61 @@ GPU_CARDS: list[GPUCard] = [
         "Large-memory workstation graphics, visualization, and local inference",
         (GPUPlannerOption("Add", "RadeonProW7900"),),
         "Uses AMD's public 48GB profile and FP16 matrix throughput as the planner proxy.",
+    ),
+    GPUCard(
+        "MI440X",
+        "AMD",
+        "MI400 series (announced)",
+        "8-GPU enterprise system; memory specification pending",
+        "Enterprise AI training, fine-tuning, and inference",
+        (),
+        "Reference-only: AMD has announced the compact 8-GPU system but has not published planner-grade memory, bandwidth, precision-throughput, or power specifications.",
+    ),
+    # ── Specialist inference accelerators ──────────────────────────────────
+    GPUCard(
+        "Tenstorrent Galaxy Blackhole",
+        "Tenstorrent",
+        "Blackhole Tensix",
+        "32 ASICs · 1 TB GDDR6 · 16 TB/s",
+        "6U air-cooled server for scalable LLM inference and training",
+        (GPUPlannerOption("Add", "TT_GALAXY_BLACKHOLE"),),
+        "32-ASIC system profile constrained to full Galaxy servers. Uses published 23 PFLOPS BLOCKFP8 system throughput; BF16 is a conservative proxy.",
+    ),
+    GPUCard(
+        "Tenstorrent Blackhole p150",
+        "Tenstorrent",
+        "Blackhole Tensix",
+        "32 GB GDDR6 · 512 GB/s",
+        "Single- or multi-card workstation/server inference",
+        (GPUPlannerOption("Add", "TT_BLACKHOLE_P150"),),
+        "300W card with four 800Gbps passive QSFP-DD ports for direct Blackhole connections. Published peak is BLOCKFP8; BF16 is a conservative proxy.",
+    ),
+    GPUCard(
+        "Tenstorrent Blackhole p100a",
+        "Tenstorrent",
+        "Blackhole Tensix",
+        "28 GB GDDR6 · 448 GB/s",
+        "Single-card workstation evaluation and local inference",
+        (GPUPlannerOption("Add", "TT_BLACKHOLE_P100A"),),
+        "300W actively cooled PCIe Gen5 card. It lacks the p150's direct QSFP-DD fabric.",
+    ),
+    GPUCard(
+        "FuriosaAI RNGD",
+        "FuriosaAI",
+        "Tensor Contraction Processor",
+        "48 GB HBM3 · 1.5 TB/s",
+        "Efficient LLM and multimodal inference; commercially deployed PCIe accelerator",
+        (GPUPlannerOption("Add", "FURIOSA_RNGD"),),
+        "PCIe Gen5 x16, passive dual-slot 180W card. No native FP4 peak is claimed; all listed tensor rooflines are vendor-published.",
+    ),
+    GPUCard(
+        "VSORA Jotunn 8",
+        "VSORA",
+        "Data-center inference accelerator (announced)",
+        "Memory and throughput specifications pending",
+        "LLM inference accelerator",
+        (),
+        "Reference-only: VSORA identifies Jotunn 8 as a data-center inference chip but does not publish the memory, bandwidth, precision, power, or host-interface figures required by this planner.",
     ),
     # ── Intel ────────────────────────────────────────────────────────────────
     GPUCard(
@@ -2901,6 +3023,10 @@ MODELS: dict[str, Model] = {
     # confirms 33B total / 3B activated parameters and 256K served context; detailed
     # layer dimensions remain unpublished, so retain the documented family proxy.
     "laguna-xs-2-1": Model("laguna-xs-2-1", "Laguna XS 2.1 33B-A3B", "Poolside", "#0891B2", 33e9, 3e9, True, 40, 48, 8, 128, False, hidden_dim=2048, local_attention_layers=30, local_attention_window=512, local_attention_heads=64, attention_label="10 global + 30 SWA 512 (XS.2 architecture proxy)", max_context_tokens=256 * 1024),
+    # Laguna S 2.1 ships with a published config (poolside/Laguna-S-2.1): 48 layers,
+    # hidden 3072, 12 full-attention layers at 48 heads and 36 sliding-window (512)
+    # layers at 72 heads with per-head gating, 8 KV heads, 1M context.
+    "laguna-s-2-1": Model("laguna-s-2-1", "Laguna S 2.1 118B-A8B", "Poolside", "#06B6D4", 118e9, 8e9, True, 48, 48, 8, 128, False, hidden_dim=3072, local_attention_layers=36, local_attention_window=512, local_attention_heads=72, attention_label="12 global + 36 SWA 512 (per-head gating)", max_context_tokens=1024 * 1024),
 
     "mimo-v2.5-pro": Model(
         "mimo-v2.5-pro",
@@ -3222,6 +3348,7 @@ _REASONING_MODELS = (
     "minimax25", "minimax27",
     "nem3s", "nem3n", "nem3no",
     "zaya1-8b", "zaya1-74b-preview", "laguna-m1", "laguna-xs2", "laguna-xs-2-1",
+    "laguna-s-2-1",
     "mimo-v2.5-pro", "mimo-v2.5",
 )
 for _k in _VISION_MODELS:
@@ -3315,6 +3442,7 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "laguna-m1": (44.0, 95.0),       # Proxy from Qwen 3.5 397B-A17B adjusted against Poolside coding-agent benchmarks; no AA row found.
     "laguna-xs2": (37.0, 100.0),     # Proxy from Qwen 3.5 35B-A3B; no AA page for Laguna XS.2 found.
     "laguna-xs-2-1": (37.0, 100.0),  # Same Qwen 3.5 35B-A3B proxy pending a directly comparable AA row.
+    "laguna-s-2-1": (45.0, 95.0),    # Proxy above Laguna M.1 per Poolside coding-agent claims (40.4% DeepSWE); released 2026-07-21, no AA row yet.
     "mimo-v2.5-pro": (54.0, 92.0),
     "mimo-v2.5": (49.0, 74.0),
     "cr13": (12.0, 8.3),   # Proxy from Gemma 4 E2B (Non-reasoning); no AA page for Croissant 1.3B found.
@@ -3358,6 +3486,7 @@ AA_MODEL_QUALITY_CONFIDENCE: dict[str, float] = {
     "laguna-m1": 0.55,
     "laguna-xs2": 0.45,
     "laguna-xs-2-1": 0.45,
+    "laguna-s-2-1": 0.5,
     "cr13": 0.25,
 }
 for _k, _confidence in AA_MODEL_QUALITY_CONFIDENCE.items():
@@ -3880,14 +4009,23 @@ SCALE_MODELS = {
 PROJECT_PRESETS = [
     {"key": "classify",       "name": "Mass classification",        "difficulty": 0.10, "tokens_day": 3.0e9, "scale_value": 5_000_000, "scale_kind": {"model": "linear", "label": "Records processed", "unit": "records/day", "token_multiplier": 600, "min": 0, "max": 10_000_000, "step": 10_000, "formula": "records/day x average tokens per record"}, "wtp_per_m": 0.25, "requires": (),                    "min_success_rate": 0.80, "quality_floor": 0.35, "batch_eligible": True, "latent_jobs_day": 8.0e9, "unlock_price_per_m": 0.05, "in_pre": "Classify", "out_pre": "Classify", "scale_hint": "Records/day x tokens per record; mostly batchable queues."},
     {"key": "summarize",      "name": "Doc summarization",          "difficulty": 0.25, "tokens_day": 1.5e9, "scale_value": 60_000, "scale_kind": {"model": "linear", "label": "Documents summarized", "unit": "documents/day", "token_multiplier": 25_000, "min": 0, "max": 250_000, "step": 100, "formula": "documents/day x average document+summary tokens"}, "wtp_per_m": 0.90, "requires": ("ctx_128k",),         "min_success_rate": 0.85, "quality_floor": 0.50, "batch_eligible": True, "latent_jobs_day": 3.0e9, "unlock_price_per_m": 0.20, "in_pre": "Long doc", "out_pre": "Long doc", "scale_hint": "Documents/day x document length; periodic backfills can dominate."},
-    {"key": "chatbot",        "name": "Customer chatbot",           "difficulty": 0.30, "tokens_day": 2.0e9, "scale_value": 80_000, "scale_kind": {"model": "linear", "label": "Support tickets", "unit": "tickets/day", "token_multiplier": 25_000, "min": 0, "max": 250_000, "step": 100, "formula": "tickets/day x turns x tokens per turn"}, "wtp_per_m": 1.20, "requires": ("tools",),            "min_success_rate": 0.95, "quality_floor": 0.60, "in_pre": "Chat",     "out_pre": "Chat",     "scale_hint": "Users or tickets/day x turns x tokens per turn; interactive peak matters."},
-    {"key": "email_corrector","name": "Email correction copilot",   "difficulty": 0.18, "tokens_day": 250e6, "scale_value": 5_000, "scale_kind": {"model": "linear", "label": "Enabled headcount", "unit": "employees", "token_multiplier": 50_000, "min": 0, "max": 25_000, "step": 10, "formula": "employees x messages/day x correction tokens"}, "wtp_per_m": 0.65, "requires": (),                    "min_success_rate": 0.90, "quality_floor": 0.40, "in_pre": "Chat",     "out_pre": "Chat",     "scale_hint": "Headcount x messages/day x correction tokens; roughly linear with staff."},
-    {"key": "coding",         "name": "Coding assistant",           "difficulty": 0.55, "tokens_day": 1.2e9, "scale_value": 8_000, "scale_kind": {"model": "linear", "label": "Developer seats", "unit": "developers", "token_multiplier": 150_000, "min": 0, "max": 25_000, "step": 10, "formula": "developer seats x active days x code context"}, "wtp_per_m": 4.00, "requires": ("tools", "ctx_128k"), "min_success_rate": 0.85, "quality_floor": 0.70, "in_pre": "Code",     "out_pre": "Code",     "scale_hint": "Developer seats x active days x code context; bursty during migrations."},
-    {"key": "meeting_notes",  "name": "Meeting notes assistant",    "difficulty": 0.35, "tokens_day": 600e6, "scale_value": 6_000, "scale_kind": {"model": "linear", "label": "Recorded meeting time", "unit": "meeting hours/day", "token_multiplier": 100_000, "min": 0, "max": 20_000, "step": 10, "formula": "meeting hours/day x transcript+summary tokens"}, "wtp_per_m": 1.50, "requires": ("ctx_128k",),         "min_success_rate": 0.88, "quality_floor": 0.55, "batch_eligible": True, "latent_jobs_day": 1.0e9, "unlock_price_per_m": 0.35, "in_pre": "Long doc", "out_pre": "Long doc", "scale_hint": "Meeting hours/day x transcript length; can be delayed after calls."},
+    {"key": "chatbot",        "name": "Customer service agent",     "difficulty": 0.30, "tokens_day": 2.0e9, "scale_value": 80_000, "scale_kind": {"model": "linear", "label": "Support tickets", "unit": "tickets/day", "token_multiplier": 25_000, "min": 0, "max": 250_000, "step": 100, "formula": "tickets/day x 5 turns x about 5k tokens/turn"}, "wtp_per_m": 4.00, "requires": ("tools",),            "min_success_rate": 0.95, "quality_floor": 0.60, "in_pre": "Chat",     "out_pre": "Chat",     "scale_hint": "Tickets/day x turns x resent history and tool results; interactive peak matters."},
+    {"key": "email_corrector","name": "Email correction copilot",   "difficulty": 0.18, "tokens_day": 50e6, "scale_value": 5_000, "scale_kind": {"model": "linear", "label": "Enabled headcount", "unit": "employees", "token_multiplier": 10_000, "min": 0, "max": 25_000, "step": 10, "formula": "employees x 5 assisted messages/day x about 2k tokens"}, "wtp_per_m": 3.25, "requires": (),                    "min_success_rate": 0.90, "quality_floor": 0.40, "in_pre": "Chat",     "out_pre": "Chat",     "scale_hint": "Enabled headcount x assisted messages, not total inbox traffic; roughly linear with adoption."},
+    {"key": "coding",         "name": "Repository coding agent",    "difficulty": 0.55, "tokens_day": 1.2e9, "scale_value": 8_000, "scale_kind": {"model": "linear", "label": "Developer seats", "unit": "developers", "token_multiplier": 150_000, "min": 0, "max": 25_000, "step": 10, "formula": "developers x agent sessions/day x repository context and retries"}, "wtp_per_m": 4.00, "requires": ("tools", "ctx_128k"), "min_success_rate": 0.85, "quality_floor": 0.70, "in_pre": "Code",     "out_pre": "Code",     "scale_hint": "Agentic repo work, not inline completion: multiple tool calls and context refreshes per developer-day."},
+    {"key": "meeting_notes",  "name": "Meeting notes assistant",    "difficulty": 0.35, "tokens_day": 120e6, "scale_value": 6_000, "scale_kind": {"model": "linear", "label": "Recorded meeting time", "unit": "meeting hours/day", "token_multiplier": 20_000, "min": 0, "max": 20_000, "step": 10, "formula": "meeting hours/day x about 14k transcript + summary and prompt tokens"}, "wtp_per_m": 7.50, "requires": (),                    "min_success_rate": 0.88, "quality_floor": 0.55, "batch_eligible": True, "latent_jobs_day": 1.0e9, "unlock_price_per_m": 0.35, "in_pre": "RAG",      "out_pre": "Long doc", "scale_hint": "Recorded hours x transcript and note tokens; one-pass work can be delayed after calls."},
     {"key": "evals",          "name": "Batch evaluations",          "difficulty": 0.45, "tokens_day": 800e6, "scale_value": 400_000, "scale_kind": {"model": "linear", "label": "Evaluation prompts", "unit": "eval prompts/day", "token_multiplier": 2_000, "min": 0, "max": 2_000_000, "step": 1_000, "formula": "eval prompts/day x average prompt+judgment tokens"}, "wtp_per_m": 2.00, "requires": (),                    "min_success_rate": 0.90, "quality_floor": 0.60, "batch_eligible": True, "latent_jobs_day": 2.0e9, "unlock_price_per_m": 0.50, "in_pre": "RAG",      "out_pre": "Classify", "scale_hint": "Runs/day x eval set size; off-peak capacity is usually acceptable."},
-    {"key": "inbox_archive",  "name": "Decade inbox knowledge base","difficulty": 0.50, "tokens_day": 120e6, "scale_value": 50, "scale_kind": {"model": "corpus", "label": "Indexed mailboxes", "unit": "mailboxes indexed", "token_multiplier": 2_400_000, "min": 0, "max": 5_000, "step": 10, "formula": "mailboxes x retained years x messages, dailyized as batch load"}, "wtp_per_m": 1.75, "requires": ("ctx_128k",),         "min_success_rate": 0.86, "quality_floor": 0.62, "batch_eligible": True, "latent_jobs_day": 12.0e9, "unlock_price_per_m": 0.30, "in_pre": "RAG",      "out_pre": "Long doc", "scale_hint": "Mailboxes x retained years x messages; one-time corpus scale dominates."},
-    {"key": "longctx",        "name": "Long-ctx analytics",         "difficulty": 0.70, "tokens_day": 400e6, "scale_value": 200, "scale_kind": {"model": "linear", "label": "Large analyses", "unit": "analyses/day", "token_multiplier": 2_000_000, "min": 0, "max": 1_000, "step": 1, "formula": "analyses/day x full-source-pack length"}, "wtp_per_m": 8.00, "requires": ("ctx_128k",),         "min_success_rate": 0.90, "quality_floor": 0.78, "latent_jobs_day": 1.0e9, "unlock_price_per_m": 3.00, "in_pre": "Long doc", "out_pre": "Long doc", "scale_hint": "Analyses/day x full-source-pack length; limited volume, large prompts."},
-    {"key": "research",       "name": "Deep research agent",        "difficulty": 0.90, "tokens_day": 150e6, "scale_value": 300, "scale_kind": {"model": "custom", "label": "Research jobs", "unit": "investigations/day", "token_multiplier": 500_000, "min": 0, "max": 1_000, "step": 1, "formula": "analysts x investigations/day x agent depth"}, "wtp_per_m": 20.00,"requires": ("tools", "reasoning"),"min_success_rate": 0.95, "quality_floor": 0.90, "latent_jobs_day": 500e6, "unlock_price_per_m": 5.00, "in_pre": "RAG",      "out_pre": "Long doc", "scale_hint": "Analysts x investigations/day x agent depth; low volume, high value."},
+    {"key": "inbox_archive",  "name": "Decade inbox knowledge base","difficulty": 0.50, "tokens_day": 120e6, "scale_value": 50, "scale_kind": {"model": "corpus", "label": "Indexed mailboxes", "unit": "mailboxes indexed", "token_multiplier": 2_400_000, "min": 0, "max": 5_000, "step": 10, "formula": "mailboxes x about 72M corpus tokens / 30-day backfill"}, "wtp_per_m": 1.75, "requires": (),                    "min_success_rate": 0.86, "quality_floor": 0.62, "batch_eligible": True, "latent_jobs_day": 12.0e9, "unlock_price_per_m": 0.30, "in_pre": "RAG",      "out_pre": "Long doc", "scale_hint": "Illustrative 30-day backfill; replace 72M tokens/mailbox and horizon with measured corpus data."},
+    {"key": "longctx",        "name": "Multi-pass long-ctx analytics","difficulty": 0.70, "tokens_day": 400e6, "scale_value": 200, "scale_kind": {"model": "linear", "label": "Large analyses", "unit": "analyses/day", "token_multiplier": 2_000_000, "min": 0, "max": 1_000, "step": 1, "formula": "analyses/day x about 16 passes x 125k input+output tokens"}, "wtp_per_m": 8.00, "requires": ("ctx_128k", "reasoning"), "min_success_rate": 0.80, "quality_floor": 0.78, "latent_jobs_day": 1.0e9, "unlock_price_per_m": 3.00, "in_pre": "Long doc", "out_pre": "Long doc", "scale_hint": "Multi-pass source-pack analysis; 2M is total processed tokens, not one impossible context window."},
+    {"key": "research",       "name": "Deep research agent",        "difficulty": 0.75, "tokens_day": 150e6, "scale_value": 300, "scale_kind": {"model": "custom", "label": "Research jobs", "unit": "investigations/day", "token_multiplier": 500_000, "min": 0, "max": 1_000, "step": 1, "formula": "investigations/day x about 20 agent calls x 25k processed tokens"}, "wtp_per_m": 20.00,"requires": ("tools", "reasoning"),"min_success_rate": 0.75, "quality_floor": 0.85, "latent_jobs_day": 500e6, "unlock_price_per_m": 5.00, "in_pre": "RAG",      "out_pre": "Long doc", "scale_hint": "Multi-call agent estimate; telemetry must replace the illustrative 20-call depth."},
+    {"key": "document_extraction", "name": "Invoice & claims extraction", "difficulty": 0.30, "tokens_day": 750e6, "scale_value": 250_000, "scale_kind": {"model": "linear", "label": "Document pages processed", "unit": "pages/day", "token_multiplier": 3_000, "min": 0, "max": 1_000_000, "step": 1_000, "formula": "pages/day x image/OCR input + structured output and validation tokens"}, "wtp_per_m": 1.25, "requires": ("images",), "min_success_rate": 0.94, "quality_floor": 0.58, "batch_eligible": True, "latent_jobs_day": 2.0e9, "unlock_price_per_m": 0.25, "in_pre": "Classify", "out_pre": "Classify", "scale_hint": "Pages/day x image/OCR and extraction tokens; retries and validation raise the multiplier."},
+    {"key": "enterprise_search", "name": "Enterprise search assistant", "difficulty": 0.42, "tokens_day": 1.2e9, "scale_value": 150_000, "scale_kind": {"model": "linear", "label": "Knowledge queries", "unit": "queries/day", "token_multiplier": 8_000, "min": 0, "max": 1_000_000, "step": 1_000, "formula": "queries/day x query + about 8 retrieved chunks + answer"}, "wtp_per_m": 2.50, "requires": (), "min_success_rate": 0.92, "quality_floor": 0.65, "batch_eligible": False, "latent_jobs_day": 3.0e9, "unlock_price_per_m": 0.75, "in_pre": "RAG", "out_pre": "Chat", "scale_hint": "Active users x searches/day x retrieved evidence; retrieval is assumed app-side and daytime concurrency matters."},
+    {"key": "contact_center_qa", "name": "Contact-center QA", "difficulty": 0.45, "tokens_day": 300e6, "scale_value": 15_000, "scale_kind": {"model": "linear", "label": "Recorded call time", "unit": "call hours/day", "token_multiplier": 20_000, "min": 0, "max": 100_000, "step": 100, "formula": "call hours/day x transcript + rubric-scoring and summary tokens"}, "wtp_per_m": 4.00, "requires": (), "min_success_rate": 0.92, "quality_floor": 0.65, "batch_eligible": True, "latent_jobs_day": 1.8e9, "unlock_price_per_m": 0.40, "in_pre": "RAG", "out_pre": "Classify", "scale_hint": "Recorded hours x transcript, summary, and QA rubric passes; transcription compute is outside this LLM estimate."},
+    {"key": "translation", "name": "Multilingual translation", "difficulty": 0.35, "tokens_day": 15e6, "scale_value": 5_000_000, "scale_kind": {"model": "linear", "label": "Source words translated", "unit": "source words/day", "token_multiplier": 3.0, "min": 0, "max": 100_000_000, "step": 100_000, "formula": "source words/day x source-and-target token conversion"}, "wtp_per_m": 0.70, "requires": (), "min_success_rate": 0.90, "quality_floor": 0.62, "batch_eligible": True, "latent_jobs_day": 300e6, "unlock_price_per_m": 0.15, "in_pre": "Chat", "out_pre": "Chat", "scale_hint": "Source words x target languages and variants; translation-memory hits should reduce demand."},
+    {"key": "contract_review", "name": "Contract review & redlining", "difficulty": 0.70, "tokens_day": 600e6, "scale_value": 8_000, "scale_kind": {"model": "linear", "label": "Contracts reviewed", "unit": "contracts/day", "token_multiplier": 75_000, "min": 0, "max": 50_000, "step": 100, "formula": "contracts/day x source, playbook, review, and revision tokens"}, "wtp_per_m": 8.00, "requires": ("ctx_128k", "reasoning"), "min_success_rate": 0.85, "quality_floor": 0.80, "batch_eligible": True, "latent_jobs_day": 1.2e9, "unlock_price_per_m": 1.50, "in_pre": "Long doc", "out_pre": "Long doc", "scale_hint": "Contracts x pages x review passes; nightly portfolio scans coexist with interactive redlining."},
+    {"key": "security_triage", "name": "Security alert investigation", "difficulty": 0.68, "tokens_day": 1.2e9, "scale_value": 100_000, "scale_kind": {"model": "linear", "label": "Security alerts investigated", "unit": "alerts/day", "token_multiplier": 12_000, "min": 0, "max": 1_000_000, "step": 1_000, "formula": "alerts/day x evidence bundle + tool calls + verdict tokens"}, "wtp_per_m": 6.00, "requires": ("tools", "reasoning"), "min_success_rate": 0.85, "quality_floor": 0.78, "batch_eligible": False, "latent_jobs_day": 4.0e9, "unlock_price_per_m": 1.00, "in_pre": "RAG", "out_pre": "Classify", "scale_hint": "Alerts/day x logs, identity context, threat intelligence, and investigation turns; peak latency matters."},
+    {"key": "aml_casework", "name": "AML/KYC case investigation", "difficulty": 0.72, "tokens_day": 600e6, "scale_value": 12_000, "scale_kind": {"model": "linear", "label": "Cases investigated", "unit": "cases/day", "token_multiplier": 50_000, "min": 0, "max": 100_000, "step": 100, "formula": "cases/day x transaction evidence + policy checks + narrative tokens"}, "wtp_per_m": 12.00, "requires": ("tools", "ctx_128k", "reasoning"), "min_success_rate": 0.80, "quality_floor": 0.84, "batch_eligible": True, "latent_jobs_day": 2.4e9, "unlock_price_per_m": 2.00, "in_pre": "RAG", "out_pre": "Long doc", "scale_hint": "Alerts escalated to cases x evidence depth; batch enrichment precedes mandatory human review."},
+    {"key": "synthetic_generation", "name": "Synthetic test-data generation", "difficulty": 0.55, "tokens_day": 1.0e9, "scale_value": 200_000, "scale_kind": {"model": "linear", "label": "Examples generated", "unit": "examples/day", "token_multiplier": 5_000, "min": 0, "max": 2_000_000, "step": 1_000, "formula": "examples/day x prompt, generated artifact, critique, and retry tokens"}, "wtp_per_m": 1.50, "requires": (), "min_success_rate": 0.85, "quality_floor": 0.68, "batch_eligible": True, "latent_jobs_day": 8.0e9, "unlock_price_per_m": 0.20, "in_pre": "Classify", "out_pre": "Code", "scale_hint": "Examples/day x generation and validation passes; decode-heavy and highly batchable."},
+    {"key": "catalog_enrichment", "name": "Product-catalog enrichment", "difficulty": 0.25, "tokens_day": 1.0e9, "scale_value": 500_000, "scale_kind": {"model": "linear", "label": "Catalog items enriched", "unit": "SKUs/day", "token_multiplier": 2_000, "min": 0, "max": 5_000_000, "step": 10_000, "formula": "SKUs/day x image/text input + attributes and copy tokens"}, "wtp_per_m": 0.60, "requires": ("images",), "min_success_rate": 0.90, "quality_floor": 0.52, "batch_eligible": True, "latent_jobs_day": 5.0e9, "unlock_price_per_m": 0.10, "in_pre": "Classify", "out_pre": "Chat", "scale_hint": "SKUs x images, locales, and copy variants; seasonal reprocessing creates large batch spikes."},
 ]
 
 DAY_SHAPES = {

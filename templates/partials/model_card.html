@@ -76,6 +76,7 @@
   {% endif %}
   {% if not m.is_realtime_only and not m.is_embedding_model %}
   <div class="T" style="margin-bottom:3px;display:flex;gap:6px;">
+    <span class="tip" title="Artificial Analysis Intelligence Index anchor, transformed internally only for routing. Scores supplied through a family proxy are confidence-discounted.">AA&nbsp;{{ "%.1f"|format(quality_to_aa_intelligence(m.quality)) }}</span>
     <span class="tip" title="Confidence-adjusted routing quality. Raw Q {{ '%.2f'|format(m.quality) }} · benchmark confidence {{ '%.0f'|format(m.quality_confidence * 100) }}%.">Q&nbsp;{{ "%.2f"|format(effective_quality(m)) }}</span>
     <span class="tip" title="Token efficiency: 1.00× = 10M output tokens on AA's Intelligence Index reference; 0.50× = twice as verbose (thinks ~2× longer); 2.00× = half as many output tokens. Effective $/M scales the output side only, so long-prompt workloads are penalized less than pure generation workloads.">η&nbsp;{{ "%.2f"|format(m.token_efficiency) }}×</span>
   </div>
