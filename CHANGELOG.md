@@ -14,6 +14,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Corrected pipeline-parallel decode latency so User Pareto no longer reports higher per-user token speed merely from adding concurrent users; concurrency is a continuous batch, not a count of independent pipeline microbatches.
 - Formatted billion-scale token counts with a B unit in `fmt_num` (supply capacity showed "31795.8M") and aligned the live-slider JS formatter to the same units and decimals as the server filter.
 - Quoted the prefix-reuse panel's effective prefill length on the same workload basis the planner actually probes and routes on — `max(task input, mean input distribution)` — instead of the raw task input knob, and corrected the caption to state that prefill-sensitive capacity and demand estimates use the knob while pure decode and pareto charts do not.
 - Replaced the static "no compatible option within the price ceiling" unserved sub-label with demand-aware copy ("no demand routed yet" at zero demand).
