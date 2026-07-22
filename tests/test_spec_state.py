@@ -11,9 +11,10 @@ from state import (
     set_model_spec,
     set_spec_acceptance,
 )
+from viewmodels import get_model_info
 
 
-def _fake_profile(method):
+def _fake_profile(method, supported_ks=()):
     return SimpleNamespace(
         label=f"Fake {method}",
         method=method,
@@ -25,6 +26,8 @@ def _fake_profile(method):
         kv_overhead=0.0,
         source="test",
         note="test fixture",
+        supported_ks=supported_ks,
+        acceptance_alpha_by_k=(),
     )
 
 
@@ -61,6 +64,29 @@ class SpecStateTests(unittest.TestCase):
 
         self.assertEqual(state.models[0].spec_method, "eagle3")
         self.assertEqual(state.models[0].spec_k, 4)
+
+    def test_set_model_spec_preserves_auto_k_sentinel(self):
+        self._patch_profiles("q08", (_fake_profile("eagle3"),))
+        state = _state_with_model()
+
+        set_model_spec(state, 2, "eagle3", 0)
+
+        self.assertEqual(state.models[0].spec_method, "eagle3")
+        self.assertEqual(state.models[0].spec_k, 0)
+
+    def test_auto_k_viewmodel_discloses_effective_choice_without_mutating_state(self):
+        self._patch_profiles("q08", (_fake_profile("eagle3"),))
+        state = _state_with_model()
+        set_model_spec(state, 2, "eagle3", 0)
+
+        info = get_model_info(state, state.models[0])
+
+        self.assertEqual(state.models[0].spec_k, 0)
+        self.assertIsNotNone(info["spec"])
+        self.assertGreaterEqual(info["spec"]["k"], 1)
+        self.assertIn("alpha_source", info["spec"])
+        self.assertIn("speedup", info["spec"])
+        self.assertEqual(info["spec"]["probe_bs"], 32)
 
     def test_set_model_spec_rejects_unknown_method(self):
         self._patch_profiles("q08", (_fake_profile("eagle3"),))
@@ -140,6 +166,16 @@ class SpecStateTests(unittest.TestCase):
         set_model_spec(state, 2, "eagle3", -5)
         self.assertEqual(state.models[0].spec_k, 0)
 
+    def test_set_model_spec_rejects_unsupported_manual_k_without_snapping(self):
+        self._patch_profiles("q08", (_fake_profile("eagle3", supported_ks=(3, 7, 15)),))
+        state = _state_with_model()
+        set_model_spec(state, 2, "eagle3", 7)
+
+        set_model_spec(state, 2, "eagle3", 8)
+
+        self.assertEqual(state.models[0].spec_method, "eagle3")
+        self.assertEqual(state.models[0].spec_k, 7)
+
     def test_set_spec_acceptance_clamps(self):
         state = PlannerState()
 
@@ -165,6 +201,25 @@ class SpecStateTests(unittest.TestCase):
         self.assertEqual(restored.models[0].spec_method, "eagle3")
         self.assertEqual(restored.models[0].spec_k, 5)
         self.assertAlmostEqual(restored.spec_acceptance, 0.7)
+
+    def test_scenario_round_trip_preserves_auto_k_sentinel(self):
+        self._patch_profiles("q08", (_fake_profile("eagle3"),))
+        state = _state_with_model()
+        set_model_spec(state, 2, "eagle3", 0)
+
+        payload = serialize_scenario(state, None)
+        restored, _ = deserialize_scenario(payload)
+
+        self.assertEqual(restored.models[0].spec_method, "eagle3")
+        self.assertEqual(restored.models[0].spec_k, 0)
+
+    def test_imported_unsupported_manual_k_migrates_to_auto(self):
+        state = PlannerState(models=[
+            ModelAssignment(2, "q27", 0, 1, 1, 1, "bf16", spec_method="mtp", spec_k=5),
+        ])
+
+        self.assertEqual(state.models[0].spec_method, "mtp")
+        self.assertEqual(state.models[0].spec_k, 0)
 
     def test_legacy_payload_without_spec_keys_loads_defaults(self):
         state = _state_with_model()

@@ -258,7 +258,9 @@ class ModelAssignment:
     prefill_tp: Optional[int] = None
     prefill_pp: Optional[int] = None
     prefill_dp: Optional[int] = None
-    # Speculative decoding: "off" disables it; spec_k == 0 uses the profile default_k.
+    # Speculative decoding: "off" disables it; spec_k == 0 is Auto. Auto is a
+    # persisted user choice whose effective k is optimized for the deployment's
+    # declared probe concurrency; it must not be rewritten to a profile default.
     spec_method: str = "off"
     spec_k: int = 0
 
@@ -394,6 +396,17 @@ class PlannerState:
                 am.spec_k = 0
             if am.spec_method == "off":
                 am.spec_k = 0
+            elif am.spec_k > 0 and model is not None and am.spec_method != "ngram":
+                profile = next(
+                    (p for p in model.speculative_profiles if p.method == am.spec_method),
+                    None,
+                )
+                supported_ks = tuple(getattr(profile, "supported_ks", ()) or ())
+                if supported_ks and am.spec_k not in supported_ks:
+                    # Imported scenarios may predate per-profile depth bounds.
+                    # Preserve the method but migrate the stale manual value to
+                    # Auto instead of silently snapping to a nearby depth.
+                    am.spec_k = 0
         if self.projects:
             _sync_aggregate_distribution(self)
 
@@ -1246,6 +1259,7 @@ def set_model_spec(state: PlannerState, model_uid: int, method: str, spec_k: int
     if am is None:
         return
     method = str(method or "off")
+    selected_profile = None
     if method != "off":
         model = MODELS.get(am.model_key)
         if model is None:
@@ -1258,10 +1272,17 @@ def set_model_spec(state: PlannerState, model_uid: int, method: str, spec_k: int
                 method = "off"
         elif method not in profile_methods:
             method = "off"
+        else:
+            selected_profile = next((p for p in profiles if getattr(p, "method", "") == method), None)
     try:
         spec_k = int(spec_k)
     except (TypeError, ValueError):
         spec_k = 0
+    supported_ks = tuple(getattr(selected_profile, "supported_ks", ()) or ())
+    if spec_k > 0 and supported_ks and spec_k not in supported_ks:
+        # Invalid manual depths are rejected instead of being silently snapped
+        # to a nearby calibrated k. The UI only offers supported values.
+        return
     am.spec_method = method
     am.spec_k = min(max(spec_k, 0), 32) if method != "off" else 0
     if method != "off" and am.gpu_count > 0:

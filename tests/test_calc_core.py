@@ -1,5 +1,7 @@
 import math
 import unittest
+from dataclasses import replace
+from unittest.mock import patch
 
 from calc import (
     EfficiencyParams,
@@ -7,11 +9,13 @@ from calc import (
     _cloud_price_per_m_in_preset,
     _compute_decode_core,
     _decode_attention_work,
+    _decode_step_time,
     _dense_tp_oh,
     _deployment_capacity_for_profile,
     _pp_peak_fraction,
     _prefill_attention_work,
     communication_breakdown,
+    chart_user_pareto,
     compute_data,
     compute_data_capacity,
     compute_decode,
@@ -22,6 +26,7 @@ from calc import (
     fixed_paged_oh,
     kv_cache_bytes_for_sequence,
     model_gpu_flops,
+    optimize_spec_k,
     per_tp_linear_attention_state_bytes,
     resolve_spec_runtime,
     spec_acceptance_len,
@@ -445,6 +450,78 @@ class SpeculativeDecodingMathTests(unittest.TestCase):
         )
         self.assertGreater(sp.rps, base.rps)
         self.assertGreater(sp.tps, base.tps)
+
+    def test_auto_k_searches_supported_calibrated_depths_at_declared_probe(self):
+        base_model = MODELS["l8"]
+        profile = replace(
+            base_model.available_spec_profiles[0],
+            supported_ks=(1, 3),
+            acceptance_alpha_by_k=((1, 0.45), (3, 0.75)),
+        )
+        model = replace(base_model, speculative_profiles=(profile,))
+        selection = optimize_spec_k(
+            model, "eagle3", 0.0, "bf16", 1, 1, 1, GPUS["H100"],
+            0.90, 2.0, self.chat_in, self.chat_out, self.eff, probe_concurrency=7,
+        )
+
+        self.assertIsNotNone(selection.runtime)
+        self.assertIn(selection.selected_k, (1, 3))
+        self.assertEqual(selection.probe_concurrency, 7)
+        self.assertTrue(selection.runtime.auto_selected)
+        self.assertAlmostEqual(
+            selection.runtime.alpha,
+            dict(profile.acceptance_alpha_by_k)[selection.selected_k],
+        )
+
+    def test_auto_k_bounds_search_by_finite_output_length(self):
+        selection = optimize_spec_k(
+            MODELS["l8"], "eagle3", 0.0, "bf16", 1, 1, 1, GPUS["H100"],
+            0.90, 2.0, self.chat_in, [100, 0, 0, 0, 0, 0], self.eff,
+        )
+
+        self.assertIsNotNone(selection.runtime)
+        self.assertLessEqual(selection.selected_k, 31)
+
+    def test_auto_k_reports_when_spec_off_is_better(self):
+        selection = optimize_spec_k(
+            MODELS["l8"], "eagle3", 0.001, "bf16", 1, 1, 1, GPUS["H100"],
+            0.90, 2.0, self.chat_in, self.chat_out, self.eff,
+        )
+
+        self.assertIsNotNone(selection.runtime)
+        self.assertFalse(selection.beneficial)
+        self.assertLess(selection.speedup, 1.0)
+        self.assertIn("spec off", selection.reason)
+
+    def test_spec_cycle_charges_fixed_runtime_overheads(self):
+        model = MODELS["l8"]
+        runtime = resolve_spec_runtime(model, "eagle3", 3, 0.7, "bf16")
+        args = (model, 1, 1, 1, GPUS["H100"], "bf16", 1024, self.eff)
+        charged = _decode_step_time(*args, spec=runtime)
+        with (
+            patch("calc.SPEC_DRAFT_LAUNCH_OVERHEAD_S", 0.0),
+            patch("calc.SPEC_SCHEDULER_OVERHEAD_S", 0.0),
+            patch("calc.SPEC_REJECTION_SYNC_OVERHEAD_S", 0.0),
+        ):
+            without_fixed_cost = _decode_step_time(*args, spec=runtime)
+
+        self.assertGreater(charged, without_fixed_cost)
+
+    def test_user_pareto_discloses_fixed_auto_spec_configuration(self):
+        assignment = ModelAssignment(
+            2, "l8", 1, 1, 1, 1, "bf16", spec_method="eagle3", spec_k=0,
+        )
+        state = PlannerState(gpus=[GpuPool(1, "H100", 1)], models=[assignment])
+        retune_models(state, preserve_existing=True)
+        datasets = chart_user_pareto(state, [1, 4])
+
+        self.assertEqual(len(datasets), 1)
+        dataset = datasets[0]
+        self.assertIn("Auto", dataset["label"])
+        self.assertTrue(dataset["spec_auto"])
+        self.assertGreater(dataset["spec_k"], 0)
+        self.assertIn("spec_alpha", dataset)
+        self.assertTrue(all(point["spec_k"] == dataset["spec_k"] for point in dataset["data"]))
 
 
 if __name__ == "__main__":

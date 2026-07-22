@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import math
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional
 
 from data import (
@@ -78,6 +78,17 @@ NVIDIA_FP4_GPU_KEYS = frozenset({
 })
 MXFP4_GPU_KEYS = NVIDIA_FP4_GPU_KEYS | frozenset({"MI350X", "MI355X", "MI455X", "HELIOS_MI455X", "MI400"})
 
+# Speculative decoding has a real control-plane cost even when draft weights are
+# tiny: launch the draft/verify work, schedule the block, and synchronize the
+# rejection sampler.  These are deliberately small, fixed closed-form terms
+# (microseconds per speculative cycle), not a claim to simulate a specific
+# runtime.  Keeping them explicit prevents MTP from being treated as free.
+SPEC_DRAFT_LAUNCH_OVERHEAD_S = 3e-6
+SPEC_SCHEDULER_OVERHEAD_S = 4e-6
+SPEC_REJECTION_SYNC_OVERHEAD_S = 3e-6
+SPEC_AUTO_K_PROBE_CONCURRENCY = 32
+SPEC_MIN_BENEFICIAL_SPEEDUP = 1.01
+
 
 @dataclass
 class EfficiencyParams:
@@ -103,6 +114,20 @@ class SpecRuntime:
     passes: int  # draft forward passes per cycle
     draft_weight_bytes: float  # drafter weight footprint read per draft pass
     draft_active_params: float  # per-token active drafter parameters (MoE-aware)
+    auto_selected: bool = False
+    probe_speedup: float = 1.0
+
+
+@dataclass(frozen=True)
+class SpecOptimization:
+    """Result of comparing all feasible draft depths with speculative decode off."""
+
+    runtime: Optional[SpecRuntime]
+    selected_k: int
+    speedup: float
+    beneficial: bool
+    reason: str
+    probe_concurrency: int
 
 
 def spec_acceptance_len(alpha: float, k: int) -> float:
@@ -155,8 +180,12 @@ def resolve_spec_runtime(
     profile = next((p for p in m.available_spec_profiles if p.method == method), None)
     if profile is None:
         return None
-    k = min(max(int(spec_k if spec_k > 0 else profile.default_k), 1), 32)
-    alpha = min(max(float(alpha_override if alpha_override > 0 else profile.acceptance_alpha), 0.0), 1.0)
+    requested_k = min(max(int(spec_k if spec_k > 0 else profile.default_k), 1), 32)
+    supported_ks = tuple(sorted({int(k) for k in getattr(profile, "supported_ks", ()) if 1 <= int(k) <= 32}))
+    k = min(supported_ks, key=lambda candidate: (abs(candidate - requested_k), candidate)) if supported_ks else requested_k
+    calibrated_alphas = dict(getattr(profile, "acceptance_alpha_by_k", ()))
+    profile_alpha = calibrated_alphas.get(k, profile.acceptance_alpha)
+    alpha = min(max(float(alpha_override if alpha_override > 0 else profile_alpha), 0.0), 1.0)
     passes = 1 if profile.parallel_draft else k
     # Draft weights share the target's served precision: scale by the target's
     # average bytes/param at this precision (mixed-precision LUTs included).
@@ -871,8 +900,10 @@ def _decode_step_time(
         # (block-diffusion) drafters, k autoregressive passes otherwise. The
         # drafter reads its own weights and its small KV cache (the profile's
         # fraction of the target per-sequence KV read) each pass. Draft
-        # collectives are ignored — drafters are 1-5 layers — a small optimism
-        # inside an otherwise conservative model.
+        # Draft collective payload/layer geometry is not available in the
+        # catalog. Approximate it by scaling the target collective time by the
+        # drafter/target active-parameter ratio. This stays small for MTP while
+        # avoiding the previous assumption that draft collectives were free.
         # Autoregressive drafters process one position per pass; a parallel
         # block drafter processes all k positions in its pass. Keep that
         # distinction in both KV traffic and compute instead of treating a
@@ -888,6 +919,16 @@ def _decode_step_time(
             model_gpu_flops(g, m, prec) * tp * eff.comp_eff
         )
         stage += max(draft_bt, draft_ct) * max(int(pp), 1) * spec.passes
+        draft_ratio = min(max(spec.draft_active_params / max(m.active_params, 1.0), 0.0), 1.0)
+        # ``comm`` already carries k verification positions. Both an AR drafter
+        # (k one-position passes) and a parallel drafter (one k-position pass)
+        # communicate k draft positions in total, so do not multiply by passes.
+        stage += comm.total * draft_ratio
+        stage += (
+            SPEC_SCHEDULER_OVERHEAD_S
+            + SPEC_REJECTION_SYNC_OVERHEAD_S
+            + SPEC_DRAFT_LAUNCH_OVERHEAD_S * spec.passes
+        )
     step = stage * (1 + eff.overhead + paged_oh)
     return step * _moe_tail_multiplier(m, eff)
 
@@ -931,6 +972,8 @@ def _compute_decode_core(
                 passes=1 if spec.profile.parallel_draft else effective_k,
                 draft_weight_bytes=spec.draft_weight_bytes,
                 draft_active_params=spec.draft_active_params,
+                auto_selected=spec.auto_selected,
+                probe_speedup=spec.probe_speedup,
             )
     active_replicas = min(max(int(bs), 0), dp)
     if active_replicas <= 0:
@@ -1007,6 +1050,102 @@ def compute_decode(
         eff,
         paged_oh=decode_paged_oh(in_dist, out_dist, eff),
         spec=spec,
+    )
+
+
+def optimize_spec_k(
+    m: Model,
+    method: str,
+    alpha_override: float,
+    prec: str,
+    tp: int,
+    pp: int,
+    dp: int,
+    g: GPU,
+    mu: float,
+    profiled_non_kv_gb: float,
+    in_dist: list[int],
+    out_dist: list[int],
+    eff: EfficiencyParams,
+    probe_concurrency: int = SPEC_AUTO_K_PROBE_CONCURRENCY,
+) -> SpecOptimization:
+    """Select a fixed deployment k at a declared concurrency probe.
+
+    Auto is a deployment decision, not a per-chart-point trick: the returned k
+    is selected once and should be held across the workload curve. The search
+    includes speculative decoding off, bounds k by both 32 and finite output
+    length, and ignores candidates that do not fit the selected topology.
+    """
+    profile_runtime = resolve_spec_runtime(m, method, 1, alpha_override, prec)
+    requested_probe = max(int(probe_concurrency), 1)
+    if profile_runtime is None:
+        return SpecOptimization(None, 0, 1.0, False, "method unavailable", requested_probe)
+
+    output_tokens = max(int(round(avg_dist(out_dist, OUTPUT_BUCKETS))), 1)
+    max_k = min(32, output_tokens - 1)
+    if max_k < 1:
+        return SpecOptimization(None, 0, 1.0, False, "output is too short for drafting", 1)
+
+    # Discover capacity at one user first so an Auto @ 32 probe degrades to the
+    # largest feasible declared operating point rather than failing wholesale.
+    baseline_one = compute_decode(
+        m, tp, pp, 1, dp, g, mu, profiled_non_kv_gb, prec, in_dist, out_dist, eff,
+    )
+    if baseline_one is None or baseline_one.max_slots < 1:
+        return SpecOptimization(None, 0, 1.0, False, "baseline topology is infeasible", 1)
+    effective_probe = min(requested_probe, baseline_one.max_slots)
+    baseline = compute_decode(
+        m, tp, pp, effective_probe, dp, g, mu, profiled_non_kv_gb, prec, in_dist, out_dist, eff,
+    )
+    if baseline is None or baseline.tps <= 0:
+        return SpecOptimization(None, 0, 1.0, False, "baseline probe is infeasible", effective_probe)
+
+    best_runtime: Optional[SpecRuntime] = None
+    best_speedup = 0.0
+    profile_supported_ks = tuple(getattr(profile_runtime.profile, "supported_ks", ()))
+    supported_ks = tuple(sorted({
+        int(k) for k in profile_supported_ks
+        if 1 <= int(k) <= max_k
+    }))
+    if profile_supported_ks and not supported_ks:
+        return SpecOptimization(
+            None, 0, 1.0, False, "no calibrated k fits the output length", effective_probe,
+        )
+    candidate_ks = supported_ks or tuple(range(1, max_k + 1))
+    for k in candidate_ks:
+        runtime = resolve_spec_runtime(m, method, k, alpha_override, prec)
+        candidate = compute_decode(
+            m, tp, pp, effective_probe, dp, g, mu, profiled_non_kv_gb, prec,
+            in_dist, out_dist, eff, runtime,
+        )
+        if candidate is None:
+            continue
+        speedup = candidate.tps / baseline.tps
+        if best_runtime is None or speedup > best_speedup:
+            best_runtime = runtime
+            best_speedup = speedup
+
+    if best_runtime is None:
+        return SpecOptimization(None, 0, 1.0, False, "no speculative k fits the topology", effective_probe)
+
+    beneficial = best_speedup >= SPEC_MIN_BENEFICIAL_SPEEDUP
+    selected = replace(
+        best_runtime,
+        auto_selected=True,
+        probe_speedup=best_speedup,
+    )
+    reason = (
+        f"best k at {effective_probe} users"
+        if beneficial
+        else f"spec off is faster at {effective_probe} users"
+    )
+    return SpecOptimization(
+        selected,
+        selected.k,
+        best_speedup,
+        beneficial,
+        reason,
+        effective_probe,
     )
 
 
@@ -1641,13 +1780,62 @@ def compute_realtime_max_users(
     return best
 
 
-def _label(am, model: Model, panel_suffix: str = "", include_prefill: bool = False) -> str:
+def _label(
+    am,
+    model: Model,
+    panel_suffix: str = "",
+    include_prefill: bool = False,
+    spec_meta: Optional[dict] = None,
+) -> str:
     decode_label = strategy_label(am.tp, am.pp, am.dp)
+    spec_suffix = ""
+    if spec_meta is not None:
+        if spec_meta["spec_method"] == "off":
+            spec_suffix = " · Spec off"
+        elif spec_meta["spec_beneficial"]:
+            auto = " Auto→" if spec_meta["spec_auto"] else " "
+            spec_suffix = (
+                f" · {spec_meta['spec_method'].upper()}{auto}k={spec_meta['spec_k']} "
+                f"α={spec_meta['spec_alpha']:.0%}"
+            )
+        else:
+            spec_suffix = (
+                f" · Spec off (Auto {spec_meta['spec_method'].upper()} @"
+                f"{spec_meta['spec_probe_concurrency']}, best k={spec_meta['spec_k']})"
+            )
     if include_prefill:
         prefill_label = strategy_label(am.prefill_tp, am.prefill_pp, am.prefill_dp)
         if prefill_label != decode_label:
-            return f"{model.name} P {prefill_label} / D {decode_label} {am.prec.upper()}{panel_suffix}"
-    return f"{model.name} {decode_label} {am.prec.upper()}{panel_suffix}"
+            return f"{model.name} P {prefill_label} / D {decode_label} {am.prec.upper()}{spec_suffix}{panel_suffix}"
+    return f"{model.name} {decode_label} {am.prec.upper()}{spec_suffix}{panel_suffix}"
+
+
+def _spec_chart_selection(state, am, model: Model) -> tuple[Optional[SpecRuntime], dict]:
+    method = getattr(am, "spec_method", "off") or "off"
+    auto = method != "off" and getattr(am, "spec_k", 0) == 0
+    selection = spec_optimization_for(state, am, model) if auto else None
+    runtime = (
+        selection.runtime if selection is not None and selection.beneficial
+        else None if selection is not None
+        else resolve_spec_runtime(
+            model, method, getattr(am, "spec_k", 0),
+            getattr(state, "spec_acceptance", 0.0), am.prec,
+        )
+    )
+    disclosed_runtime = selection.runtime if selection is not None else runtime
+    meta = {
+        "spec_method": method,
+        "spec_k": disclosed_runtime.k if disclosed_runtime is not None else 0,
+        "spec_alpha": disclosed_runtime.alpha if disclosed_runtime is not None else 0.0,
+        "spec_auto": auto,
+        "spec_speedup": selection.speedup if selection is not None else (
+            disclosed_runtime.probe_speedup if disclosed_runtime is not None else 1.0
+        ),
+        "spec_beneficial": selection.beneficial if selection is not None else runtime is not None,
+        "spec_probe_concurrency": selection.probe_concurrency if selection is not None else 0,
+        "spec_reason": selection.reason if selection is not None else "",
+    }
+    return runtime, meta
 
 
 def _batch_axis_sweep(capacities: list[int], fallback: list[int]) -> list[int]:
@@ -1815,12 +2003,45 @@ def get_data_bs(states: Optional[list] = None) -> list[int]:
 
 def spec_runtime_for(state, am, m: Model) -> Optional[SpecRuntime]:
     """Resolve an assignment's speculative-decoding config against global state."""
+    method = getattr(am, "spec_method", "off")
+    spec_k = getattr(am, "spec_k", 0)
+    if method not in ("", "off") and spec_k == 0:
+        selection = spec_optimization_for(state, am, m)
+        # Off participates in Auto selection. Keep the assignment's method and
+        # k=0 sentinel untouched so the UI can disclose why Auto chose Off.
+        return selection.runtime if selection.beneficial else None
     return resolve_spec_runtime(
         m,
-        getattr(am, "spec_method", "off"),
-        getattr(am, "spec_k", 0),
+        method,
+        spec_k,
         getattr(state, "spec_acceptance", 0.0),
         am.prec,
+    )
+
+
+def spec_optimization_for(state, am, m: Model) -> SpecOptimization:
+    """State adapter for callers that need Auto's k, probe, and warning reason."""
+    gpu = getattr(am, "gpu_spec", None)
+    if gpu is None:
+        gp = state.find_gpu(am.gpu_uid) if hasattr(state, "find_gpu") else None
+        gpu = gp.gpu if gp is not None else None
+    if gpu is None:
+        return SpecOptimization(None, 0, 1.0, False, "GPU unavailable", SPEC_AUTO_K_PROBE_CONCURRENCY)
+    return optimize_spec_k(
+        m,
+        getattr(am, "spec_method", "off"),
+        getattr(state, "spec_acceptance", 0.0),
+        am.prec,
+        am.tp,
+        am.pp,
+        am.dp,
+        gpu,
+        state.mu,
+        state.profiled_non_kv_gb,
+        state.in_dist,
+        state.out_dist,
+        state.decode_efficiency,
+        getattr(state, "spec_probe_concurrency", SPEC_AUTO_K_PROBE_CONCURRENCY),
     )
 
 
@@ -1956,6 +2177,7 @@ def chart_decode(state, batch_sizes: Optional[list[int]] = None, panel_suffix: s
         gpu = am.gpu_spec
         if gpu is None:
             continue
+        spec, spec_meta = _spec_chart_selection(state, am, model)
         pts = []
         for bs in batch_sizes:
             result = compute_decode(
@@ -1971,12 +2193,18 @@ def chart_decode(state, batch_sizes: Optional[list[int]] = None, panel_suffix: s
                 state.in_dist,
                 state.out_dist,
                 eff,
-                spec_runtime_for(state, am, model),
+                spec,
             )
-            pts.append({"x": bs, "y": result.tps if result else None})
+            pts.append({
+                "x": bs,
+                "y": result.tps if result else None,
+                **spec_meta,
+                "spec_speedup": result.spec_speedup if result else spec_meta["spec_speedup"],
+            })
         datasets.append({
-            "label": _label(am, model, panel_suffix, include_prefill=True),
+            "label": _label(am, model, panel_suffix, include_prefill=True, spec_meta=spec_meta),
             "data": pts,
+            **spec_meta,
             "borderColor": model.color,
             "backgroundColor": model.color + "12",
             "borderWidth": 1.5 if is_b else 2,
@@ -2003,6 +2231,7 @@ def chart_pareto(state, panel_suffix: str = "") -> list[dict]:
         gpu = am.gpu_spec
         if gpu is None:
             continue
+        spec, spec_meta = _spec_chart_selection(state, am, model)
         pts = []
         for bs in BATCH_SIZES:
             result = compute_decode(
@@ -2018,14 +2247,18 @@ def chart_pareto(state, panel_suffix: str = "") -> list[dict]:
                 state.in_dist,
                 state.out_dist,
                 eff,
-                spec_runtime_for(state, am, model),
+                spec,
             )
             if result:
-                pts.append({"x": result.lat, "y": result.tps, "bs": bs})
+                pts.append({
+                    "x": result.lat, "y": result.tps, "bs": bs,
+                    **spec_meta, "spec_speedup": result.spec_speedup,
+                })
         if pts:
             datasets.append({
-                "label": _label(am, model, panel_suffix),
+                "label": _label(am, model, panel_suffix, spec_meta=spec_meta),
                 "data": pts,
+                **spec_meta,
                 "borderColor": model.color,
                 "backgroundColor": model.color + "AA",
                 "borderWidth": 1.5 if is_b else 2,
@@ -2052,7 +2285,7 @@ def chart_user_pareto(state, batch_sizes: Optional[list[int]] = None, panel_suff
         gpu = am.gpu_spec
         if gpu is None:
             continue
-        spec = spec_runtime_for(state, am, model)
+        spec, spec_meta = _spec_chart_selection(state, am, model)
         pts = []
         for users in batch_sizes:
             result = compute_decode(
@@ -2078,11 +2311,13 @@ def chart_user_pareto(state, batch_sizes: Optional[list[int]] = None, panel_suff
                     "total_tps": result.tps,
                     "lat": result.lat,
                     "spec_speedup": result.spec_speedup,
+                    **{k: v for k, v in spec_meta.items() if k != "spec_speedup"},
                 })
         if pts:
             datasets.append({
-                "label": _label(am, model, panel_suffix),
+                "label": _label(am, model, panel_suffix, spec_meta=spec_meta),
                 "data": pts,
+                **spec_meta,
                 "borderColor": model.color,
                 "backgroundColor": model.color + "AA",
                 "borderWidth": 1.5 if is_b else 2,

@@ -29,6 +29,7 @@ from calc import (
     gpu_supports_nvfp4,
     per_replica_kv_cache_bytes,
     resolve_spec_runtime,
+    spec_optimization_for,
     strategy_label,
     valid_strategies,
 )
@@ -143,7 +144,13 @@ def _build_model_info(state: PlannerState, am: ModelAssignment, gpu_pool: Option
     if spec_runtime is not None:
         probe = None
         probe_bs = max(1, min(32, decode_max_slots or 1))
-        if gpu and am.gpu_count > 0:
+        optimization = None
+        if am.spec_k == 0 and gpu and am.gpu_count > 0:
+            optimization = spec_optimization_for(state, am, model)
+            if optimization.runtime is not None:
+                spec_runtime = optimization.runtime
+                probe_bs = optimization.probe_concurrency
+        if gpu and am.gpu_count > 0 and optimization is None:
             probe = compute_decode(
                 model,
                 am.tp,
@@ -159,13 +166,38 @@ def _build_model_info(state: PlannerState, am: ModelAssignment, gpu_pool: Option
                 state.decode_efficiency,
                 spec_runtime,
             )
+        note = str(getattr(spec_runtime.profile, "note", "") or "").lower()
+        prior_is_unmeasured = any(marker in note for marker in (
+            "unmeasured", "not a measured", "no acceptance benchmark", "assumption", "family proxy",
+        ))
+        if state.spec_acceptance > 0:
+            alpha_source = "user override"
+            unmeasured_prior = True
+        elif prior_is_unmeasured:
+            alpha_source = "unmeasured profile prior"
+            unmeasured_prior = True
+        elif spec_runtime.k in dict(getattr(spec_runtime.profile, "acceptance_alpha_by_k", ())):
+            alpha_source = f"measured per-k calibration (k={spec_runtime.k})"
+            unmeasured_prior = False
+        elif spec_runtime.k != spec_runtime.profile.default_k:
+            alpha_source = f"calibration extrapolated from k={spec_runtime.profile.default_k}"
+            unmeasured_prior = False
+        else:
+            alpha_source = "measured profile calibration"
+            unmeasured_prior = False
         spec_info = {
             "profile": spec_runtime.profile,
             "k": spec_runtime.k,
+            "alpha": spec_runtime.alpha,
+            "alpha_source": alpha_source,
+            "unmeasured_prior": unmeasured_prior,
             "tau": spec_runtime.tau,
             "draft_gb": spec_runtime.draft_weight_bytes / 1e9,
             "probe_bs": probe_bs,
-            "speedup": probe.spec_speedup if probe else 0.0,
+            "speedup": optimization.speedup if optimization is not None else (probe.spec_speedup if probe else 0.0),
+            "beneficial": optimization.beneficial if optimization is not None else bool(probe and probe.spec_speedup >= 1.0),
+            "active": optimization.beneficial if optimization is not None else True,
+            "reason": optimization.reason if optimization is not None else "manual k",
         }
 
     prefill_probe_len = max(1, effective_prefill_length(max(state.task_il, avg_in), state.prefix_hit_rate))

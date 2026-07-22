@@ -33,19 +33,32 @@
       {% endfor %}
     </select>
     {% if am.spec_method != 'off' %}
-    <input class="prec-select" type="number" name="spec_k" min="1" max="32"
-           value="{{ am.spec_k if am.spec_k > 0 else info.spec.k }}" aria-label="Draft tokens for {{ m.name }}"
-           title="Draft tokens per speculative cycle. The profile default is calibrated; changing k extrapolates its acceptance prior."
-           hx-post="/model/spec" hx-target="#main-content" hx-trigger="change" hx-include="closest .flex"
-           hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}' style="width:58px;" />
+    {% set k_options = info.spec.profile.supported_ks if info.spec and info.spec.profile.supported_ks else range(1, 33) %}
+    <select class="prec-select" name="spec_k" aria-label="Draft-token depth for {{ m.name }}"
+            title="Auto selects the k with the highest modeled generated-token throughput at the card's stated user concurrency. Manual values hold k fixed."
+            hx-post="/model/spec" hx-target="#main-content" hx-trigger="change" hx-include="closest .flex"
+            hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}' style="width:78px;">
+      <option value="0" {{ 'selected' if am.spec_k == 0 else '' }}>k Auto</option>
+      {% for k_option in k_options %}
+      <option value="{{ k_option }}" {{ 'selected' if am.spec_k == k_option else '' }}>k {{ k_option }}</option>
+      {% endfor %}
+    </select>
     {% endif %}
   </div>
   {% if info.spec %}
   <div class="T" style="margin-bottom:3px;" title="{{ info.spec.profile.note }} Source: {{ info.spec.profile.source }}.">
-    {{ info.spec.profile.label }} · k={{ info.spec.k }} · τ≈{{ "%.2f"|format(info.spec.tau) }} tok/cycle{% if info.spec.draft_gb > 0 %} · +{{ "%.1f"|format(info.spec.draft_gb) }} GB draft{% endif %}{% if info.spec.speedup > 0 %} · ~{{ info.spec.speedup }}× decode @{{ info.spec.probe_bs }} users{% endif %}
+    {{ info.spec.profile.label }} · {% if am.spec_k == 0 %}Auto {{ 'chose' if info.spec.active else 'tested' }} {% endif %}k={{ info.spec.k }} · α={{ "%.0f"|format(info.spec.alpha * 100) }}% ({{ info.spec.alpha_source }}) · τ≈{{ "%.2f"|format(info.spec.tau) }} tok/cycle{% if info.spec.draft_gb > 0 %} · +{{ "%.1f"|format(info.spec.draft_gb) }} GB draft{% endif %}{% if info.spec.speedup > 0 %} · {{ "%.2f"|format(info.spec.speedup) }}× decode @{{ info.spec.probe_bs }} users{% endif %}
   </div>
+  {% if am.spec_k == 0 %}
+  <div class="T" style="margin-bottom:3px;">Auto optimizes modeled generated tok/s at {{ info.spec.probe_bs }} concurrent users. {% if info.spec.active %}The effective k can change with workload and hardware.{% else %}It kept speculative decoding off; k={{ info.spec.k }} is the best speculative candidate, shown for comparison.{% endif %}</div>
+  {% endif %}
+  {% if info.spec.unmeasured_prior %}
+  <div class="warn">⚠ Acceptance is an unmeasured profile prior, not a benchmark for this exact deployment. Speculative decoding is not free: draft, verification, KV, and scheduler costs are included where modeled.</div>
+  {% endif %}
   {% if info.spec.speedup > 0 and info.spec.speedup < 1 %}
   <div class="warn">⚠ Spec decode is modeled slower than baseline at {{ info.spec.probe_bs }} users — verification is compute-bound at this batch.</div>
+  {% elif am.spec_k == 0 and not info.spec.active %}
+  <div class="warn">⚠ Auto kept the baseline because no speculative k cleared the benefit threshold at {{ info.spec.probe_bs }} users ({{ info.spec.reason }}).</div>
   {% endif %}
   {% endif %}
   {% endif %}

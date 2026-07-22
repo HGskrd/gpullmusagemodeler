@@ -308,6 +308,12 @@ class SpeculativeProfile:
     # MoE draft modules have many resident expert parameters but activate only
     # a subset per token. Zero means the resident count is also the active count.
     active_params: float = 0.0
+    # Empty preserves the generic 1..32 planner range. Non-empty profiles encode
+    # the only depths that are supported or calibrated well enough for Auto mode.
+    supported_ks: tuple[int, ...] = ()
+    # Optional per-depth alpha fits prevent extrapolating one measured accept
+    # length across structurally different draft depths.
+    acceptance_alpha_by_k: tuple[tuple[int, float], ...] = ()
 
 
 def _mtp_profile(
@@ -318,11 +324,15 @@ def _mtp_profile(
     note: str,
     exact_weight_bytes: float = 0.0,
     resident_params: float = 0.0,
+    draft_layers: int = 1,
+    supported_ks: tuple[int, ...] = (),
+    acceptance_alpha_by_k: tuple[tuple[int, float], ...] = (),
+    label: str = "Native MTP",
 ) -> SpeculativeProfile:
     resident_params = resident_params or active_params
     return SpeculativeProfile(
-        "Native MTP", "mtp", resident_params, 1, False, default_k, alpha, 0.03, source, note,
-        exact_weight_bytes, active_params,
+        label, "mtp", resident_params, draft_layers, False, default_k, alpha, 0.03, source, note,
+        exact_weight_bytes, active_params, supported_ks, acceptance_alpha_by_k,
     )
 
 
@@ -333,10 +343,20 @@ def _eagle3_profile(draft_params: float, alpha: float, default_k: int, source: s
     )
 
 
-def _dflash_profile(draft_params: float, alpha: float, default_k: int, source: str, note: str) -> SpeculativeProfile:
+def _dflash_profile(
+    draft_params: float,
+    alpha: float,
+    default_k: int,
+    source: str,
+    note: str,
+    draft_layers: int = 5,
+    exact_weight_bytes: float = 0.0,
+    supported_ks: tuple[int, ...] = (),
+    acceptance_alpha_by_k: tuple[tuple[int, float], ...] = (),
+) -> SpeculativeProfile:
     return SpeculativeProfile(
-        "DFlash block-diffusion speculator", "dflash", draft_params, 5, True, default_k, alpha, 0.08, source, note,
-        draft_params * 2.0, draft_params,
+        "DFlash block-diffusion speculator", "dflash", draft_params, draft_layers, True, default_k, alpha, 0.08, source, note,
+        exact_weight_bytes or draft_params * 2.0, draft_params, supported_ks, acceptance_alpha_by_k,
     )
 
 
@@ -2249,12 +2269,16 @@ MODELS: dict[str, Model] = {
     "l70": Model("l70", "Llama 3.1 70B", "Meta", "#2B7A78", 70.6e9, 70.6e9, False, 80, 64, 8, 128, False),
 
     "ge2": Model("ge2", "Gemma 4 E2B", "Gemma", "#5D8C3C", 2e9, 2e9, False, 26, 16, 8, 128, False, speculative_profiles=(
-        _mtp_profile(0.80, 0.08e9, 1, "https://docs.vllm.ai/en/latest/features/speculative_decoding/mtp/",
-                     "Gemma 4 native MTP (vLLM gemma4 backend, num_speculative_tokens=1); alpha is an unmeasured planning prior."),
+        _mtp_profile(0.40, 0.08e9, 1, "https://huggingface.co/google/gemma-4-E2B-it-assistant",
+                     "Gemma 4 assistant checkpoint served through vLLM's MTP path. No acceptance benchmark is published; "
+                     "alpha=.40 is an explicitly conservative planning prior, not a measured result.",
+                     draft_layers=4, supported_ks=(1,), label="Gemma 4 assistant MTP"),
     )),
     "ge4": Model("ge4", "Gemma 4 E4B", "Gemma", "#6FA84A", 4e9, 4e9, False, 34, 24, 8, 128, False, speculative_profiles=(
-        _mtp_profile(0.80, 0.0788e9, 1, "https://docs.vllm.ai/en/latest/features/speculative_decoding/mtp/",
-                     "Gemma 4 native MTP (vLLM gemma4 backend, num_speculative_tokens=1); alpha is an unmeasured planning prior."),
+        _mtp_profile(0.40, 0.0788e9, 1, "https://huggingface.co/google/gemma-4-E4B-it-assistant",
+                     "Gemma 4 assistant checkpoint served through vLLM's MTP path. No acceptance benchmark is published; "
+                     "alpha=.40 is an explicitly conservative planning prior, not a measured result.",
+                     draft_layers=4, supported_ks=(1,), label="Gemma 4 assistant MTP"),
     )),
     "g12": Model(
         "g12",
@@ -2277,20 +2301,31 @@ MODELS: dict[str, Model] = {
         global_head_dim=512,
         shared_key_value=True,
         attention_label="40 sliding 1k + 8 global p-RoPE; encoder-free image/audio projection",
-        speculative_profiles=(
-            _mtp_profile(0.80, 0.4e9, 1, "https://docs.vllm.ai/en/latest/features/speculative_decoding/mtp/",
-                         "Gemma 4 native MTP (vLLM gemma4 backend, num_speculative_tokens=1); alpha is an unmeasured planning prior."),
-        ),
     ),
     "g26": Model("g26", "Gemma 4 26B-A4B", "Gemma", "#8AB85C", 26e9, 4e9, True, 48, 32, 8, 128, False, speculative_profiles=(
-        _mtp_profile(0.80, 0.4e9, 1, "https://docs.vllm.ai/en/latest/features/speculative_decoding/mtp/",
-                     "Gemma 4 native MTP (vLLM gemma4 backend, num_speculative_tokens=1); alpha is an unmeasured planning prior."),
+        _mtp_profile(0.40, 0.4e9, 1, "https://huggingface.co/google/gemma-4-26B-A4B-it-assistant",
+                     "Gemma 4 assistant checkpoint served through vLLM's MTP path. No acceptance benchmark is published; "
+                     "alpha=.40 is an explicitly conservative planning prior, not a measured result.",
+                     draft_layers=4, supported_ks=(1,), label="Gemma 4 assistant MTP"),
         _eagle3_profile(0.9e9, 0.60, 5, "https://huggingface.co/RedHatAI/gemma-4-26B-A4B-it-speculator.eagle3",
                         "RedHatAI EAGLE-3 speculator; checkpoint size is 0.9B, alpha is a family prior."),
     )),
-    "g31": Model("g31", "Gemma 4 31B", "Gemma", "#A2C96E", 31e9, 31e9, False, 48, 40, 8, 128, False, speculative_profiles=(
-        _mtp_profile(0.80, 0.5e9, 1, "https://docs.vllm.ai/en/latest/features/speculative_decoding/mtp/",
-                     "Gemma 4 native MTP (vLLM gemma4 backend, num_speculative_tokens=1); alpha is an unmeasured planning prior."),
+    "g31": Model("g31", "Gemma 4 31B", "Gemma", "#A2C96E", 30.7e9, 30.7e9, False, 60, 32, 16, 256, False,
+        hidden_dim=5376,
+        attention_layers=60,
+        local_attention_layers=50,
+        local_attention_window=1024,
+        global_kv_heads=4,
+        global_head_dim=512,
+        shared_key_value=True,
+        attention_label="50 sliding 1k + 10 global p-RoPE",
+        max_context_tokens=262144,
+        speculative_profiles=(
+        _mtp_profile(0.40, 0.4695e9, 1, "https://huggingface.co/google/gemma-4-31B-it-assistant",
+                     "Official 939 MB BF16, four-layer Gemma 4 assistant served through vLLM's MTP path. "
+                     "No acceptance benchmark is published; alpha=.40 is an explicitly conservative planning prior, "
+                     "not a measured result.", exact_weight_bytes=939e6, draft_layers=4, supported_ks=(1,),
+                     label="Gemma 4 assistant MTP"),
         _eagle3_profile(2e9, 0.60, 5, "https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.eagle3",
                         "RedHatAI EAGLE-3 speculator; checkpoint size is 2B, alpha is a family prior."),
         _dflash_profile(4e9, 0.72, 8, "https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash",
@@ -2437,11 +2472,63 @@ MODELS: dict[str, Model] = {
         RWKV7_G1_TOOL_CAPABILITIES,
     ),
 
-    "q08": Model("q08", "Qwen 3.5 0.8B", "Qwen", "#0E8F66", 0.8e9, 0.8e9, False, 24, 16, 4, 64, False),
-    "q2": Model("q2", "Qwen 3.5 2B", "Qwen", "#15986D", 2e9, 2e9, False, 28, 16, 4, 128, False),
-    "q4": Model("q4", "Qwen 3.5 4B", "Qwen", "#1AA174", 4e9, 4e9, False, 32, 24, 4, 128, False),
-    "q9": Model("q9", "Qwen 3.5 9B", "Qwen", "#1D9E75", 9.2e9, 9.2e9, False, 36, 36, 4, 128, False),
-    "q27": Model("q27", "Qwen 3.5 27B", "Qwen", "#3266ad", 27.8e9, 27.8e9, False, 48, 36, 4, 128, False),
+    "q08": Model("q08", "Qwen 3.5 0.8B", "Qwen", "#0E8F66", 0.8e9, 0.8e9, False, 24, 8, 2, 256, False,
+        hidden_dim=1024, attention_layers=6, linear_attention_layers=18, linear_attention_heads=16,
+        linear_attention_head_dim=128, linear_attention_k_heads=16, linear_attention_k_head_dim=128,
+        linear_attention_conv_kernel=4, attention_label="18 Gated DeltaNet + 6 full attention",
+        max_context_tokens=262144, speculative_profiles=(
+            _mtp_profile(0.65, 0.035e9, 1, "https://huggingface.co/Qwen/Qwen3.5-0.8B/blob/main/config.json",
+                         "Official config contains one native MTP layer. No per-size acceptance benchmark is published; "
+                         "alpha=.65 and the one-layer parameter footprint are conservative planning estimates.",
+                         supported_ks=(1,)),
+        )),
+    "q2": Model("q2", "Qwen 3.5 2B", "Qwen", "#15986D", 2e9, 2e9, False, 24, 8, 2, 256, False,
+        hidden_dim=2048, attention_layers=6, linear_attention_layers=18, linear_attention_heads=16,
+        linear_attention_head_dim=128, linear_attention_k_heads=16, linear_attention_k_head_dim=128,
+        linear_attention_conv_kernel=4, attention_label="18 Gated DeltaNet + 6 full attention",
+        max_context_tokens=262144, speculative_profiles=(
+            _mtp_profile(0.65, 0.08e9, 1, "https://huggingface.co/Qwen/Qwen3.5-2B/blob/main/config.json",
+                         "Official config contains one native MTP layer. No per-size acceptance benchmark is published; "
+                         "alpha=.65 and the one-layer parameter footprint are conservative planning estimates.",
+                         supported_ks=(1,)),
+        )),
+    "q4": Model("q4", "Qwen 3.5 4B", "Qwen", "#1AA174", 4e9, 4e9, False, 32, 16, 4, 256, False,
+        hidden_dim=2560, attention_layers=8, linear_attention_layers=24, linear_attention_heads=32,
+        linear_attention_head_dim=128, linear_attention_k_heads=16, linear_attention_k_head_dim=128,
+        linear_attention_conv_kernel=4, attention_label="24 Gated DeltaNet + 8 full attention",
+        max_context_tokens=262144, speculative_profiles=(
+            _mtp_profile(0.65, 0.125e9, 1, "https://huggingface.co/Qwen/Qwen3.5-4B/blob/main/config.json",
+                         "Official config contains one native MTP layer. No per-size acceptance benchmark is published; "
+                         "alpha=.65 and the one-layer parameter footprint are conservative planning estimates.",
+                         supported_ks=(1,)),
+        )),
+    "q9": Model("q9", "Qwen 3.5 9B", "Qwen", "#1D9E75", 9.2e9, 9.2e9, False, 32, 16, 4, 256, False,
+        hidden_dim=4096, attention_layers=8, linear_attention_layers=24, linear_attention_heads=32,
+        linear_attention_head_dim=128, linear_attention_k_heads=16, linear_attention_k_head_dim=128,
+        linear_attention_conv_kernel=4, attention_label="24 Gated DeltaNet + 8 full attention",
+        max_context_tokens=262144, speculative_profiles=(
+            _mtp_profile(0.65, 0.29e9, 1, "https://huggingface.co/Qwen/Qwen3.5-9B/blob/main/config.json",
+                         "Official config contains one native MTP layer. No per-size acceptance benchmark is published; "
+                         "alpha=.65 and the one-layer parameter footprint are conservative planning estimates.",
+                         supported_ks=(1,)),
+        )),
+    "q27": Model("q27", "Qwen 3.5 27B", "Qwen", "#3266ad", 27.8e9, 27.8e9, False, 64, 24, 4, 256, False,
+        hidden_dim=5120, attention_layers=16, linear_attention_layers=48, linear_attention_heads=48,
+        linear_attention_head_dim=128, linear_attention_k_heads=16, linear_attention_k_head_dim=128,
+        linear_attention_conv_kernel=4, attention_label="48 Gated DeltaNet + 16 full attention",
+        max_context_tokens=262144, speculative_profiles=(
+            _mtp_profile(0.9103, 0.43e9, 3, "https://huggingface.co/modal-labs/Qwen3.5-27B-DFlash",
+                         "Built-in MTP benchmarked on five workloads on 1x B200. Alpha is fitted to the mean measured "
+                         "accept length 3.4934 at k=3; measured speedup was 2.46-2.80x at concurrency 1 and "
+                         "1.98-2.34x at concurrency 32.", supported_ks=(3, 7, 15),
+                         acceptance_alpha_by_k=((3, 0.9103), (7, 0.8790), (15, 0.8586))),
+            _dflash_profile(2e9, 0.8765, 8, "https://huggingface.co/modal-labs/Qwen3.5-27B-DFlash",
+                            "Joint Z-Lab/Modal 2B BF16 checkpoint. Alpha is fitted to mean measured accept length "
+                            "5.6248 at block size 8 across five workloads; measured speedup was 3.48-4.76x at "
+                            "concurrency 1 and 2.14-3.01x at concurrency 32.", draft_layers=6,
+                            exact_weight_bytes=4.26e9, supported_ks=(4, 8, 16),
+                            acceptance_alpha_by_k=((4, 0.8227), (8, 0.8765), (16, 0.8841))),
+        )),
     "q35": Model("q35", "Qwen 3.5 35B-A3B", "Qwen", "#7F77DD", 35e9, 3e9, True, 64, 16, 4, 128, False, speculative_profiles=(
         _mtp_profile(0.70, 0.1e9, 3, "https://www.lmsys.org/blog/2026-06-15-next-generation-speculative-decoding-dflash-v2/",
                      "Native MTP documented for Qwen 3.5 397B; family assumption here — no per-size acceptance published.",

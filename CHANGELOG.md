@@ -6,17 +6,21 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Added true automatic speculative-depth selection: Auto searches calibrated/supported k values at a disclosed concurrency probe, includes spec-off as a candidate, and holds the chosen deployment depth across charts. Manual controls now expose only supported depths.
 - Added speculative-decoding modeling: per-deployment native MTP, EAGLE-3, DFlash, and training-free n-gram selection; measured acceptance lengths where available and explicitly labeled priors elsewhere; finite-output cycle accounting; k-position target KV/compute/communication verification; separate MoE drafter resident-memory and active-compute costs; exact attached-checkpoint bytes; draft KV capacity overhead; and spec-aware topology retuning. Cards expose drafter and k controls, modeled speedup/slowdown, memory, and provenance.
 - Expanded the built-in use-case catalog from 10 to 19 scenarios, adding document extraction, enterprise search, contact-center QA, translation, contract review, security investigation, AML/KYC casework, synthetic generation, and catalog enrichment with dated source-backed assumptions.
 
 ### Changed
 
+- Corrected dense Qwen 3.5 catalog geometry and added native MTP profiles for 0.8B/2B/4B/9B/27B plus the benchmarked 2B Qwen 3.5 27B DFlash drafter with per-depth acceptance calibration. Corrected Gemma 4 31B geometry and modeled its actual four-layer, 939 MB assistant with a conservative, explicitly unmeasured acceptance prior.
+- Speculative decode now includes small explicit launch, scheduling, rejection-sync, and approximate draft-collective costs. Cards, reports, legends, and chart tooltips disclose method, effective k, alpha provenance, modeled speedup, and when Auto keeps the baseline.
 - Replaced the user-controlled global prefix-hit slider with catalog-owned empirical prefix-token reuse priors per use case. Shared estimates now use a prompt-token-weighted portfolio average, while routing capacity and cloud cached-input pricing use each workload's own prior.
 - Replaced the generated single-panel starter configuration with the bundled six-H100 A/B scenario, including its six-model comparison and 19-use-case workload definitions.
 - Recalibrated several use-case token formulas and quality gates, made deep research routable, and separated published workload evidence from low/medium-confidence planner defaults in the use-case UI.
 
 ### Fixed
 
+- Removed the unsupported Gemma 4 12B MTP option, replaced Gemma 4's unsupported 80% acceptance assumption with a conservative 40% prior, and prevented unsupported manual k values from being silently snapped across UI changes or imported scenarios.
 - Made projected cloud invoice spend explicit in the headline and per-use-case rows as money paid to cloud and lost from on-prem, including workloads routed 100% to cloud.
 - Corrected pipeline-parallel decode latency so User Pareto no longer reports higher per-user token speed merely from adding concurrent users; concurrency is a continuous batch, not a count of independent pipeline microbatches.
 - Formatted billion-scale token counts with a B unit in `fmt_num` (supply capacity showed "31795.8M") and aligned the live-slider JS formatter to the same units and decimals as the server filter.

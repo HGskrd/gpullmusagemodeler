@@ -769,13 +769,21 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
                 f"{gpu_name} x{am.gpu_count}; P {strategy_label(am.prefill_tp, am.prefill_pp, am.prefill_dp)}, "
                 f"D {strategy_label(am.tp, am.pp, am.dp)}"
             )
-            spec = resolve_spec_runtime(model, am.spec_method, am.spec_k, state.spec_acceptance, am.prec)
-            if spec is not None:
+            spec_info = get_model_info(state, am).get("spec")
+            if spec_info is not None:
+                spec = spec_info
+                auto_label = (
+                    f"Auto selected k={spec['k']}" if am.spec_k == 0 and spec["active"]
+                    else f"Auto kept spec off (best candidate k={spec['k']})" if am.spec_k == 0
+                    else f"manual k={spec['k']}"
+                )
                 lines.append(
-                    f"  - Spec decoding: {spec.profile.label}, k={spec.k}, "
-                    f"alpha {spec.alpha:.2f}, tau ~{spec.tau:.2f} tok/cycle, "
-                    f"+{spec.draft_weight_bytes / 1e9:.1f} GB draft weights; "
-                    f"lossless verification; speedup erodes as batch turns compute-bound"
+                    f"  - Spec decoding: {spec['profile'].label}, {auto_label}, "
+                    f"alpha {spec['alpha']:.2f} ({spec['alpha_source']}), tau ~{spec['tau']:.2f} tok/cycle, "
+                    f"+{spec['draft_gb']:.1f} GB draft weights, modeled {spec['speedup']:.2f}x "
+                    f"at {spec['probe_bs']} users; lossless verification; "
+                    f"draft/verification/KV/scheduler costs are modeled and speedup erodes as batch turns compute-bound. "
+                    f"Source: {spec['profile'].source}."
                 )
 
     lines.extend([
@@ -1233,6 +1241,24 @@ def model_spec():
             spec_k = int(request.form.get("spec_k", 0))
         except (TypeError, ValueError):
             spec_k = 0
+        am = s.find_model(uid)
+        if am is not None and method != "off" and spec_k > 0:
+            model = MODELS.get(am.model_key)
+            profile = next(
+                (p for p in getattr(model, "available_spec_profiles", ()) if p.method == method),
+                None,
+            ) if model is not None else None
+            supported_ks = tuple(getattr(profile, "supported_ks", ()) or ())
+            if supported_ks and spec_k not in supported_ks:
+                if method != am.spec_method:
+                    # The method selector submits the old method's k alongside
+                    # the new profile. Start the new profile in Auto instead of
+                    # rejecting an otherwise valid method change.
+                    spec_k = 0
+                else:
+                    return jsonify({
+                        "error": f"k={spec_k} is unsupported for {profile.label}; choose one of {supported_ks} or Auto"
+                    }), 400
         set_model_spec(s, uid, method, spec_k)
         return _htmx_response(s)
     except Exception as e:
@@ -1679,6 +1705,36 @@ def task_length():
         return jsonify({"error": str(e)}), 500
 
 
+def _annotate_chart_spec(state: PlannerState, datasets: list[dict]) -> list[dict]:
+    """Attach backend-derived speculative assumptions for chart tooltips.
+
+    Processing Pareto is an aggregate across deployed models, so its disclosure
+    intentionally summarizes every enabled drafter. Model-specific chart points
+    may provide more precise per-load fields, which the client prefers.
+    """
+    disclosures = []
+    for info in get_model_infos(state):
+        am = info["am"]
+        spec = info.get("spec")
+        if am.gpu_count <= 0 or spec is None:
+            continue
+        k_label = (
+            f"Auto→{spec['k']}" if am.spec_k == 0 and spec["active"]
+            else "Auto→off" if am.spec_k == 0
+            else str(spec["k"])
+        )
+        disclosures.append(
+            f"{info['model'].name}: {spec['profile'].label}, k {k_label}, "
+            f"α {spec['alpha'] * 100:.0f}% ({spec['alpha_source']}), "
+            f"{spec['speedup']:.2f}× @ {spec['probe_bs']} users"
+        )
+    disclosure = "; ".join(disclosures)
+    if disclosure:
+        for dataset in datasets:
+            dataset["spec_disclosure"] = disclosure
+    return datasets
+
+
 @app.route("/api/chart-data")
 def chart_data():
     try:
@@ -1689,9 +1745,9 @@ def chart_data():
 
         if mode == "processingpareto":
             batch_sizes = get_processing_pareto_bs(states)
-            datasets = chart_processing_pareto(sa, batch_sizes)
+            datasets = _annotate_chart_spec(sa, chart_processing_pareto(sa, batch_sizes))
             if sb:
-                datasets += chart_processing_pareto(sb, batch_sizes, " (B)")
+                datasets += _annotate_chart_spec(sb, chart_processing_pareto(sb, batch_sizes, " (B)"))
             return jsonify({"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]})
 
         if mode == "asrquality":
@@ -1714,9 +1770,9 @@ def chart_data():
             return jsonify({"type": "scatter", "datasets": datasets, "mode": mode, **embedding_quality_axis_range(datasets)})
 
         batch_sizes = get_decode_bs(states)
-        datasets = chart_user_pareto(sa, batch_sizes)
+        datasets = _annotate_chart_spec(sa, chart_user_pareto(sa, batch_sizes))
         if sb:
-            datasets += chart_user_pareto(sb, batch_sizes, " (B)")
+            datasets += _annotate_chart_spec(sb, chart_user_pareto(sb, batch_sizes, " (B)"))
         return jsonify({"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

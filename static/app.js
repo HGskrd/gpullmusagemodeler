@@ -128,6 +128,7 @@ function makeSeries(ds, showPoints) {
     data: (ds.data || []).map(point => ({
       value: [Number(point.x), point.y == null ? null : Number(point.y)],
       raw: point,
+      specDisclosure: ds.spec_disclosure || '',
     })),
     connectNulls: Boolean(ds.spanGaps),
     showSymbol: Boolean(showPoints),
@@ -156,6 +157,25 @@ function makeSeries(ds, showPoints) {
       itemStyle: { opacity: 0.1 },
     },
   };
+}
+
+function specDisclosure(p) {
+  const raw = p?.data?.raw || {};
+  if (raw.spec_method && raw.spec_k) {
+    const autoOff = raw.spec_auto && raw.spec_beneficial === false;
+    const auto = autoOff ? `Auto→off (best ${raw.spec_method} k=${raw.spec_k})` : raw.spec_auto ? `Auto→${raw.spec_k}` : raw.spec_k;
+    const alpha = raw.spec_alpha == null ? '' : ` · α ${(Number(raw.spec_alpha) * 100).toFixed(0)}%`;
+    const speedup = raw.spec_speedup == null ? '' : ` · ${Number(raw.spec_speedup).toFixed(2)}×`;
+    return `${raw.spec_method} · k ${auto}${alpha}${speedup}`;
+  }
+  return p?.data?.specDisclosure || '';
+}
+
+function specDisclosureHtml(p, theme) {
+  const disclosure = specDisclosure(p);
+  return disclosure
+    ? `<div style="margin:0 0 3px 17px;color:${theme.tc};font-size:9px;">Spec: ${disclosure}</div>`
+    : '';
 }
 
 function axisCommon(theme, title, formatter, extra = {}) {
@@ -427,6 +447,7 @@ function renderChart(data) {
               `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px;color:${theme.text};">${p.seriesName}</span>` +
               `<span style="margin-left:4px;text-align:right;font-weight:600;color:${oom ? 'var(--red)' : theme.text};">${yStr}${detail}</span>` +
               `</div>`;
+            html += specDisclosureHtml(p, theme);
           });
         return html;
       }, 'axis'),
@@ -463,6 +484,7 @@ function renderChart(data) {
               `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px;color:${theme.text};">${p.seriesName}</span>` +
               `<span style="margin-left:4px;text-align:right;font-weight:600;color:${oom ? 'var(--red)' : theme.text};">${yStr}${detail}</span>` +
               `</div>`;
+            html += specDisclosureHtml(p, theme);
           });
         return html;
       }, 'axis'),

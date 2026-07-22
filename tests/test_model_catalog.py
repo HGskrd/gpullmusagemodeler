@@ -387,9 +387,80 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertAlmostEqual(model.quality, aa_intelligence_to_quality(25.0))
         self.assertAlmostEqual(model.token_efficiency, aa_output_tokens_to_efficiency(12.0))
         self.assertAlmostEqual(model.quality_confidence, 0.65)
-
         self.assertEqual(kv_bytes_per_token(model, "bf16"), 172_032)
         self.assertEqual(kv_cache_bytes_for_sequence(model, 32_768, "bf16"), 436_207_616)
+
+    def test_gemma4_31b_catalog_and_assistant_match_official_configs(self):
+        model = MODELS["g31"]
+
+        self.assertEqual(model.total_params, 30.7e9)
+        self.assertEqual(model.layers, 60)
+        self.assertEqual(model.hidden_size, 5376)
+        self.assertEqual(model.num_heads, 32)
+        self.assertEqual(model.kv_heads, 16)
+        self.assertEqual(model.head_dim, 256)
+        self.assertEqual(model.local_attention_layers, 50)
+        self.assertEqual(model.local_attention_window, 1024)
+        self.assertEqual(model.global_kv_heads, 4)
+        self.assertEqual(model.global_head_dim, 512)
+        self.assertTrue(model.shared_key_value)
+        self.assertEqual(model.max_context_tokens, 262144)
+
+        mtp = next(p for p in model.speculative_profiles if p.method == "mtp")
+        self.assertEqual(mtp.draft_layers, 4)
+        self.assertEqual(mtp.exact_weight_bytes, 939e6)
+        self.assertEqual(mtp.supported_ks, (1,))
+        self.assertEqual(mtp.acceptance_alpha, 0.40)
+        self.assertIn("conservative planning prior", mtp.note)
+        self.assertIn("not a measured result", mtp.note)
+
+    def test_qwen35_dense_geometry_matches_official_configs(self):
+        expected = {
+            "q08": (24, 8, 2, 256, 1024, 6, 18, 16),
+            "q2": (24, 8, 2, 256, 2048, 6, 18, 16),
+            "q4": (32, 16, 4, 256, 2560, 8, 24, 32),
+            "q9": (32, 16, 4, 256, 4096, 8, 24, 32),
+            "q27": (64, 24, 4, 256, 5120, 16, 48, 48),
+        }
+        for key, geometry in expected.items():
+            with self.subTest(model=key):
+                model = MODELS[key]
+                actual = (
+                    model.layers,
+                    model.num_heads,
+                    model.kv_heads,
+                    model.head_dim,
+                    model.hidden_size,
+                    model.attention_layer_count,
+                    model.linear_attention_layer_count,
+                    model.linear_attention_head_count,
+                )
+                self.assertEqual(actual, geometry)
+                self.assertEqual(model.linear_attention_k_head_count, 16)
+                self.assertEqual(model.linear_attention_head_size, 128)
+                self.assertEqual(model.linear_attention_k_head_size, 128)
+                self.assertEqual(model.linear_attention_kernel_size, 4)
+                self.assertEqual(model.max_context_tokens, 262144)
+                self.assertIn("mtp", {p.method for p in model.speculative_profiles})
+                if key != "q27":
+                    mtp = next(p for p in model.speculative_profiles if p.method == "mtp")
+                    self.assertEqual(mtp.supported_ks, (1,))
+
+    def test_qwen35_27b_speculative_profiles_use_measured_calibrations(self):
+        profiles = {p.method: p for p in MODELS["q27"].speculative_profiles}
+
+        mtp = profiles["mtp"]
+        self.assertEqual(mtp.supported_ks, (3, 7, 15))
+        self.assertEqual(dict(mtp.acceptance_alpha_by_k), {3: 0.9103, 7: 0.8790, 15: 0.8586})
+        self.assertIn("3.4934", mtp.note)
+
+        dflash = profiles["dflash"]
+        self.assertEqual(dflash.draft_params, 2e9)
+        self.assertEqual(dflash.draft_layers, 6)
+        self.assertEqual(dflash.exact_weight_bytes, 4.26e9)
+        self.assertEqual(dflash.supported_ks, (4, 8, 16))
+        self.assertEqual(dict(dflash.acceptance_alpha_by_k), {4: 0.8227, 8: 0.8765, 16: 0.8841})
+        self.assertIn("5.6248", dflash.note)
 
     def test_lfm_catalog_entries_use_hybrid_attention_specs(self):
         expected = {
@@ -437,7 +508,8 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(profile.source_repo, "nvidia/Gemma-4-31B-IT-NVFP4")
         self.assertEqual(profile.source_kind, "exact")
         self.assertIn("language self-attention BF16", profile.retained)
-        self.assertAlmostEqual(model.weight_bytes_per_param("nvfp4"), 1.052685646, places=6)
+        expected_storage = 2 * 10_464_098_156 + 10_404_495_360 + 1_300_561_920 + 4 * 360
+        self.assertAlmostEqual(model.weight_bytes_per_param("nvfp4"), expected_storage / 30.7e9, places=9)
         self.assertAlmostEqual(model.kv_cache_bytes_per_elem("nvfp4"), 1.0)
 
     def test_qwen_moe_nvfp4_profiles_are_model_specific(self):
@@ -772,6 +844,13 @@ class ModelCatalogTests(unittest.TestCase):
                     self.assertLessEqual(profile.kv_overhead, hi)
                     self.assertTrue(profile.source.startswith("http"))
                     self.assertTrue(profile.note)
+                    self.assertEqual(tuple(sorted(set(profile.supported_ks))), profile.supported_ks)
+                    self.assertTrue(all(1 <= k <= 32 for k in profile.supported_ks))
+                    alpha_by_k = dict(profile.acceptance_alpha_by_k)
+                    self.assertEqual(len(alpha_by_k), len(profile.acceptance_alpha_by_k))
+                    self.assertTrue(all(0.0 < alpha < 1.0 for alpha in alpha_by_k.values()))
+                    if profile.supported_ks and alpha_by_k:
+                        self.assertTrue(set(alpha_by_k) <= set(profile.supported_ks))
                     seen += 1
         self.assertGreaterEqual(seen, 20)
 
@@ -792,7 +871,7 @@ class ModelCatalogTests(unittest.TestCase):
 
     def test_native_mtp_models_are_flagged(self):
         # Models with documented native MTP heads must expose an mtp profile.
-        for key in ("ds3", "deepseek-v4-pro", "deepseek-v4-flash", "glm45a", "g31", "q397", "mimo-v2.5-pro"):
+        for key in ("ds3", "deepseek-v4-pro", "deepseek-v4-flash", "glm45a", "g31", "q08", "q2", "q4", "q9", "q27", "q397", "mimo-v2.5-pro"):
             with self.subTest(model=key):
                 methods = {p.method for p in MODELS[key].speculative_profiles}
                 self.assertIn("mtp", methods)
@@ -800,6 +879,8 @@ class ModelCatalogTests(unittest.TestCase):
         # DFlash attach points with published checkpoints.
         q397_methods = {p.method for p in MODELS["q397"].speculative_profiles}
         self.assertIn("dflash", q397_methods)
+        self.assertIn("dflash", {p.method for p in MODELS["q27"].speculative_profiles})
+        self.assertNotIn("mtp", {p.method for p in MODELS["g12"].speculative_profiles})
 
 
 if __name__ == "__main__":
