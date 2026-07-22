@@ -744,7 +744,16 @@ def _decode_step_time(
     ct = (wf + af + max(extra_flops, 0.0)) / (model_gpu_flops(g, m, prec) * tp * eff.comp_eff)
 
     comm = communication_breakdown(m, tp, pp, pr, avg_seq, g, eff)
-    base = max(bt, ct) * _pp_bubble_multiplier(pp, pr)
+    # ``pr`` is the number of sequences in one continuous decode batch, not a
+    # count of independent pipeline microbatches.  Treating it as the latter
+    # makes the fill/drain multiplier shrink with concurrency and can therefore
+    # claim that every user's autoregressive token latency improves when more
+    # users arrive.  A decode iteration has a dependency barrier before those
+    # sequences can request their next token, so model its end-to-end traversal
+    # across all pipeline stages.  This is a conservative closed-form latency
+    # approximation; it intentionally does not turn aggregate PP utilization
+    # into a per-request latency reduction.
+    base = max(bt, ct) * max(int(pp), 1)
     step = (base + comm.total) * (1 + eff.overhead + paged_oh)
     return step * _moe_tail_multiplier(m, eff)
 

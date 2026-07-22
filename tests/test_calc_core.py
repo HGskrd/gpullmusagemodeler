@@ -117,6 +117,24 @@ class CoreCapacityMathTests(unittest.TestCase):
         self.assertEqual(result.lat, result.step_ms)
         self.assertAlmostEqual(result.lat, 1000.0 / (result.tps / 64), delta=0.02)
 
+    def test_pipeline_decode_does_not_accelerate_each_user_with_concurrency(self):
+        model = MODELS["kimi-k3-preview"]
+        gpu = GPUS["B300"]
+        per_user_tps = []
+
+        for users in (1, 2, 4, 8, 16, 32, 64):
+            result = compute_decode(
+                model, 4, 18, users, 1, gpu, 0.90, 2.0, "bf16",
+                self.chat_in, self.chat_out, self.eff,
+            )
+            self.assertIsNotNone(result)
+            per_user_tps.append(result.tps / users)
+
+        self.assertTrue(all(
+            later <= earlier
+            for earlier, later in zip(per_user_tps, per_user_tps[1:])
+        ))
+
     def test_pipeline_fill_drain_prevents_batch_one_speedup(self):
         model = MODELS["q08"]
         gpu = GPUS["H100"]
