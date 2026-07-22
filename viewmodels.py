@@ -18,6 +18,7 @@ from calc import (
     EfficiencyParams,
     avg_dist,
     communication_breakdown,
+    compute_decode,
     compute_embedding_distribution,
     compute_realtime_capacity,
     compute_realtime_max_users,
@@ -27,6 +28,7 @@ from calc import (
     gpu_supports_mxfp4,
     gpu_supports_nvfp4,
     per_replica_kv_cache_bytes,
+    resolve_spec_runtime,
     strategy_label,
     valid_strategies,
 )
@@ -109,8 +111,9 @@ def _build_model_info(state: PlannerState, am: ModelAssignment, gpu_pool: Option
     selected_pool_min_gpu_count = None
     alt_min_gpu_count = None
     alt_pool_min_gpu_count = None
+    spec_runtime = resolve_spec_runtime(model, am.spec_method, am.spec_k, state.spec_acceptance, am.prec)
     if gpu and am.gpu_count > 0:
-        strats = valid_strategies(model, am.gpu_count, gpu, state.mu, state.profiled_non_kv_gb, am.prec)
+        strats = valid_strategies(model, am.gpu_count, gpu, state.mu, state.profiled_non_kv_gb, am.prec, spec_runtime)
         recommended_label = strategy_label(*_preferred_strategy(state, am, gpu, "decode"))
 
     avg_in = avg_dist(state.in_dist, INPUT_BUCKETS)
@@ -128,10 +131,42 @@ def _build_model_info(state: PlannerState, am: ModelAssignment, gpu_pool: Option
     decode_max_slots = 0
     if decode_mem and avg_seq > 0:
         decode_kv = per_replica_kv_cache_bytes(model, avg_seq, am.prec, am.pp, am.tp)
+        if spec_runtime is not None:
+            # The drafter's own small KV cache shares the sequence's KV budget.
+            decode_kv *= 1.0 + spec_runtime.profile.kv_overhead
         decode_per_replica = int(decode_mem.kv_budget / decode_kv) if decode_kv > 0 else 0
         if state.decode_efficiency.sched_budget > 0:
             decode_per_replica = min(decode_per_replica, state.decode_efficiency.sched_budget)
         decode_max_slots = decode_per_replica * am.dp
+
+    spec_info = None
+    if spec_runtime is not None:
+        probe = None
+        probe_bs = max(1, min(32, decode_max_slots or 1))
+        if gpu and am.gpu_count > 0:
+            probe = compute_decode(
+                model,
+                am.tp,
+                am.pp,
+                probe_bs,
+                am.dp,
+                gpu,
+                state.mu,
+                state.profiled_non_kv_gb,
+                am.prec,
+                state.in_dist,
+                state.out_dist,
+                state.decode_efficiency,
+                spec_runtime,
+            )
+        spec_info = {
+            "profile": spec_runtime.profile,
+            "k": spec_runtime.k,
+            "tau": spec_runtime.tau,
+            "draft_gb": spec_runtime.draft_weight_bytes / 1e9,
+            "probe_bs": probe_bs,
+            "speedup": probe.spec_speedup if probe else 0.0,
+        }
 
     prefill_probe_len = max(1, effective_prefill_length(max(state.task_il, avg_in), state.prefix_hit_rate))
     prefill_max_batch = 0
@@ -155,7 +190,10 @@ def _build_model_info(state: PlannerState, am: ModelAssignment, gpu_pool: Option
         fit_now = [
             prec for prec in PRECISIONS
             if prec != am.prec and am.gpu_count > 0
-            and valid_strategies(model, am.gpu_count, gpu, state.mu, state.profiled_non_kv_gb, prec)
+            and valid_strategies(
+                model, am.gpu_count, gpu, state.mu, state.profiled_non_kv_gb, prec,
+                resolve_spec_runtime(model, am.spec_method, am.spec_k, state.spec_acceptance, prec),
+            )
         ]
         if fit_now:
             alt_prec = fit_now[0]
@@ -283,6 +321,8 @@ def _build_model_info(state: PlannerState, am: ModelAssignment, gpu_pool: Option
         "quant_profile": quant_profile,
         "realtime": realtime,
         "embedding": embedding,
+        "spec": spec_info,
+        "spec_options": model.available_spec_profiles,
         "mixed_weight_precision": model.uses_mixed_weight_precision(am.prec),
         "fits": mem is not None,
         "decode_fits": decode_mem is not None,

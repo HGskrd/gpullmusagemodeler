@@ -63,6 +63,7 @@ from calc import (
     dist_percentile,
     effective_prefill_length,
     normalize_dist,
+    resolve_spec_runtime,
     strategy_label,
     valid_strategies,
 )
@@ -93,7 +94,7 @@ from state import (
     auto_reallow_model,
     change_gpu_qty,
     clear_compare_state,
-    create_default_state,
+    create_default_scenario,
     duplicate_compare_state,
     delete_visitor_states,
     get_scope_lock,
@@ -117,8 +118,8 @@ from state import (
     set_model_gpu_count,
     set_model_gpu_pool,
     set_model_prec,
+    set_model_spec,
     set_model_strat,
-    set_prefix_hit_rate,
     set_project_batch_eligible,
     set_project_capability,
     set_project_dist_preset,
@@ -248,6 +249,7 @@ EFFICIENCY_SETTING_BOUNDS = {
     "kv_slack": (0.00, 0.10),
     "moe_imbalance": (1.00, 2.00),
     "pd_interference": (0.00, 1.00),
+    "spec_acceptance": (0.00, 0.99),
 }
 INTEGER_SETTING_BOUNDS = {"decode_sched_budget": (2048, 65536)}
 
@@ -718,8 +720,10 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
         f"- Auto strategy: {AUTO_MODEL_STRATEGY_LABELS.get(getattr(state, 'auto_strategy', ''), AUTO_MODEL_STRATEGY_LABELS['balanced'])}",
         f"- gpu_mem_util: {state.mu:.2f}",
         f"- Profiled non-KV runtime memory: {state.profiled_non_kv_gb:g} GB/GPU",
-        f"- Prefix hit rate: {state.prefix_hit_rate * 100:.0f}%",
+        f"- Empirical prefix-token reuse (portfolio average): {state.prefix_hit_rate * 100:.0f}%",
     ]
+    if state.spec_acceptance > 0:
+        lines.append(f"- Speculative acceptance override: {state.spec_acceptance * 100:.0f}% per-token alpha for all drafters")
     gateway = cloud_policy.corpo_presets().get(getattr(state, "corpo_cloud", ""), {})
     lines.append(f"- Cloud gateway: {gateway.get('label', getattr(state, 'corpo_cloud', 'current'))}")
     if state.auto_excluded:
@@ -765,6 +769,14 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
                 f"{gpu_name} x{am.gpu_count}; P {strategy_label(am.prefill_tp, am.prefill_pp, am.prefill_dp)}, "
                 f"D {strategy_label(am.tp, am.pp, am.dp)}"
             )
+            spec = resolve_spec_runtime(model, am.spec_method, am.spec_k, state.spec_acceptance, am.prec)
+            if spec is not None:
+                lines.append(
+                    f"  - Spec decoding: {spec.profile.label}, k={spec.k}, "
+                    f"alpha {spec.alpha:.2f}, tau ~{spec.tau:.2f} tok/cycle, "
+                    f"+{spec.draft_weight_bytes / 1e9:.1f} GB draft weights; "
+                    f"lossless verification; speedup erodes as batch turns compute-bound"
+                )
 
     lines.extend([
         "",
@@ -776,7 +788,7 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
         f"- Served internally: {_fmt_pct(f['served_pct'])} ({fmt_num(f['served_tokens'])} tok)",
         f"- Spilled to cloud: {_fmt_pct(f['spilled_pct'])} ({fmt_num(f['spilled_tokens'])} tok)",
         f"- Leaked to cloud: {_fmt_pct(f['leaked_pct'])} ({fmt_num(f['leaked_tokens'])} tok)",
-        f"- Cloud outflow: {fmt_money(p['value_cloud_day'])}/day",
+        f"- Cloud spend lost from on-prem: {fmt_money(p['value_cloud_day'])}/day",
         f"- Destroyed: {_fmt_pct(f['destroyed_pct'])} ({fmt_num(f['destroyed_tokens'])} tok)",
         f"- Token coverage: {_fmt_pct(p['token_coverage'] * 100)}",
         f"- Value capture: {_fmt_pct(p['value_capture_rate'] * 100)}",
@@ -822,17 +834,20 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
             lines.append(
                 f"- {proj.name}: AA difficulty index {quality_to_aa_intelligence(proj.difficulty):.1f}, SLO {round(row['min_success_rate'] * 100)}%, "
                 f"floor Q {row.get('quality_floor', 0.0):.2f}, "
+                f"empirical prefix reuse {row['prefix_hit_rate'] * 100:.0f}%, "
                 f"WTP ${proj.wtp_per_m:.2f}/M; {cloud}; {fate}."
             )
+            parts = []
             if row["any_served"]:
-                parts = [
+                parts.extend([
                     f"{fmt_money(row['value_served'])}/day served",
                     f"margin {fmt_money(row['margin_day'])}/day",
-                ]
-                if row["value_spilled"] + row["value_leaked"] > 0:
-                    parts.append(f"{fmt_money(row['value_spilled'] + row['value_leaked'])}/day to cloud")
-                if row["value_destroyed"] > 0:
-                    parts.append(f"{fmt_money(row['value_destroyed'])}/day destroyed")
+                ])
+            if row["value_spilled"] + row["value_leaked"] > 0:
+                parts.append(f"{fmt_money(row['value_spilled'] + row['value_leaked'])}/day paid to cloud")
+            if row["value_destroyed"] > 0:
+                parts.append(f"{fmt_money(row['value_destroyed'])}/day destroyed")
+            if parts:
                 lines.append(f"  {', '.join(parts)}.")
             lines.append(f"  {_projection_diagnostic(row)}")
             if row["latent_unlocked"]:
@@ -873,7 +888,8 @@ def _format_projection_report(state_a: PlannerState, state_b: PlannerState | Non
 def index():
     tab_id = _tab_id(optional=True)
     if tab_id is None:
-        return render_template("index.html", A=create_default_state(), B=None, **_template_context())
+        default_a, default_b = create_default_scenario()
+        return render_template("index.html", A=default_a, B=default_b, **_template_context())
 
     sa = get_state(_scope_id())
     sb = get_compare_state(_scope_id())
@@ -1205,6 +1221,24 @@ def model_prec():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/model/spec", methods=["POST"])
+def model_spec():
+    try:
+        s = _request_state()
+        if s is None:
+            return _htmx_response()
+        uid = int(request.form.get("uid"))
+        method = request.form.get("method", "off")
+        try:
+            spec_k = int(request.form.get("spec_k", 0))
+        except (TypeError, ValueError):
+            spec_k = 0
+        set_model_spec(s, uid, method, spec_k)
+        return _htmx_response(s)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/model/count", methods=["POST"])
 def model_count():
     try:
@@ -1244,7 +1278,8 @@ def model_strat():
             return jsonify({"error": "GPU not found"}), 404
             
         model = MODELS[am.model_key]
-        valid = valid_strategies(model, am.gpu_count, gp.gpu, s.mu, s.profiled_non_kv_gb, am.prec)
+        spec = resolve_spec_runtime(model, am.spec_method, am.spec_k, s.spec_acceptance, am.prec)
+        valid = valid_strategies(model, am.gpu_count, gp.gpu, s.mu, s.profiled_non_kv_gb, am.prec, spec)
         strategy = (tp, pp, dp)
         if strategy not in valid:
             return jsonify({"error": "Invalid strategy for this model/GPU combination"}), 400
@@ -1373,20 +1408,6 @@ def settings_int():
         return _tracked_htmx_response("settings_int", s)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/settings/prefix-hit", methods=["POST"])
-def settings_prefix_hit():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        value = int(request.form.get("value"))
-        set_prefix_hit_rate(s, value / 100)
-        retune_models(s, preserve_existing=False)
-        return _tracked_htmx_response("settings_prefix_hit", s)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

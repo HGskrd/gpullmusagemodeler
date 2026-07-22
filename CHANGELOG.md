@@ -6,14 +6,18 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Added speculative-decoding modeling: per-deployment native MTP, EAGLE-3, DFlash, and training-free n-gram selection; measured acceptance lengths where available and explicitly labeled priors elsewhere; finite-output cycle accounting; k-position target KV/compute/communication verification; separate MoE drafter resident-memory and active-compute costs; exact attached-checkpoint bytes; draft KV capacity overhead; and spec-aware topology retuning. Cards expose drafter and k controls, modeled speedup/slowdown, memory, and provenance.
 - Expanded the built-in use-case catalog from 10 to 19 scenarios, adding document extraction, enterprise search, contact-center QA, translation, contract review, security investigation, AML/KYC casework, synthetic generation, and catalog enrichment with dated source-backed assumptions.
 
 ### Changed
 
+- Replaced the user-controlled global prefix-hit slider with catalog-owned empirical prefix-token reuse priors per use case. Shared estimates now use a prompt-token-weighted portfolio average, while routing capacity and cloud cached-input pricing use each workload's own prior.
+- Replaced the generated single-panel starter configuration with the bundled six-H100 A/B scenario, including its six-model comparison and 19-use-case workload definitions.
 - Recalibrated several use-case token formulas and quality gates, made deep research routable, and separated published workload evidence from low/medium-confidence planner defaults in the use-case UI.
 
 ### Fixed
 
+- Made projected cloud invoice spend explicit in the headline and per-use-case rows as money paid to cloud and lost from on-prem, including workloads routed 100% to cloud.
 - Corrected pipeline-parallel decode latency so User Pareto no longer reports higher per-user token speed merely from adding concurrent users; concurrency is a continuous batch, not a count of independent pipeline microbatches.
 - Formatted billion-scale token counts with a B unit in `fmt_num` (supply capacity showed "31795.8M") and aligned the live-slider JS formatter to the same units and decimals as the server filter.
 - Quoted the prefix-reuse panel's effective prefill length on the same workload basis the planner actually probes and routes on — `max(task input, mean input distribution)` — instead of the raw task input knob, and corrected the caption to state that prefill-sensitive capacity and demand estimates use the knob while pure decode and pareto charts do not.

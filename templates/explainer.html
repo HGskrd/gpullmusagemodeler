@@ -119,7 +119,7 @@
     <li><strong>Shape the workload.</strong> Set organization scale in the calculator's
       <em>Use cases</em> panel. Use <em>Edit definitions</em> to change each kind's input/output
       shape, quality gate, capabilities, and price ceiling. The aggregate prefill/decode
-      distribution is a demand-weighted blend of those choices. Optionally set a prefix-hit rate.</li>
+      distribution and empirical prefix reuse are workload-weighted blends of those choices.</li>
     <li><strong>Read the chart.</strong> Switch between <em>User Pareto</em> (tok/s per user vs concurrency)
       and <em>Processing Pareto</em> (requests/sec vs batch size).</li>
     <li><strong>(Optional)</strong> Open <em>Demand and economic impact</em> below the chart
@@ -320,10 +320,13 @@
 
   <h3>Prefix reuse</h3>
   <p>
-    <em>Prefix hit rate</em> models vLLM's Automatic Prefix Caching: the fraction of prompt tokens
-    served from cache instead of re-prefilled. It only affects prefill-sensitive metrics;
-    pure-decode and aggregate Pareto curves are unchanged. Effective prefill length
-    = input_len × (1 − hit_rate).
+    Each use case carries an <em>empirical prefix-token reuse prior</em> for vLLM Automatic Prefix
+    Caching: the fraction of prompt tokens expected to be served from cache instead of re-prefilled.
+    This is catalog-owned rather than a user tuning knob. Shared capacity views use a portfolio
+    average weighted by prompt-token volume, while routing and cloud pricing use each use case's
+    own rate. Replace these priors with observed vLLM query-token hit telemetry when available.
+    Prefix reuse affects prefill-sensitive metrics only; pure decode is unchanged. Effective
+    prefill length = input_len × (1 − hit_rate).
   </p>
 </section>
 
@@ -457,8 +460,8 @@
       to-mean ratio; sustainable daily tokens = peak RPS × 86400 × tokens/req ÷ peak-factor.</dd>
     <dt>Night batching</dt><dd>Flattens peak for batch-eligible projects by offering a discount
       overnight. Demand shifts via an elasticity parameter.</dd>
-    <dt>Workload readout</dt><dd>Average in/out lengths and active prefix-hit rate used by the
-      market pricing.</dd>
+    <dt>Workload readout</dt><dd>Average in/out lengths and the derived empirical portfolio
+      prefix-token reuse used by shared capacity estimates.</dd>
   </dl>
 </section>
 
