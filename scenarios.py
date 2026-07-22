@@ -107,6 +107,7 @@ def _project_definition_payload(proj: Project) -> dict:
         "min_success_rate": float(proj.min_success_rate),
         "quality_floor": float(getattr(proj, "quality_floor", 0.0)),
         "batch_eligible": bool(proj.batch_eligible),
+        "prefix_hit_rate": float(getattr(proj, "prefix_hit_rate", 0.0)),
         "unlock_price_per_m": float(proj.unlock_price_per_m),
         "in_pre": proj.in_pre,
         "out_pre": proj.out_pre,
@@ -163,6 +164,7 @@ def _project_from_payload(state: PlannerState, item: dict) -> Project:
         "min_success_rate": 0.85,
         "quality_floor": 0.0,
         "batch_eligible": False,
+        "prefix_hit_rate": 0.0,
         "latent_jobs_day": 0.0,
         "unlock_price_per_m": 0.0,
         "in_pre": "Chat",
@@ -215,6 +217,10 @@ def _project_from_payload(state: PlannerState, item: dict) -> Project:
             "quality_floor",
             _payload_float(definition, "quality_floor", float(base.get("quality_floor", 0.0))),
         ),
+        prefix_hit_rate=min(max(
+            _payload_float(definition, "prefix_hit_rate", float(base.get("prefix_hit_rate", 0.0))),
+            0.0,
+        ), 1.0),
         latent_jobs_day=_bounded_project_value(
             "latent_jobs_day",
             _payload_float(scale, "latent_jobs_day", float(base.get("latent_jobs_day", 0.0))),
@@ -288,6 +294,24 @@ def _scenario_int(raw: dict, key: str, default: int, lo: int, hi: int) -> int:
     except (TypeError, ValueError):
         value = default
     return min(max(value, lo), hi)
+
+
+def _scenario_spec_method(model_key: str, raw: Any) -> str:
+    method = str(raw or "off")
+    if method == "off":
+        return "off"
+    model = MODELS.get(model_key)
+    if model is None:
+        return "off"
+    if method == "ngram":
+        # ngram needs no draft weights: available on any plain text model.
+        if not model.is_realtime_only and not model.is_embedding_model:
+            return "ngram"
+        return "off"
+    profiles = getattr(model, "speculative_profiles", ()) or ()
+    if method in {getattr(p, "method", "") for p in profiles}:
+        return method
+    return "off"
 
 
 def _scenario_dist(raw: Any, expected: int, fallback: list[int]) -> list[int]:
@@ -366,13 +390,16 @@ def deserialize_planner_state(payload: Any) -> PlannerState:
             _scenario_int(row, "prefill_tp", 1, 1, max(1, gpu_count)),
             _scenario_int(row, "prefill_pp", 1, 1, max(1, gpu_count)),
             _scenario_int(row, "prefill_dp", 1, 1, max(1, gpu_count)),
+            _scenario_spec_method(str(row["model_key"]), row.get("spec_method", "off")),
+            _scenario_int(row, "spec_k", 0, 0, 32),
         )
         state.models.append(assignment)
 
     for key, default, lo, hi in (
         ("mu", 0.90, 0.01, 1.0), ("profiled_non_kv_gb", 4.0, 0.0, 4096.0),
         ("kv_slack", 0.02, 0.0, 1.0), ("moe_imbalance", 1.15, 0.1, 10.0),
-        ("pd_interference", 0.0, 0.0, 1.0), ("prefix_hit_rate", 0.0, 0.0, 1.0),
+        ("pd_interference", 0.0, 0.0, 1.0),
+        ("spec_acceptance", 0.0, 0.0, 0.99),
         ("prefill_bw_eff", 0.80, 0.01, 1.0), ("prefill_comp_eff", 0.75, 0.01, 1.0),
         ("prefill_overhead", 0.08, 0.0, 1.0), ("prefill_paged_oh", 0.10, 0.0, 1.0),
         ("prefill_ar_overlap", 0.30, 0.0, 1.0), ("decode_bw_eff", 0.80, 0.01, 1.0),
@@ -405,6 +432,9 @@ def deserialize_planner_state(payload: Any) -> PlannerState:
     state.auto_strategy = normalize_auto_strategy(payload.get("auto_strategy"))
     excluded = payload.get("auto_excluded", [])
     state.auto_excluded = [str(key) for key in excluded if key in MODELS] if isinstance(excluded, list) else []
+    # Ignore the legacy user-controlled panel rate and derive the portfolio
+    # value from the imported use-case priors.
+    _sync_aggregate_distribution(state)
     retune_models(state, preserve_existing=True)
     return state
 

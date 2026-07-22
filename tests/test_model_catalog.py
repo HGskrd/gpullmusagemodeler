@@ -751,6 +751,56 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertTrue(set(GPU_FP4_FLOPS) <= set(GPUS))
         self.assertTrue(set(GPU_TDP_WATTS) <= set(GPUS))
 
+    def test_speculative_profiles_are_well_formed(self):
+        from data import NGRAM_SPECULATIVE_PROFILE, SPEC_METHODS
+
+        kv_overhead_bounds = {"mtp": (0.0, 0.1), "eagle3": (0.0, 0.15), "dflash": (0.0, 0.2),
+                              "draft_model": (0.0, 1.0), "ngram": (0.0, 0.0)}
+        seen = 0
+        for key, model in MODELS.items():
+            for profile in model.speculative_profiles:
+                with self.subTest(model=key, method=profile.method):
+                    self.assertIn(profile.method, SPEC_METHODS)
+                    self.assertGreater(profile.acceptance_alpha, 0.0)
+                    self.assertLess(profile.acceptance_alpha, 1.0)
+                    self.assertGreaterEqual(profile.default_k, 1)
+                    self.assertGreater(profile.draft_params, 0.0)
+                    self.assertGreaterEqual(profile.draft_params, profile.active_params or profile.draft_params)
+                    self.assertGreaterEqual(profile.exact_weight_bytes, 0.0)
+                    lo, hi = kv_overhead_bounds[profile.method]
+                    self.assertGreaterEqual(profile.kv_overhead, lo)
+                    self.assertLessEqual(profile.kv_overhead, hi)
+                    self.assertTrue(profile.source.startswith("http"))
+                    self.assertTrue(profile.note)
+                    seen += 1
+        self.assertGreaterEqual(seen, 20)
+
+        # The n-gram proposer is training-free: no draft weights and no draft KV.
+        self.assertEqual(NGRAM_SPECULATIVE_PROFILE.draft_params, 0.0)
+        self.assertEqual(NGRAM_SPECULATIVE_PROFILE.kv_overhead, 0.0)
+
+    def test_ngram_profile_availability_follows_model_kind(self):
+        from data import NGRAM_SPECULATIVE_PROFILE
+
+        for key, model in MODELS.items():
+            with self.subTest(model=key):
+                available = model.available_spec_profiles
+                if model.is_realtime_only or model.is_embedding_model:
+                    self.assertEqual(available, ())
+                else:
+                    self.assertIs(available[-1], NGRAM_SPECULATIVE_PROFILE)
+
+    def test_native_mtp_models_are_flagged(self):
+        # Models with documented native MTP heads must expose an mtp profile.
+        for key in ("ds3", "deepseek-v4-pro", "deepseek-v4-flash", "glm45a", "g31", "q397", "mimo-v2.5-pro"):
+            with self.subTest(model=key):
+                methods = {p.method for p in MODELS[key].speculative_profiles}
+                self.assertIn("mtp", methods)
+
+        # DFlash attach points with published checkpoints.
+        q397_methods = {p.method for p in MODELS["q397"].speculative_profiles}
+        self.assertIn("dflash", q397_methods)
+
 
 if __name__ == "__main__":
     unittest.main()

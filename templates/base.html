@@ -60,7 +60,7 @@
 
 {% include "partials/revenue_projection.html" %}
 
-<p class="T" style="margin-top:6px;">Roofline estimates · vLLM continuous batching · separate prefill, decode, and embedding encoder views · KV capacity anchored to requested per-GPU memory minus weights minus profiled non-KV runtime memory · MoE uses activated params for core compute plus an adjustable expert-imbalance penalty · APC/prefix-hit workload knob for prefill-sensitive views · explicit prefill/decode interference blend · paged-KV runtime overhead and residual KV slack modeled · cross-node TP warning.</p>
+<p class="T" style="margin-top:6px;">Roofline estimates · vLLM continuous batching · separate prefill, decode, and embedding encoder views · KV capacity anchored to requested per-GPU memory minus weights minus profiled non-KV runtime memory · MoE uses activated params for core compute plus an adjustable expert-imbalance penalty · empirical per-use-case APC/prefix reuse for prefill-sensitive views · explicit prefill/decode interference blend · paged-KV runtime overhead and residual KV slack modeled · cross-node TP warning.</p>
 
 <details class="method-note">
   <summary class="T">Calibration note</summary>

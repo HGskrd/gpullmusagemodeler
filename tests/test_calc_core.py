@@ -5,6 +5,7 @@ from calc import (
     EfficiencyParams,
     _active_weight_bytes,
     _cloud_price_per_m_in_preset,
+    _compute_decode_core,
     _decode_attention_work,
     _dense_tp_oh,
     _deployment_capacity_for_profile,
@@ -22,6 +23,9 @@ from calc import (
     kv_cache_bytes_for_sequence,
     model_gpu_flops,
     per_tp_linear_attention_state_bytes,
+    resolve_spec_runtime,
+    spec_acceptance_len,
+    spec_finite_output_tau,
     valid_strategies,
 )
 from data import DIST_PRESETS, GPUS, MODELS, EmbeddingProfile, GPU, Model, success_rate
@@ -273,6 +277,174 @@ class ProjectionMathTests(unittest.TestCase):
         self.assertGreater(long_cap, 0)
         self.assertNotEqual(short_cap, long_cap)
         self.assertGreater(short_rps, long_rps)
+
+        prefill_heavy = {"in_len": 16_384, "out_len": 32, "tokens_per_request": 16_416}
+        uncached_cap, _ = _deployment_capacity_for_profile(state, am, gpu, prefill_heavy, 1.0, 0.0)
+        cached_cap, _ = _deployment_capacity_for_profile(state, am, gpu, prefill_heavy, 1.0, 0.8)
+        self.assertGreater(cached_cap, uncached_cap)
+
+
+class SpeculativeDecodingMathTests(unittest.TestCase):
+    def setUp(self):
+        self.eff = EfficiencyParams()
+        self.chat_in = DIST_PRESETS["Chat"]["in"]
+        self.chat_out = DIST_PRESETS["Chat"]["out"]
+
+    def decode(self, model, tp, pp, bs, dp, gpu, prec, spec=None):
+        return compute_decode(
+            model, tp, pp, bs, dp, gpu, 0.90, 2.0, prec,
+            self.chat_in, self.chat_out, self.eff, spec,
+        )
+
+    def test_acceptance_len_chain_formula(self):
+        # DeepSeek-V3: 87.5% single-token acceptance -> 1.875 tokens per cycle.
+        self.assertAlmostEqual(spec_acceptance_len(0.875, 1), 1.875)
+        self.assertAlmostEqual(spec_acceptance_len(0.0, 5), 1.0)
+        self.assertAlmostEqual(spec_acceptance_len(0.5, 3), (1 - 0.5 ** 4) / 0.5)
+        self.assertGreater(spec_acceptance_len(0.8, 3), spec_acceptance_len(0.6, 3))
+        self.assertGreater(spec_acceptance_len(0.6, 5), spec_acceptance_len(0.6, 3))
+        self.assertEqual(spec_acceptance_len(1.0, 3), 4.0)
+
+    def test_finite_outputs_do_not_receive_asymptotic_spec_speedup(self):
+        model = MODELS["l8"]
+        eagle = resolve_spec_runtime(model, "eagle3", 0, 0.0, "bf16")
+        one = _compute_decode_core(
+            model, 1, 1, 1, 1, GPUS["H100"], 0.90, 2.0, "bf16",
+            512, 1, self.eff, spec=eagle,
+        )
+        short = _compute_decode_core(
+            model, 1, 1, 1, 1, GPUS["H100"], 0.90, 2.0, "bf16",
+            512, 4, self.eff, spec=eagle,
+        )
+        long = _compute_decode_core(
+            model, 1, 1, 1, 1, GPUS["H100"], 0.90, 2.0, "bf16",
+            512, 256, self.eff, spec=eagle,
+        )
+        self.assertEqual(spec_finite_output_tau(0.8, 3, 1), 1.0)
+        self.assertEqual(one.spec_speedup, 1.0)
+        self.assertLess(short.spec_speedup, long.spec_speedup)
+
+    def test_spec_speedup_erodes_with_long_context_kv_verification(self):
+        l8 = MODELS["l8"]
+        eagle = resolve_spec_runtime(l8, "eagle3", 0, 0.0, "bf16")
+        short = _compute_decode_core(
+            l8, 1, 1, 1, 1, GPUS["H100"], 0.90, 2.0, "bf16",
+            128, 256, self.eff, spec=eagle,
+        )
+        long = _compute_decode_core(
+            l8, 1, 1, 1, 1, GPUS["H100"], 0.90, 2.0, "bf16",
+            65536, 256, self.eff, spec=eagle,
+        )
+        self.assertLess(long.spec_speedup, short.spec_speedup)
+
+    def test_resolve_spec_runtime_off_unknown_and_overrides(self):
+        ds3 = MODELS["ds3"]
+        self.assertIsNone(resolve_spec_runtime(ds3, "off", 0, 0.0, "fp8"))
+        self.assertIsNone(resolve_spec_runtime(ds3, "bogus", 0, 0.0, "fp8"))
+
+        mtp = resolve_spec_runtime(ds3, "mtp", 0, 0.0, "fp8")
+        self.assertEqual(mtp.k, 1)
+        self.assertEqual(mtp.passes, 1)
+        self.assertAlmostEqual(mtp.alpha, 0.875)
+        self.assertGreater(mtp.draft_weight_bytes, 0.0)
+
+        # Explicit k drives autoregressive passes; alpha override replaces the profile value.
+        eagle = resolve_spec_runtime(MODELS["l8"], "eagle3", 8, 0.5, "bf16")
+        self.assertEqual(eagle.k, 8)
+        self.assertEqual(eagle.passes, 8)
+        self.assertAlmostEqual(eagle.alpha, 0.5)
+
+        # Block-diffusion drafters emit the whole block in one pass at any k.
+        dflash = resolve_spec_runtime(MODELS["q397"], "dflash", 16, 0.0, "fp8")
+        self.assertEqual(dflash.passes, 1)
+        self.assertEqual(dflash.k, 16)
+
+    def test_spec_off_matches_baseline_exactly(self):
+        l8 = MODELS["l8"]
+        base = self.decode(l8, 1, 1, 4, 1, GPUS["H100"], "bf16")
+        off = self.decode(l8, 1, 1, 4, 1, GPUS["H100"], "bf16", resolve_spec_runtime(l8, "off", 0, 0.0, "bf16"))
+        self.assertEqual((base.tps, base.lat, base.max_slots), (off.tps, off.lat, off.max_slots))
+        self.assertEqual(off.spec_tau, 0.0)
+        self.assertEqual(off.spec_speedup, 1.0)
+
+    def test_speedup_monotone_in_acceptance_alpha(self):
+        l8 = MODELS["l8"]
+        speedups = []
+        for alpha in (0.4, 0.6, 0.8):
+            spec = resolve_spec_runtime(l8, "eagle3", 0, alpha, "bf16")
+            speedups.append(self.decode(l8, 1, 1, 1, 1, GPUS["H100"], "bf16", spec).spec_speedup)
+        self.assertLess(speedups[0], speedups[1])
+        self.assertLess(speedups[1], speedups[2])
+        self.assertGreater(speedups[0], 1.0)
+
+    def test_ngram_adds_zero_memory_and_may_slow_unrepetitive_workloads(self):
+        l8 = MODELS["l8"]
+        ngram = resolve_spec_runtime(l8, "ngram", 0, 0.0, "bf16")
+        self.assertEqual(ngram.draft_weight_bytes, 0.0)
+        self.assertEqual(ngram.profile.kv_overhead, 0.0)
+
+        base_mem = compute_memory(l8, 1, 1, GPUS["H100"], 0.90, 2.0, "bf16", self.eff)
+        spec_mem = compute_memory(l8, 1, 1, GPUS["H100"], 0.90, 2.0, "bf16", self.eff, ngram)
+        self.assertEqual(base_mem.weights, spec_mem.weights)
+        self.assertEqual(base_mem.kv_budget, spec_mem.kv_budget)
+
+        base = self.decode(l8, 1, 1, 4, 1, GPUS["H100"], "bf16")
+        sp = self.decode(l8, 1, 1, 4, 1, GPUS["H100"], "bf16", ngram)
+        self.assertEqual(base.max_slots, sp.max_slots)
+        # The profile's low cross-workload acceptance prior is not guaranteed
+        # to beat baseline once k-position verification work is charged.
+        self.assertNotEqual(sp.tps, base.tps)
+
+    def test_draft_weights_and_draft_kv_shrink_slots(self):
+        ds3 = MODELS["ds3"]
+        mtp = resolve_spec_runtime(ds3, "mtp", 0, 0.0, "fp8")
+        base_mem = compute_memory(ds3, 8, 1, GPUS["B200"], 0.90, 2.0, "fp8", self.eff)
+        spec_mem = compute_memory(ds3, 8, 1, GPUS["B200"], 0.90, 2.0, "fp8", self.eff, mtp)
+        self.assertAlmostEqual(
+            spec_mem.weights - base_mem.weights,
+            mtp.draft_weight_bytes / 8,
+            delta=1.0,
+        )
+
+        base = self.decode(ds3, 8, 1, 1, 1, GPUS["B200"], "fp8")
+        sp = self.decode(ds3, 8, 1, 1, 1, GPUS["B200"], "fp8", mtp)
+        self.assertLess(sp.max_slots, base.max_slots)
+
+    def test_speedup_erodes_as_batch_turns_compute_bound(self):
+        l8 = MODELS["l8"]
+        eagle = resolve_spec_runtime(l8, "eagle3", 0, 0.0, "bf16")
+        low = self.decode(l8, 8, 1, 8, 8, GPUS["H100"], "bf16", eagle)
+        high = self.decode(l8, 8, 1, 1024, 8, GPUS["H100"], "bf16", eagle)
+        self.assertIsNotNone(low)
+        self.assertIsNotNone(high)
+        self.assertGreater(low.spec_speedup, 1.5)
+        self.assertLess(high.spec_speedup, low.spec_speedup)
+
+    def test_ds3_mtp_parity_with_vendor_claim(self):
+        # DeepSeek reports 1.8x TPS from MTP speculative decoding; the planner
+        # should land in that neighborhood at batch 1, not at the batch-1 marketing
+        # numbers of tree drafters.
+        ds3 = MODELS["ds3"]
+        mtp = resolve_spec_runtime(ds3, "mtp", 0, 0.0, "fp8")
+        result = self.decode(ds3, 8, 1, 1, 1, GPUS["B200"], "fp8", mtp)
+        # Finite-response waste and full KV/collective verification accounting
+        # make this more conservative than the vendor's long-run TPS headline.
+        self.assertGreaterEqual(result.spec_speedup, 1.4)
+        self.assertLessEqual(result.spec_speedup, 1.95)
+
+    def test_compute_data_carries_spec_speedup(self):
+        l8 = MODELS["l8"]
+        eagle = resolve_spec_runtime(l8, "eagle3", 0, 0.0, "bf16")
+        base = compute_data(
+            l8, (1, 1, 1), (1, 1, 1), 4, 512, 256, GPUS["H100"],
+            0.90, 2.0, "bf16", 0.0, self.eff, self.eff,
+        )
+        sp = compute_data(
+            l8, (1, 1, 1), (1, 1, 1), 4, 512, 256, GPUS["H100"],
+            0.90, 2.0, "bf16", 0.0, self.eff, self.eff, eagle,
+        )
+        self.assertGreater(sp.rps, base.rps)
+        self.assertGreater(sp.tps, base.tps)
 
 
 if __name__ == "__main__":

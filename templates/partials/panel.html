@@ -107,6 +107,15 @@
       </div>
       {% endfor %}
       <div style="display:flex;align-items:center;gap:4px;">
+        <label class="T tip" for="eff-spec_acceptance-{{ panel }}" title="Global per-token speculative acceptance override. 0% (auto) uses each drafter's fitted acceptance; any other value replaces it for every spec-enabled model." style="min-width:90px;">Spec accept α</label>
+        <input id="eff-spec_acceptance-{{ panel }}" type="range" min="0" max="99" value="{{ (state.spec_acceptance * 100)|int }}"
+               style="flex:1;min-width:50px;"
+               hx-post="/settings/eff" hx-target="#main-content" hx-trigger="change"
+               hx-vals='{"panel":"{{ panel }}","key":"spec_acceptance"}' name="value"
+               data-live-target="#eff-spec_acceptance-val-{{ panel }}" />
+        <span class="M T" id="eff-spec_acceptance-val-{{ panel }}" style="min-width:40px;text-align:right;">{% if state.spec_acceptance > 0 %}{{ (state.spec_acceptance * 100)|int }}%{% else %}auto{% endif %}</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:4px;">
         <label class="T tip" for="eff-decode-sched-{{ panel }}" title="Approximate scheduler working-set budget before decode efficiency degrades." style="min-width:90px;">Sched budget</label>
         <input id="eff-decode-sched-{{ panel }}" type="range" min="2048" max="65536" step="1024" value="{{ state.decode_sched_budget }}"
                style="flex:1;min-width:50px;"

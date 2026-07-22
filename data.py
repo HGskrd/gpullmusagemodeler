@@ -279,6 +279,81 @@ class EmbeddingProfile:
         return "single-vector"
 
 
+# Speculative decoding.  A SpeculativeProfile describes one drafter that can run
+# against a model: a native MTP head trained into the checkpoint, an attachable
+# speculator (EAGLE-3 / DFlash), or a training-free n-gram proposer.
+# acceptance_alpha is the per-token acceptance probability; the planner derives the
+# acceptance length with the chain formula tau = (1 - a^(k+1)) / (1 - a).  Real
+# drafters verify trees or blocks rather than chains, so alpha is fitted to
+# reproduce the measured acceptance length at default_k — extrapolating to other k
+# with the chain formula is a documented conservative approximation.
+SPEC_METHODS: tuple[str, ...] = ("mtp", "eagle3", "dflash", "draft_model", "ngram")
+
+
+@dataclass(frozen=True)
+class SpeculativeProfile:
+    label: str
+    method: str  # one of SPEC_METHODS
+    draft_params: float  # drafter weight footprint read per draft pass; 0 for ngram
+    draft_layers: int  # draft KV layers; 0 for ngram
+    parallel_draft: bool  # True: whole block in one pass (DFlash); False: k autoregressive passes
+    default_k: int  # default number of speculative tokens per cycle
+    acceptance_alpha: float  # per-token acceptance probability, fitted to measured acceptance length
+    kv_overhead: float  # draft KV cache as a fraction of target KV bytes per token
+    source: str
+    note: str
+    # Attached draft checkpoints keep their own storage precision. Native MTP
+    # modules may leave this at zero to inherit the target checkpoint format.
+    exact_weight_bytes: float = 0.0
+    # MoE draft modules have many resident expert parameters but activate only
+    # a subset per token. Zero means the resident count is also the active count.
+    active_params: float = 0.0
+
+
+def _mtp_profile(
+    alpha: float,
+    active_params: float,
+    default_k: int,
+    source: str,
+    note: str,
+    exact_weight_bytes: float = 0.0,
+    resident_params: float = 0.0,
+) -> SpeculativeProfile:
+    resident_params = resident_params or active_params
+    return SpeculativeProfile(
+        "Native MTP", "mtp", resident_params, 1, False, default_k, alpha, 0.03, source, note,
+        exact_weight_bytes, active_params,
+    )
+
+
+def _eagle3_profile(draft_params: float, alpha: float, default_k: int, source: str, note: str) -> SpeculativeProfile:
+    return SpeculativeProfile(
+        "EAGLE-3 speculator", "eagle3", draft_params, 1, False, default_k, alpha, 0.05, source, note,
+        draft_params * 2.0, draft_params,
+    )
+
+
+def _dflash_profile(draft_params: float, alpha: float, default_k: int, source: str, note: str) -> SpeculativeProfile:
+    return SpeculativeProfile(
+        "DFlash block-diffusion speculator", "dflash", draft_params, 5, True, default_k, alpha, 0.08, source, note,
+        draft_params * 2.0, draft_params,
+    )
+
+
+NGRAM_SPECULATIVE_PROFILE = SpeculativeProfile(
+    "N-gram (training-free)",
+    "ngram",
+    0.0,
+    0,
+    False,
+    5,
+    0.35,
+    0.0,
+    "https://specdecode-bench.github.io/",
+    "Zero extra memory. Acceptance is workload-dependent: wins on high prompt-output overlap "
+    "(code editing, BLEU-4 > 0.6, up to ~2.75x), modest elsewhere. Conservative alpha.",
+)
+
 # Capability flags. Projects can require one or more; models must supply them to be eligible.
 # Kept deliberately coarse — the planner isn't a model quality benchmark, it's a capacity model.
 MODEL_CAPABILITIES: tuple[str, ...] = ("tools", "ctx_128k", "images", "audio", "reasoning")
@@ -346,6 +421,7 @@ class Model:
     # the catalog default for current text models; legacy/short-context families
     # override it at their definitions. Embedding models retain their profile cap.
     max_context_tokens: int = 131072
+    speculative_profiles: tuple[SpeculativeProfile, ...] = ()
 
     @property
     def capabilities(self) -> frozenset[str]:
@@ -362,6 +438,13 @@ class Model:
     @property
     def is_embedding_model(self) -> bool:
         return self.embedding_profile is not None
+
+    @property
+    def available_spec_profiles(self) -> tuple[SpeculativeProfile, ...]:
+        # N-gram needs no drafter and is always available to plain text models.
+        if self.is_realtime_only or self.is_embedding_model:
+            return ()
+        return self.speculative_profiles + (NGRAM_SPECULATIVE_PROFILE,)
 
     @property
     def size_label(self) -> str:
@@ -2153,11 +2236,26 @@ MODELS: dict[str, Model] = {
     ),
     "cohere-embed-v4-0": _cohere_embed_v4_model(),
 
-    "l8": Model("l8", "Llama 3.1 8B", "Meta", "#22976B", 8e9, 8e9, False, 32, 32, 8, 128, False),
+    "l8": Model("l8", "Llama 3.1 8B", "Meta", "#22976B", 8e9, 8e9, False, 32, 32, 8, 128, False, speculative_profiles=(
+        _eagle3_profile(
+            1.0e9,
+            0.72,
+            3,
+            "https://huggingface.co/RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3",
+            "EAGLE-3 acceptance length ~2.5-3.2 on Llama-3.1-8B (SpecDecode-Bench, vLLM/H100): "
+            "1.9x at batch 1, ~1.2x at batch 128. Alpha fitted to that range.",
+        ),
+    )),
     "l70": Model("l70", "Llama 3.1 70B", "Meta", "#2B7A78", 70.6e9, 70.6e9, False, 80, 64, 8, 128, False),
 
-    "ge2": Model("ge2", "Gemma 4 E2B", "Gemma", "#5D8C3C", 2e9, 2e9, False, 26, 16, 8, 128, False),
-    "ge4": Model("ge4", "Gemma 4 E4B", "Gemma", "#6FA84A", 4e9, 4e9, False, 34, 24, 8, 128, False),
+    "ge2": Model("ge2", "Gemma 4 E2B", "Gemma", "#5D8C3C", 2e9, 2e9, False, 26, 16, 8, 128, False, speculative_profiles=(
+        _mtp_profile(0.80, 0.08e9, 1, "https://docs.vllm.ai/en/latest/features/speculative_decoding/mtp/",
+                     "Gemma 4 native MTP (vLLM gemma4 backend, num_speculative_tokens=1); alpha is an unmeasured planning prior."),
+    )),
+    "ge4": Model("ge4", "Gemma 4 E4B", "Gemma", "#6FA84A", 4e9, 4e9, False, 34, 24, 8, 128, False, speculative_profiles=(
+        _mtp_profile(0.80, 0.0788e9, 1, "https://docs.vllm.ai/en/latest/features/speculative_decoding/mtp/",
+                     "Gemma 4 native MTP (vLLM gemma4 backend, num_speculative_tokens=1); alpha is an unmeasured planning prior."),
+    )),
     "g12": Model(
         "g12",
         "Gemma 4 12B Unified",
@@ -2179,9 +2277,25 @@ MODELS: dict[str, Model] = {
         global_head_dim=512,
         shared_key_value=True,
         attention_label="40 sliding 1k + 8 global p-RoPE; encoder-free image/audio projection",
+        speculative_profiles=(
+            _mtp_profile(0.80, 0.4e9, 1, "https://docs.vllm.ai/en/latest/features/speculative_decoding/mtp/",
+                         "Gemma 4 native MTP (vLLM gemma4 backend, num_speculative_tokens=1); alpha is an unmeasured planning prior."),
+        ),
     ),
-    "g26": Model("g26", "Gemma 4 26B-A4B", "Gemma", "#8AB85C", 26e9, 4e9, True, 48, 32, 8, 128, False),
-    "g31": Model("g31", "Gemma 4 31B", "Gemma", "#A2C96E", 31e9, 31e9, False, 48, 40, 8, 128, False),
+    "g26": Model("g26", "Gemma 4 26B-A4B", "Gemma", "#8AB85C", 26e9, 4e9, True, 48, 32, 8, 128, False, speculative_profiles=(
+        _mtp_profile(0.80, 0.4e9, 1, "https://docs.vllm.ai/en/latest/features/speculative_decoding/mtp/",
+                     "Gemma 4 native MTP (vLLM gemma4 backend, num_speculative_tokens=1); alpha is an unmeasured planning prior."),
+        _eagle3_profile(0.9e9, 0.60, 5, "https://huggingface.co/RedHatAI/gemma-4-26B-A4B-it-speculator.eagle3",
+                        "RedHatAI EAGLE-3 speculator; checkpoint size is 0.9B, alpha is a family prior."),
+    )),
+    "g31": Model("g31", "Gemma 4 31B", "Gemma", "#A2C96E", 31e9, 31e9, False, 48, 40, 8, 128, False, speculative_profiles=(
+        _mtp_profile(0.80, 0.5e9, 1, "https://docs.vllm.ai/en/latest/features/speculative_decoding/mtp/",
+                     "Gemma 4 native MTP (vLLM gemma4 backend, num_speculative_tokens=1); alpha is an unmeasured planning prior."),
+        _eagle3_profile(2e9, 0.60, 5, "https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.eagle3",
+                        "RedHatAI EAGLE-3 speculator; checkpoint size is 2B, alpha is a family prior."),
+        _dflash_profile(4e9, 0.72, 8, "https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash",
+                        "RedHatAI 4B DFlash checkpoint; k=8 and alpha=.72 reproduce the card's broad 2.53-5.17 acceptance-length range."),
+    )),
 
     "lfm2.5-350m": _lfm_text_model(
         "lfm2.5-350m",
@@ -2328,17 +2442,54 @@ MODELS: dict[str, Model] = {
     "q4": Model("q4", "Qwen 3.5 4B", "Qwen", "#1AA174", 4e9, 4e9, False, 32, 24, 4, 128, False),
     "q9": Model("q9", "Qwen 3.5 9B", "Qwen", "#1D9E75", 9.2e9, 9.2e9, False, 36, 36, 4, 128, False),
     "q27": Model("q27", "Qwen 3.5 27B", "Qwen", "#3266ad", 27.8e9, 27.8e9, False, 48, 36, 4, 128, False),
-    "q35": Model("q35", "Qwen 3.5 35B-A3B", "Qwen", "#7F77DD", 35e9, 3e9, True, 64, 16, 4, 128, False),
-    "q122": Model("q122", "Qwen 3.5 122B-A10B", "Qwen", "#D85A30", 122e9, 10e9, True, 96, 32, 8, 128, False),
-    "q397": Model("q397", "Qwen 3.5 397B-A17B", "Qwen", "#A6422A", 397e9, 17e9, True, 96, 64, 8, 128, False),
+    "q35": Model("q35", "Qwen 3.5 35B-A3B", "Qwen", "#7F77DD", 35e9, 3e9, True, 64, 16, 4, 128, False, speculative_profiles=(
+        _mtp_profile(0.70, 0.1e9, 3, "https://www.lmsys.org/blog/2026-06-15-next-generation-speculative-decoding-dflash-v2/",
+                     "Native MTP documented for Qwen 3.5 397B; family assumption here — no per-size acceptance published.",
+                     resident_params=0.55e9),
+    )),
+    "q122": Model("q122", "Qwen 3.5 122B-A10B", "Qwen", "#D85A30", 122e9, 10e9, True, 96, 32, 8, 128, False, speculative_profiles=(
+        _mtp_profile(0.70, 0.15e9, 3, "https://www.lmsys.org/blog/2026-06-15-next-generation-speculative-decoding-dflash-v2/",
+                     "Native MTP documented for Qwen 3.5 397B; family assumption here — no per-size acceptance published.",
+                     resident_params=1.3e9),
+    )),
+    "q397": Model("q397", "Qwen 3.5 397B-A17B", "Qwen", "#A6422A", 397e9, 17e9, True, 96, 64, 8, 128, False, speculative_profiles=(
+        _mtp_profile(0.70, 0.2e9, 3, "https://www.lmsys.org/blog/2026-06-15-next-generation-speculative-decoding-dflash-v2/",
+                     "Native MTP benchmarked by LMSYS/Modal (7 draft steps optimal at concurrency 1); "
+                     "default k=3 is the conservative serving choice.", resident_params=4.2e9),
+        _dflash_profile(1e9, 0.78, 8, "https://huggingface.co/z-lab/Qwen3.5-397B-A17B-DFlash",
+                        "z-lab DFlash: >4.3x baseline and 1.5x native MTP at concurrency 1 (HumanEval, 8xB200); "
+                        "beats MTP at concurrencies 1-32. Uses the exact 1B checkpoint size; alpha=.78 is a conservative cross-workload prior."),
+    )),
 
-    "glm45a": Model("glm45a", "GLM-4.5-Air 106B-A12B", "GLM", "#2F7E9F", 106e9, 12e9, True, 56, 64, 8, 128, False),
-    "glm45": Model("glm45", "GLM-4.5 355B-A32B", "GLM", "#2B6D8A", 355e9, 32e9, True, 62, 96, 8, 128, False),
-    "glm46": Model("glm46", "GLM-4.6 357B-A32B", "GLM", "#275C75", 357e9, 32e9, True, 62, 96, 8, 128, False),
-    "glm47": Model("glm47", "GLM-4.7 358B-A32B", "GLM", "#214A61", 358e9, 32e9, True, 62, 96, 8, 128, False),
-    "glm47f": Model("glm47f", "GLM-4.7-Flash 31B-A3B", "GLM", "#3F93BA", 31e9, 3e9, True, 48, 32, 8, 128, False),
-    "glm5": Model("glm5", "GLM-5 744B-A40B", "GLM", "#16354A", 744e9, 40e9, True, 72, 128, 8, 128, False),
-    "glm51": Model("glm51", "GLM-5.1 744B-A40B", "GLM", "#0F273A", 744e9, 40e9, True, 72, 128, 8, 128, False),
+    "glm45a": Model("glm45a", "GLM-4.5-Air 106B-A12B", "GLM", "#2F7E9F", 106e9, 12e9, True, 56, 64, 8, 128, False, speculative_profiles=(
+        _mtp_profile(0.70, 0.25e9, 3, "https://arxiv.org/abs/2601.11580",
+                     "GLM-4.5 ships a native MTP head. SpecDecode-Bench measured 1.3-1.8x on GLM-4.5-Air (vLLM/H100); "
+                     "per-position acceptance degrades across the drafted tokens.", resident_params=1.9e9),
+    )),
+    "glm45": Model("glm45", "GLM-4.5 355B-A32B", "GLM", "#2B6D8A", 355e9, 32e9, True, 62, 96, 8, 128, False, speculative_profiles=(
+        _mtp_profile(0.70, 0.55e9, 3, "https://arxiv.org/abs/2601.11580",
+                     "GLM-4.5 ships a native MTP head; acceptance is the GLM-4.5-Air SpecDecode-Bench assumption.", resident_params=5.8e9),
+    )),
+    "glm46": Model("glm46", "GLM-4.6 357B-A32B", "GLM", "#275C75", 357e9, 32e9, True, 62, 96, 8, 128, False, speculative_profiles=(
+        _mtp_profile(0.70, 0.55e9, 3, "https://arxiv.org/abs/2601.11580",
+                     "Native MTP; GLM-4.5-family acceptance assumption (no per-version measurement published).", resident_params=5.8e9),
+    )),
+    "glm47": Model("glm47", "GLM-4.7 358B-A32B", "GLM", "#214A61", 358e9, 32e9, True, 62, 96, 8, 128, False, speculative_profiles=(
+        _mtp_profile(0.70, 0.55e9, 3, "https://arxiv.org/abs/2601.11580",
+                     "Native MTP; GLM-4.5-family acceptance assumption (no per-version measurement published).", resident_params=5.8e9),
+    )),
+    "glm47f": Model("glm47f", "GLM-4.7-Flash 31B-A3B", "GLM", "#3F93BA", 31e9, 3e9, True, 48, 32, 8, 128, False, speculative_profiles=(
+        _mtp_profile(0.70, 0.1e9, 3, "https://arxiv.org/abs/2601.11580",
+                     "Native MTP; GLM-4.5-family acceptance assumption (no per-version measurement published).", resident_params=0.65e9),
+    )),
+    "glm5": Model("glm5", "GLM-5 744B-A40B", "GLM", "#16354A", 744e9, 40e9, True, 72, 128, 8, 128, False, speculative_profiles=(
+        _mtp_profile(0.70, 0.6e9, 3, "https://arxiv.org/abs/2601.11580",
+                     "Native MTP; GLM-4.5-family acceptance assumption (no per-version measurement published).", resident_params=10.4e9),
+    )),
+    "glm51": Model("glm51", "GLM-5.1 744B-A40B", "GLM", "#0F273A", 744e9, 40e9, True, 72, 128, 8, 128, False, speculative_profiles=(
+        _mtp_profile(0.70, 0.6e9, 3, "https://arxiv.org/abs/2601.11580",
+                     "Native MTP; GLM-4.5-family acceptance assumption (no per-version measurement published).", resident_params=10.4e9),
+    )),
 
     "k25": Model(
         "k25",
@@ -2559,8 +2710,18 @@ MODELS: dict[str, Model] = {
         "#0369A1",
     ),
 
-    "minimax25": Model("minimax25", "MiniMax M2.5 229B-A10B", "MiniMax", "#2C6D9B", 229e9, 10e9, True, 62, 48, 8, 128, False),
-    "minimax27": Model("minimax27", "MiniMax M2.7 229B-A10B", "MiniMax", "#1D5276", 229e9, 10e9, True, 62, 48, 8, 128, False),
+    "minimax25": Model("minimax25", "MiniMax M2.5 229B-A10B", "MiniMax", "#2C6D9B", 229e9, 10e9, True, 62, 48, 8, 128, False, speculative_profiles=(
+        _mtp_profile(0.80, 0.2e9, 2, "https://huggingface.co/MiniMaxAI",
+                     "MiniMax ships an optional ~10.5 GB MTP drafter artifact (see the NVFP4 profile storage note); "
+                     "resident bytes use that artifact exactly; alpha is an unmeasured planning prior.",
+                     exact_weight_bytes=10.5e9, resident_params=5e9),
+    )),
+    "minimax27": Model("minimax27", "MiniMax M2.7 229B-A10B", "MiniMax", "#1D5276", 229e9, 10e9, True, 62, 48, 8, 128, False, speculative_profiles=(
+        _mtp_profile(0.80, 0.2e9, 2, "https://huggingface.co/MiniMaxAI",
+                     "MiniMax ships an optional ~10.5 GB MTP drafter artifact (see the NVFP4 profile storage note); "
+                     "resident bytes use that artifact exactly; alpha is an unmeasured planning prior.",
+                     exact_weight_bytes=10.5e9, resident_params=5e9),
+    )),
 
     "nem3s": Model("nem3s", "Nemotron 3 Super 120B-A12B", "Nemotron", "#6FA7C9", 120e9, 12e9, True, 88, 32, 2, 128, False, kv_layers=8),
     "nem3n": Model("nem3n", "Nemotron 3 Nano 30B-A3B", "Nemotron", "#98C5DE", 31.6e9, 3.2e9, True, 52, 32, 2, 128, False, kv_layers=6),
@@ -2583,6 +2744,17 @@ MODELS: dict[str, Model] = {
         64,
         bf16_weight_bytes_per_param=MIXED_NATIVE_BF16_WEIGHT_BPP,
         fp8_weight_bytes_per_param=MIXED_NATIVE_FP8_WEIGHT_BPP,
+        speculative_profiles=(
+            _mtp_profile(
+                0.875,
+                0.7e9,
+                1,
+                "https://arxiv.org/html/2412.19437v1",
+                "85-90% second-token acceptance and 1.8x TPS per the DeepSeek-V3 report §5.3. "
+                "Alpha degrades for k>1 (the single MTP module is reused recursively).",
+                resident_params=11e9,
+            ),
+        ),
     ),
     "deepseek-v4-pro": Model(
         "deepseek-v4-pro",
@@ -2601,6 +2773,16 @@ MODELS: dict[str, Model] = {
         64,
         bf16_weight_bytes_per_param=MIXED_NATIVE_BF16_WEIGHT_BPP,
         fp8_weight_bytes_per_param=FP4_FP8_MOE_WEIGHT_BPP,
+        speculative_profiles=(
+            _mtp_profile(
+                0.85,
+                0.75e9,
+                1,
+                "https://www.lmsys.org/blog/2026-04-25-deepseek-v4/",
+                "Native MTP confirmed; no published acceptance rate yet — V3-family assumption.",
+                resident_params=22e9,
+            ),
+        ),
     ),
     "deepseek-v4-flash": Model(
         "deepseek-v4-flash",
@@ -2619,6 +2801,16 @@ MODELS: dict[str, Model] = {
         64,
         bf16_weight_bytes_per_param=MIXED_NATIVE_BF16_WEIGHT_BPP,
         fp8_weight_bytes_per_param=FP4_FP8_MOE_WEIGHT_BPP,
+        speculative_profiles=(
+            _mtp_profile(
+                0.85,
+                0.3e9,
+                1,
+                "https://www.lmsys.org/blog/2026-04-25-deepseek-v4/",
+                "Native MTP confirmed; no published acceptance rate yet — V3-family assumption.",
+                resident_params=5.9e9,
+            ),
+        ),
     ),
 
     "mi7": Model("mi7", "Mistral 7B", "Mistral", "#e07020", 7e9, 7e9, False, 32, 32, 8, 128, False, max_context_tokens=32768),
@@ -3043,6 +3235,24 @@ MODELS: dict[str, Model] = {
         False,
         bf16_weight_bytes_per_param=MIXED_NATIVE_BF16_WEIGHT_BPP,
         fp8_weight_bytes_per_param=MIXED_NATIVE_FP8_WEIGHT_BPP,
+        speculative_profiles=(
+            _mtp_profile(
+                0.85,
+                0.6e9,
+                1,
+                "https://docs.vllm.ai/en/latest/features/speculative_decoding/mtp/",
+                "MiMo family ships native MTP heads (vLLM mtp backend); acceptance is a DeepSeek-family assumption.",
+                resident_params=14.6e9,
+            ),
+            _dflash_profile(
+                3e9,
+                0.78,
+                16,
+                "https://mimo.xiaomi.com/blog/mimo-tilert-1000tps",
+                "MiMo v2.5-Pro-UltraSpeed serves with DFlash at >1k output tps (vendor claim). "
+                "The 3B draft size and alpha=.78 are explicit unmeasured planning assumptions.",
+            ),
+        ),
     ),
     "mimo-v2.5": Model(
         "mimo-v2.5",
@@ -3059,6 +3269,16 @@ MODELS: dict[str, Model] = {
         False,
         bf16_weight_bytes_per_param=MIXED_NATIVE_BF16_WEIGHT_BPP,
         fp8_weight_bytes_per_param=MIXED_NATIVE_FP8_WEIGHT_BPP,
+        speculative_profiles=(
+            _mtp_profile(
+                0.85,
+                0.31e9,
+                1,
+                "https://docs.vllm.ai/en/latest/features/speculative_decoding/mtp/",
+                "MiMo family ships native MTP heads (vLLM mtp backend); acceptance is a DeepSeek-family assumption.",
+                resident_params=6.5e9,
+            ),
+        ),
     ),
 
     "cr13": Model("cr13", "Croissant 1.3B", "Croissant", "#dda050", 1.3e9, 1.3e9, False, 22, 16, 4, 96, False),
@@ -4027,6 +4247,36 @@ PROJECT_PRESETS = [
     {"key": "synthetic_generation", "name": "Synthetic test-data generation", "difficulty": 0.55, "tokens_day": 1.0e9, "scale_value": 200_000, "scale_kind": {"model": "linear", "label": "Examples generated", "unit": "examples/day", "token_multiplier": 5_000, "min": 0, "max": 2_000_000, "step": 1_000, "formula": "examples/day x prompt, generated artifact, critique, and retry tokens"}, "wtp_per_m": 1.50, "requires": (), "min_success_rate": 0.85, "quality_floor": 0.68, "batch_eligible": True, "latent_jobs_day": 8.0e9, "unlock_price_per_m": 0.20, "in_pre": "Classify", "out_pre": "Code", "scale_hint": "Examples/day x generation and validation passes; decode-heavy and highly batchable."},
     {"key": "catalog_enrichment", "name": "Product-catalog enrichment", "difficulty": 0.25, "tokens_day": 1.0e9, "scale_value": 500_000, "scale_kind": {"model": "linear", "label": "Catalog items enriched", "unit": "SKUs/day", "token_multiplier": 2_000, "min": 0, "max": 5_000_000, "step": 10_000, "formula": "SKUs/day x image/text input + attributes and copy tokens"}, "wtp_per_m": 0.60, "requires": ("images",), "min_success_rate": 0.90, "quality_floor": 0.52, "batch_eligible": True, "latent_jobs_day": 5.0e9, "unlock_price_per_m": 0.10, "in_pre": "Classify", "out_pre": "Chat", "scale_hint": "SKUs x images, locales, and copy variants; seasonal reprocessing creates large batch spikes."},
 ]
+
+# Empirical prefix-token reuse priors by workload archetype.  These are not a
+# request-level cache-hit guarantee: they estimate the share of prompt tokens
+# that Automatic Prefix Caching can avoid prefilling for a stable production
+# workload.  Replace the priors with observed vLLM query-token hit ratios when
+# deployment telemetry is available.
+USE_CASE_PREFIX_HIT_RATES = {
+    "classify": 0.10,
+    "summarize": 0.10,
+    "chatbot": 0.25,
+    "email_corrector": 0.15,
+    "coding": 0.50,
+    "meeting_notes": 0.10,
+    "evals": 0.55,
+    "inbox_archive": 0.15,
+    "longctx": 0.45,
+    "research": 0.30,
+    "document_extraction": 0.30,
+    "enterprise_search": 0.25,
+    "contact_center_qa": 0.35,
+    "translation": 0.05,
+    "contract_review": 0.50,
+    "security_triage": 0.30,
+    "aml_casework": 0.40,
+    "synthetic_generation": 0.45,
+    "catalog_enrichment": 0.35,
+}
+
+for _preset in PROJECT_PRESETS:
+    _preset["prefix_hit_rate"] = USE_CASE_PREFIX_HIT_RATES.get(_preset["key"], 0.0)
 
 DAY_SHAPES = {
     "flat": {

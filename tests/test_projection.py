@@ -1,10 +1,49 @@
 import unittest
 
-from calc import compute_revenue_projection, latent_activation_share
-from state import GpuPool, ModelAssignment, PlannerState, Project
+from calc import avg_dist, compute_revenue_projection, latent_activation_share
+from data import DIST_PRESETS, INPUT_BUCKETS, OUTPUT_BUCKETS
+from state import GpuPool, ModelAssignment, PlannerState, Project, _sync_aggregate_distribution
 
 
 class RevenueProjectionTests(unittest.TestCase):
+    def test_prefix_reuse_is_prompt_token_weighted_across_use_cases(self):
+        low = Project(
+            1, "Short input", 0.1, 1_000_000, 10.0,
+            prefix_hit_rate=0.0, in_pre="Classify", out_pre="Long doc",
+        )
+        high = Project(
+            2, "Long input", 0.1, 1_000_000, 10.0,
+            prefix_hit_rate=1.0, in_pre="Long doc", out_pre="Classify",
+        )
+        state = PlannerState(projects=[low, high])
+
+        _sync_aggregate_distribution(state)
+
+        def prompt_weight(project):
+            input_len = avg_dist(DIST_PRESETS[project.in_pre]["in"], INPUT_BUCKETS)
+            output_len = avg_dist(DIST_PRESETS[project.out_pre]["out"], OUTPUT_BUCKETS)
+            return project.tokens_day * input_len / (input_len + output_len)
+
+        expected = prompt_weight(high) / (prompt_weight(low) + prompt_weight(high))
+        self.assertAlmostEqual(state.prefix_hit_rate, expected)
+
+    def test_cloud_price_uses_each_use_cases_prefix_reuse(self):
+        state = PlannerState(projects=[
+            Project(1, "No reuse", 0.1, 1_000_000, 100.0, min_success_rate=0.5, prefix_hit_rate=0.0),
+            Project(2, "High reuse", 0.1, 1_000_000, 100.0, min_success_rate=0.5, prefix_hit_rate=0.8),
+        ])
+
+        projection = compute_revenue_projection(state, include_recommendations=False)
+        rows = {row["name"]: row for row in projection["projects"]}
+
+        self.assertLess(rows["High reuse"]["cloud_pm"], rows["No reuse"]["cloud_pm"])
+        self.assertEqual(rows["No reuse"]["prefix_hit_rate"], 0.0)
+        self.assertEqual(rows["High reuse"]["prefix_hit_rate"], 0.8)
+        self.assertAlmostEqual(
+            projection["value_cloud_day"],
+            projection["value_spilled_day"] + projection["value_leaked_day"],
+        )
+
     def test_projection_exposes_distinct_coverage_metrics(self):
         state = PlannerState(
             gpus=[GpuPool(1, "H100", 2, cost_per_gpu_hour=1.0)],

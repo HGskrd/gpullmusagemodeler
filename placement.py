@@ -24,6 +24,7 @@ from calc import (
     compute_prefill,
     default_strategy,
     effective_prefill_length,
+    resolve_spec_runtime,
     valid_strategies,
 )
 from state import (
@@ -93,9 +94,10 @@ def _probe_batch_sizes(dp: int) -> list[int]:
 
 def _preferred_strategy(state: PlannerState, am: ModelAssignment, gpu: GPU, phase: str) -> tuple[int, int, int]:
     model = MODELS[am.model_key]
-    candidates = valid_strategies(model, am.gpu_count, gpu, state.mu, state.profiled_non_kv_gb, am.prec)
+    spec = resolve_spec_runtime(model, am.spec_method, am.spec_k, state.spec_acceptance, am.prec)
+    candidates = valid_strategies(model, am.gpu_count, gpu, state.mu, state.profiled_non_kv_gb, am.prec, spec)
     if not candidates:
-        return default_strategy(model, am.gpu_count, gpu, state.mu, state.profiled_non_kv_gb, am.prec)
+        return default_strategy(model, am.gpu_count, gpu, state.mu, state.profiled_non_kv_gb, am.prec, spec)
 
     best = candidates[0]
     best_score = None
@@ -111,6 +113,7 @@ def _preferred_strategy(state: PlannerState, am: ModelAssignment, gpu: GPU, phas
             state.profiled_non_kv_gb,
             am.prec,
             state.prefill_efficiency if phase == "prefill" else state.decode_efficiency,
+            spec,
         )
         kv_headroom = mem.kv_budget if mem else 0.0
         local_tp = 1 if tp <= gpu.node_size else 0
@@ -147,6 +150,7 @@ def _preferred_strategy(state: PlannerState, am: ModelAssignment, gpu: GPU, phas
                     state.profiled_non_kv_gb,
                     am.prec,
                     state.prefill_efficiency,
+                    spec,
                 )
                 if result is None:
                     continue
@@ -165,6 +169,7 @@ def _preferred_strategy(state: PlannerState, am: ModelAssignment, gpu: GPU, phas
                     state.in_dist,
                     state.out_dist,
                     state.decode_efficiency,
+                    spec,
                 )
                 if result is None:
                     continue
@@ -201,6 +206,7 @@ def _retune_model(state: PlannerState, am: ModelAssignment, preserve_existing: b
         return
 
     model = MODELS[am.model_key]
+    spec = resolve_spec_runtime(model, am.spec_method, am.spec_k, state.spec_acceptance, am.prec)
     if getattr(model, "embedding_profile", None) is not None:
         embedding_default = _preferred_strategy(state, am, gp.gpu, "prefill")
         if not preserve_existing:
@@ -215,6 +221,7 @@ def _retune_model(state: PlannerState, am: ModelAssignment, preserve_existing: b
             state.mu,
             state.profiled_non_kv_gb,
             am.prec,
+            spec,
         )
         if (am.prefill_tp, am.prefill_pp, am.prefill_dp) not in valid:
             am.prefill_tp, am.prefill_pp, am.prefill_dp = embedding_default
@@ -238,6 +245,7 @@ def _retune_model(state: PlannerState, am: ModelAssignment, preserve_existing: b
         state.mu,
         state.profiled_non_kv_gb,
         am.prec,
+        spec,
     )
     if (am.tp, am.pp, am.dp) not in decode_valid:
         am.tp, am.pp, am.dp = decode_default
@@ -249,6 +257,7 @@ def _retune_model(state: PlannerState, am: ModelAssignment, preserve_existing: b
         state.mu,
         state.profiled_non_kv_gb,
         am.prec,
+        spec,
     )
     if (
         (am.prefill_tp, am.prefill_pp, am.prefill_dp) not in prefill_valid
@@ -267,6 +276,7 @@ def _assignment_memories(state: PlannerState, am: ModelAssignment, gpu: GPU):
     if (am.prefill_tp, am.prefill_pp, am.prefill_dp) != (am.tp, am.pp, am.dp):
         return None, None
     model = MODELS[am.model_key]
+    spec = resolve_spec_runtime(model, am.spec_method, am.spec_k, state.spec_acceptance, am.prec)
     prefill_mem = compute_memory(
         model,
         am.prefill_tp,
@@ -276,6 +286,7 @@ def _assignment_memories(state: PlannerState, am: ModelAssignment, gpu: GPU):
         state.profiled_non_kv_gb,
         am.prec,
         state.prefill_efficiency,
+        spec,
     )
     decode_mem = compute_memory(
         model,
@@ -286,6 +297,7 @@ def _assignment_memories(state: PlannerState, am: ModelAssignment, gpu: GPU):
         state.profiled_non_kv_gb,
         am.prec,
         state.decode_efficiency,
+        spec,
     )
     return prefill_mem, decode_mem
 
@@ -565,7 +577,9 @@ def _grow_auto_assignments(state: PlannerState, strategy: str):
             grew = False
             for am in candidates:
                 next_count = am.gpu_count + 1
-                if not valid_strategies(MODELS[am.model_key], next_count, gp.gpu, state.mu, state.profiled_non_kv_gb, am.prec):
+                model = MODELS[am.model_key]
+                spec = resolve_spec_runtime(model, am.spec_method, am.spec_k, state.spec_acceptance, am.prec)
+                if not valid_strategies(model, next_count, gp.gpu, state.mu, state.profiled_non_kv_gb, am.prec, spec):
                     continue
                 am.gpu_count = next_count
                 _retune_model(state, am)

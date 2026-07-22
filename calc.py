@@ -12,6 +12,7 @@ from data import (
     GPU,
     Model,
     Bucket,
+    SpeculativeProfile,
     CORPO_CLOUD_DEFAULT,
     DIST_PRESETS,
     EMBEDDING_DOC_BUCKETS,
@@ -91,6 +92,91 @@ class EfficiencyParams:
     pd_interference: float = 0.0  # Added for UI
 
 
+@dataclass(frozen=True)
+class SpecRuntime:
+    """Resolved speculative-decoding configuration for one deployment."""
+
+    profile: SpeculativeProfile
+    k: int  # speculative tokens proposed per cycle
+    alpha: float  # per-token acceptance probability
+    tau: float  # expected tokens emitted per cycle (accepted prefix + bonus token)
+    passes: int  # draft forward passes per cycle
+    draft_weight_bytes: float  # drafter weight footprint read per draft pass
+    draft_active_params: float  # per-token active drafter parameters (MoE-aware)
+
+
+def spec_acceptance_len(alpha: float, k: int) -> float:
+    """Expected tokens per cycle for a chain of k drafts: accepted prefix + bonus.
+
+    Real drafters verify trees (EAGLE-3) or blocks (DFlash), so profile alphas are
+    fitted to measured acceptance lengths at their default k; this chain formula is
+    the documented conservative approximation when k moves off that default.
+    """
+    k = max(int(k), 0)
+    alpha = min(max(float(alpha), 0.0), 1.0)
+    if alpha >= 1.0:
+        return float(k + 1)
+    return (1.0 - alpha ** (k + 1)) / (1.0 - alpha)
+
+
+def spec_finite_output_tau(alpha: float, k: int, output_tokens: int) -> float:
+    """Expected emitted tokens/cycle including final partial-cycle waste.
+
+    A cycle emits one through k+1 tokens. This small renewal recurrence prevents
+    one-token and short responses from receiving an asymptotic long-generation
+    speculative speedup.
+    """
+    n = max(int(output_tokens), 1)
+    k = min(max(int(k), 0), n - 1)
+    alpha = min(max(float(alpha), 0.0), 1.0)
+    if k <= 0:
+        return 1.0
+    expected_cycles = [0.0] * (n + 1)
+    for remaining in range(1, n + 1):
+        cycle_k = min(k, remaining - 1)
+        total = 1.0
+        for emitted in range(1, cycle_k + 1):
+            probability = (alpha ** (emitted - 1)) * (1.0 - alpha)
+            total += probability * expected_cycles[remaining - emitted]
+        total += (alpha ** cycle_k) * expected_cycles[max(remaining - cycle_k - 1, 0)]
+        expected_cycles[remaining] = total
+    return n / expected_cycles[n]
+
+
+def resolve_spec_runtime(
+    m: Model,
+    method: str,
+    spec_k: int,
+    alpha_override: float,
+    prec: str,
+) -> Optional[SpecRuntime]:
+    if not method or method == "off":
+        return None
+    profile = next((p for p in m.available_spec_profiles if p.method == method), None)
+    if profile is None:
+        return None
+    k = min(max(int(spec_k if spec_k > 0 else profile.default_k), 1), 32)
+    alpha = min(max(float(alpha_override if alpha_override > 0 else profile.acceptance_alpha), 0.0), 1.0)
+    passes = 1 if profile.parallel_draft else k
+    # Draft weights share the target's served precision: scale by the target's
+    # average bytes/param at this precision (mixed-precision LUTs included).
+    avg_bpp = m.weight_bytes(prec) / m.total_params if m.total_params > 0 else 2.0
+    draft_weight_bytes = (
+        getattr(profile, "exact_weight_bytes", 0.0)
+        if getattr(profile, "exact_weight_bytes", 0.0) > 0
+        else profile.draft_params * avg_bpp
+    )
+    return SpecRuntime(
+        profile=profile,
+        k=k,
+        alpha=alpha,
+        tau=spec_acceptance_len(alpha, k),
+        passes=passes,
+        draft_weight_bytes=draft_weight_bytes,
+        draft_active_params=getattr(profile, "active_params", 0.0) or profile.draft_params,
+    )
+
+
 @dataclass
 class MemoryResult:
     requested: float
@@ -107,6 +193,8 @@ class DecodeResult:
     lat: float
     step_ms: float
     max_slots: int
+    spec_tau: float = 0.0  # tokens emitted per speculative cycle; 0 when spec is off
+    spec_speedup: float = 1.0  # per-token latency ratio vs the same topology without spec
 
 
 @dataclass
@@ -548,10 +636,15 @@ def compute_memory(
     profiled_non_kv_gb: float,
     prec: str,
     eff: EfficiencyParams,
+    spec: Optional[SpecRuntime] = None,
 ) -> Optional[MemoryResult]:
     requested = g.mem * mu
     pp_fraction = _pp_peak_fraction(m, pp)
     weights = m.weight_bytes(prec) * pp_fraction / tp
+    if spec is not None:
+        # Drafter weights are resident whenever speculative decoding is enabled,
+        # so they shrink the KV budget for prefill and decode alike.
+        weights += spec.draft_weight_bytes * pp_fraction / tp
     profiled_non_kv = profiled_non_kv_bytes(tp, profiled_non_kv_gb)
     non_kv = weights + profiled_non_kv
     if non_kv > requested:
@@ -575,6 +668,7 @@ def valid_strategies(
     mu: float,
     profiled_non_kv_gb: float,
     prec: str,
+    spec: Optional[SpecRuntime] = None,
 ) -> list[tuple[int, int, int]]:
     if gpu_count <= 0:
         return []
@@ -586,7 +680,10 @@ def valid_strategies(
         budget = per_gpu_weight_budget(g, mu, profiled_non_kv_gb, tp)
         if budget <= 0:
             continue
-        if m.weight_bytes(prec) * _pp_peak_fraction(m, pp) / tp <= budget:
+        resident_weights = m.weight_bytes(prec)
+        if spec is not None:
+            resident_weights += spec.draft_weight_bytes
+        if resident_weights * _pp_peak_fraction(m, pp) / tp <= budget:
             result.append((tp, pp, dp))
 
     return sorted(
@@ -608,8 +705,9 @@ def default_strategy(
     mu: float,
     profiled_non_kv_gb: float,
     prec: str,
+    spec: Optional[SpecRuntime] = None,
 ) -> tuple[int, int, int]:
-    candidates = valid_strategies(m, gpu_count, g, mu, profiled_non_kv_gb, prec)
+    candidates = valid_strategies(m, gpu_count, g, mu, profiled_non_kv_gb, prec, spec)
     if not candidates:
         return (max(gpu_count, 1), 1, 1)
 
@@ -618,7 +716,8 @@ def default_strategy(
     requested = g.mem * mu
     for tp, pp, dp in candidates:
         profiled_non_kv = profiled_non_kv_bytes(tp, profiled_non_kv_gb)
-        kv_headroom = max(0.0, requested - (m.weight_bytes(prec) * _pp_peak_fraction(m, pp) / tp) - profiled_non_kv)
+        resident_weights = m.weight_bytes(prec) + (spec.draft_weight_bytes if spec is not None else 0.0)
+        kv_headroom = max(0.0, requested - (resident_weights * _pp_peak_fraction(m, pp) / tp) - profiled_non_kv)
         score = (
             1 if tp <= g.node_size else 0,
             min(tp, g.node_size),
@@ -731,19 +830,31 @@ def _decode_step_time(
     eff: EfficiencyParams,
     paged_oh: float = 0.0,
     extra_flops: float = 0.0,
+    spec: Optional[SpecRuntime] = None,
 ) -> float:
     aw = _active_weight_bytes(m, prec)
     pp_fraction = _pp_peak_fraction(m, pp)
     wt = (aw * pp_fraction / tp) / (g.effective_bw * eff.bw_eff)
-    kv_read_bytes = pr * per_replica_kv_cache_bytes(m, avg_seq, prec, pp, tp)
+    base_kv_read_bytes = pr * per_replica_kv_cache_bytes(m, avg_seq, prec, pp, tp)
+    # A speculative verification pass forwards the k drafted positions. The
+    # already-available target logit verifies the first draft and the final
+    # forwarded position supplies the bonus token, so this is k (not k+1)
+    # target positions in steady state. Target weights are reused once, while
+    # KV reads, activation FLOPs, and collective payloads scale with k.
+    verify_positions = max(spec.k, 1) if spec is not None else 1
+    kv_read_bytes = base_kv_read_bytes * verify_positions
     kv_time = kv_read_bytes / (g.effective_bw * eff.bw_eff)
     bt = wt + kv_time
 
     wf = 2 * m.active_params * pr * pp_fraction
     af = _decode_attention_work(m, pr, avg_seq, pp)
-    ct = (wf + af + max(extra_flops, 0.0)) / (model_gpu_flops(g, m, prec) * tp * eff.comp_eff)
+    flops = wf + af
+    if spec is not None:
+        # Verification reuses weights, but performs k positions of target work.
+        flops *= verify_positions
+    ct = (flops + max(extra_flops, 0.0)) / (model_gpu_flops(g, m, prec) * tp * eff.comp_eff)
 
-    comm = communication_breakdown(m, tp, pp, pr, avg_seq, g, eff)
+    comm = communication_breakdown(m, tp, pp, pr * verify_positions, avg_seq, g, eff)
     # ``pr`` is the number of sequences in one continuous decode batch, not a
     # count of independent pipeline microbatches.  Treating it as the latter
     # makes the fill/drain multiplier shrink with concurrency and can therefore
@@ -754,7 +865,30 @@ def _decode_step_time(
     # approximation; it intentionally does not turn aggregate PP utilization
     # into a per-request latency reduction.
     base = max(bt, ct) * max(int(pp), 1)
-    step = (base + comm.total) * (1 + eff.overhead + paged_oh)
+    stage = base + comm.total
+    if spec is not None:
+        # Draft stage, sequential with verification: one pass for parallel
+        # (block-diffusion) drafters, k autoregressive passes otherwise. The
+        # drafter reads its own weights and its small KV cache (the profile's
+        # fraction of the target per-sequence KV read) each pass. Draft
+        # collectives are ignored — drafters are 1-5 layers — a small optimism
+        # inside an otherwise conservative model.
+        # Autoregressive drafters process one position per pass; a parallel
+        # block drafter processes all k positions in its pass. Keep that
+        # distinction in both KV traffic and compute instead of treating a
+        # length-k block as one token of work.
+        draft_positions = spec.k if spec.profile.parallel_draft else 1
+        draft_bt = (
+            spec.draft_weight_bytes * pp_fraction / tp
+            + base_kv_read_bytes * spec.profile.kv_overhead * draft_positions
+        ) / (
+            g.effective_bw * eff.bw_eff
+        )
+        draft_ct = (2 * spec.draft_active_params * pr * pp_fraction * draft_positions) / (
+            model_gpu_flops(g, m, prec) * tp * eff.comp_eff
+        )
+        stage += max(draft_bt, draft_ct) * max(int(pp), 1) * spec.passes
+    step = stage * (1 + eff.overhead + paged_oh)
     return step * _moe_tail_multiplier(m, eff)
 
 
@@ -773,14 +907,31 @@ def _compute_decode_core(
     eff: EfficiencyParams,
     paged_oh: float = 0.0,
     extra_flops: float = 0.0,
+    spec: Optional[SpecRuntime] = None,
 ) -> Optional[DecodeResult]:
     if not context_supported(m, avg_in, avg_out):
         return None
-    mem = compute_memory(m, tp, pp, g, mu, profiled_non_kv_gb, prec, eff)
+    mem = compute_memory(m, tp, pp, g, mu, profiled_non_kv_gb, prec, eff, spec)
     if mem is None:
         return None
 
     dp = max(int(dp), 1)
+    output_tokens = max(int(round(avg_out)), 1)
+    active_spec = spec
+    if spec is not None:
+        effective_k = min(spec.k, output_tokens - 1)
+        if effective_k <= 0:
+            active_spec = None
+        else:
+            active_spec = SpecRuntime(
+                profile=spec.profile,
+                k=effective_k,
+                alpha=spec.alpha,
+                tau=spec_finite_output_tau(spec.alpha, effective_k, output_tokens),
+                passes=1 if spec.profile.parallel_draft else effective_k,
+                draft_weight_bytes=spec.draft_weight_bytes,
+                draft_active_params=spec.draft_active_params,
+            )
     active_replicas = min(max(int(bs), 0), dp)
     if active_replicas <= 0:
         return None
@@ -789,6 +940,10 @@ def _compute_decode_core(
     pr = max(replica_loads)
     avg_seq = avg_in + avg_out / 2.0
     avg_kv = per_replica_kv_cache_bytes(m, avg_seq, prec, pp, tp)
+    if active_spec is not None:
+        # The drafter keeps its own small KV cache per sequence on top of the
+        # target's, which shrinks the number of slots that fit the KV budget.
+        avg_kv *= 1.0 + active_spec.profile.kv_overhead
     max_slots = int(mem.kv_budget / avg_kv) if avg_kv > 0 else 0
     if eff.sched_budget > 0:
         max_slots = min(max_slots, eff.sched_budget)
@@ -797,17 +952,26 @@ def _compute_decode_core(
 
     # Sum independently loaded replica throughput. For realtime audio, callers pass
     # per-request extra work so uneven replicas receive proportional encoder work.
-    replica_steps = [
-        _decode_step_time(m, tp, pp, load, g, prec, avg_seq, eff, paged_oh, extra_flops * load)
+    replica_cycles = [
+        _decode_step_time(m, tp, pp, load, g, prec, avg_seq, eff, paged_oh, extra_flops * load, active_spec)
         for load in replica_loads
     ]
-    total_tps = sum(load / step for load, step in zip(replica_loads, replica_steps) if step > 0)
-    slowest_step = max(replica_steps)
+    tau = active_spec.tau if active_spec is not None else 1.0
+    total_tps = sum(load * tau / cycle for load, cycle in zip(replica_loads, replica_cycles) if cycle > 0)
+    slowest_cycle = max(replica_cycles)
+    # step_ms/lat stay per-token: with spec, one cycle emits tau tokens.
+    per_token = slowest_cycle / tau
+    spec_speedup = 1.0
+    if spec is not None:
+        baseline_step = _decode_step_time(m, tp, pp, pr, g, prec, avg_seq, eff, paged_oh, extra_flops * pr)
+        spec_speedup = baseline_step / per_token if per_token > 0 else 1.0
     return DecodeResult(
         tps=round(total_tps),
-        lat=round(slowest_step * 1e5) / 100,
-        step_ms=round(slowest_step * 1e5) / 100,
+        lat=round(per_token * 1e5) / 100,
+        step_ms=round(per_token * 1e5) / 100,
         max_slots=max_slots * dp,
+        spec_tau=tau if spec is not None else 0.0,
+        spec_speedup=round(spec_speedup * 100) / 100,
     )
 
 
@@ -824,6 +988,7 @@ def compute_decode(
     in_dist: list[int],
     out_dist: list[int],
     eff: EfficiencyParams,
+    spec: Optional[SpecRuntime] = None,
 ) -> Optional[DecodeResult]:
     avg_in = avg_dist(in_dist, INPUT_BUCKETS)
     avg_out = avg_dist(out_dist, OUTPUT_BUCKETS)
@@ -841,6 +1006,7 @@ def compute_decode(
         avg_out,
         eff,
         paged_oh=decode_paged_oh(in_dist, out_dist, eff),
+        spec=spec,
     )
 
 
@@ -856,8 +1022,9 @@ def compute_decode_capacity(
     in_dist: list[int],
     out_dist: list[int],
     eff: EfficiencyParams,
+    spec: Optional[SpecRuntime] = None,
 ) -> int:
-    result = compute_decode(m, tp, pp, max(dp, 1), dp, g, mu, profiled_non_kv_gb, prec, in_dist, out_dist, eff)
+    result = compute_decode(m, tp, pp, max(dp, 1), dp, g, mu, profiled_non_kv_gb, prec, in_dist, out_dist, eff, spec)
     return result.max_slots if result else 0
 
 
@@ -873,10 +1040,11 @@ def compute_prefill(
     profiled_non_kv_gb: float,
     prec: str,
     eff: EfficiencyParams,
+    spec: Optional[SpecRuntime] = None,
 ) -> Optional[PrefillResult]:
     if not context_supported(m, seq_len):
         return None
-    mem = compute_memory(m, tp, pp, g, mu, profiled_non_kv_gb, prec, eff)
+    mem = compute_memory(m, tp, pp, g, mu, profiled_non_kv_gb, prec, eff, spec)
     if mem is None:
         return None
     if seq_len <= 0:
@@ -886,6 +1054,11 @@ def compute_prefill(
 
     pr = math.ceil(bs / dp)
     seq_kv = per_replica_kv_cache_bytes(m, seq_len, prec, pp, tp)
+    if spec is not None:
+        # Reserve the drafter's prompt/hidden-state cache consistently with
+        # decode capacity. Some attached drafters reuse target hidden states;
+        # the profile overhead is the catalog's measured/estimated aggregate.
+        seq_kv *= 1.0 + spec.profile.kv_overhead
     max_per_replica = int(mem.kv_budget / seq_kv) if seq_kv > 0 else 0
     if pr > max_per_replica:
         return None
@@ -1183,6 +1356,7 @@ def compute_data(
     prefix_hit_rate: float,
     prefill_eff: EfficiencyParams,
     decode_eff: EfficiencyParams,
+    spec: Optional[SpecRuntime] = None,
 ) -> Optional[DataResult]:
     if not context_supported(m, in_len, out_len):
         return None
@@ -1206,6 +1380,7 @@ def compute_data(
         profiled_non_kv_gb,
         prec,
         prefill_eff,
+        spec,
     )
     if pf is None:
         return None
@@ -1224,6 +1399,7 @@ def compute_data(
         out_len,
         decode_eff,
         paged_oh=fixed_paged_oh(in_len + out_len / 2.0, decode_eff),
+        spec=spec,
     )
     if dec is None:
         return None
@@ -1253,6 +1429,7 @@ def compute_data_capacity(
     prefix_hit_rate: float,
     prefill_eff: EfficiencyParams,
     decode_eff: EfficiencyParams,
+    spec: Optional[SpecRuntime] = None,
 ) -> int:
     if not context_supported(m, in_len, out_len):
         return 0
@@ -1273,6 +1450,7 @@ def compute_data_capacity(
         profiled_non_kv_gb,
         prec,
         prefill_eff,
+        spec,
     )
     if pf is None:
         return 0
@@ -1291,6 +1469,7 @@ def compute_data_capacity(
         out_len,
         decode_eff,
         paged_oh=fixed_paged_oh(in_len + out_len / 2.0, decode_eff),
+        spec=spec,
     )
     if dec is None:
         return 0
@@ -1312,6 +1491,7 @@ def compute_user_experience(
     prefix_hit_rate: float,
     prefill_eff: EfficiencyParams,
     decode_eff: EfficiencyParams,
+    spec: Optional[SpecRuntime] = None,
 ) -> Optional[UserExperienceResult]:
     if prefill_strat != decode_strat:
         return None
@@ -1330,6 +1510,7 @@ def compute_user_experience(
         in_dist,
         out_dist,
         decode_eff,
+        spec,
     )
     if dec is None:
         return None
@@ -1349,6 +1530,7 @@ def compute_user_experience(
         profiled_non_kv_gb,
         prec,
         prefill_eff,
+        spec,
     )
     if pf is None:
         return None
@@ -1542,6 +1724,7 @@ def get_decode_bs(states: Optional[list] = None) -> list[int]:
                     state.in_dist,
                     state.out_dist,
                     eff,
+                    spec_runtime_for(state, am, am.model),
                 )
             )
     return _batch_axis_sweep(capacities, BATCH_SIZES)
@@ -1624,9 +1807,21 @@ def get_data_bs(states: Optional[list] = None) -> list[int]:
                     state.prefix_hit_rate,
                     state.prefill_efficiency,
                     state.decode_efficiency,
+                    spec_runtime_for(state, am, am.model),
                 )
             )
     return _batch_axis_sweep(capacities, DATA_BATCH_SIZES)
+
+
+def spec_runtime_for(state, am, m: Model) -> Optional[SpecRuntime]:
+    """Resolve an assignment's speculative-decoding config against global state."""
+    return resolve_spec_runtime(
+        m,
+        getattr(am, "spec_method", "off"),
+        getattr(am, "spec_k", 0),
+        getattr(state, "spec_acceptance", 0.0),
+        am.prec,
+    )
 
 
 def get_processing_pareto_bs(states: Optional[list] = None) -> list[int]:
@@ -1655,6 +1850,7 @@ def get_processing_pareto_bs(states: Optional[list] = None) -> list[int]:
                         state.prefix_hit_rate,
                         state.prefill_efficiency,
                         state.decode_efficiency,
+                        spec_runtime_for(state, am, am.model),
                     )
                 )
     return _batch_axis_sweep(capacities, DATA_BATCH_SIZES)
@@ -1673,6 +1869,7 @@ def _user_exp_curve(
     prefix_hit_rate: float,
     prefill_eff: EfficiencyParams,
     decode_eff: EfficiencyParams,
+    spec: Optional[SpecRuntime] = None,
 ) -> list[dict]:
     points = []
     for users in USER_EXP_SWEEP:
@@ -1690,6 +1887,7 @@ def _user_exp_curve(
             prefix_hit_rate,
             prefill_eff,
             decode_eff,
+            spec,
         )
         if not result or result.arrival_rps <= 0:
             continue
@@ -1773,6 +1971,7 @@ def chart_decode(state, batch_sizes: Optional[list[int]] = None, panel_suffix: s
                 state.in_dist,
                 state.out_dist,
                 eff,
+                spec_runtime_for(state, am, model),
             )
             pts.append({"x": bs, "y": result.tps if result else None})
         datasets.append({
@@ -1819,6 +2018,7 @@ def chart_pareto(state, panel_suffix: str = "") -> list[dict]:
                 state.in_dist,
                 state.out_dist,
                 eff,
+                spec_runtime_for(state, am, model),
             )
             if result:
                 pts.append({"x": result.lat, "y": result.tps, "bs": bs})
@@ -1852,6 +2052,7 @@ def chart_user_pareto(state, batch_sizes: Optional[list[int]] = None, panel_suff
         gpu = am.gpu_spec
         if gpu is None:
             continue
+        spec = spec_runtime_for(state, am, model)
         pts = []
         for users in batch_sizes:
             result = compute_decode(
@@ -1867,6 +2068,7 @@ def chart_user_pareto(state, batch_sizes: Optional[list[int]] = None, panel_suff
                 state.in_dist,
                 state.out_dist,
                 eff,
+                spec,
             )
             if result:
                 pts.append({
@@ -1875,6 +2077,7 @@ def chart_user_pareto(state, batch_sizes: Optional[list[int]] = None, panel_suff
                     "users": users,
                     "total_tps": result.tps,
                     "lat": result.lat,
+                    "spec_speedup": result.spec_speedup,
                 })
         if pts:
             datasets.append({
@@ -1923,6 +2126,7 @@ def chart_aggregate(state, batch_sizes: Optional[list[int]] = None, panel_suffix
                 state.in_dist,
                 state.out_dist,
                 eff,
+                spec_runtime_for(state, am, model),
             )
             if result:
                 total += result.tps
@@ -1963,6 +2167,7 @@ def chart_aggregate(state, batch_sizes: Optional[list[int]] = None, panel_suffix
                 state.in_dist,
                 state.out_dist,
                 eff,
+                spec_runtime_for(state, am, model),
             )
             pts.append({"x": bs, "y": result.tps if result else None})
         datasets.append({
@@ -2005,6 +2210,7 @@ def chart_data_processing(state, batch_sizes: Optional[list[int]] = None, panel_
                 state.prefix_hit_rate,
                 state.prefill_efficiency,
                 state.decode_efficiency,
+                spec_runtime_for(state, am, model),
             )
             pts.append({"x": bs, "y": result.tps if result else None})
         datasets.append({
@@ -2041,6 +2247,7 @@ def chart_data_processing(state, batch_sizes: Optional[list[int]] = None, panel_
                 state.prefix_hit_rate,
                 state.prefill_efficiency,
                 state.decode_efficiency,
+                spec_runtime_for(state, am, model),
             )
             if result:
                 total += result.tps
@@ -2282,6 +2489,7 @@ def chart_processing_pareto(state, batch_sizes: Optional[list[int]] = None, pane
                     state.prefix_hit_rate,
                     state.prefill_efficiency,
                     state.decode_efficiency,
+                    spec_runtime_for(state, am, am.model),
                 )
                 if result:
                     total_tps += result.tps
@@ -2333,6 +2541,7 @@ def chart_user_experience(state, panel_suffix: str = "") -> list[dict]:
             state.prefix_hit_rate,
             state.prefill_efficiency,
             state.decode_efficiency,
+            spec_runtime_for(state, am, model),
         )
         datasets.append({
             "label": _label(am, model, panel_suffix, include_prefill=True),
@@ -2521,6 +2730,7 @@ def compute_stats_data(state) -> dict:
                 state.prefix_hit_rate,
                 state.prefill_efficiency,
                 state.decode_efficiency,
+                spec_runtime_for(state, am, model),
             )
             if result:
                 total += result.tps
@@ -2558,6 +2768,7 @@ def compute_user_exp_table(state) -> list[dict]:
             state.prefix_hit_rate,
             state.prefill_efficiency,
             state.decode_efficiency,
+            spec_runtime_for(state, am, model),
         )
         if not points:
             continue
@@ -2617,8 +2828,18 @@ def _project_workload_profile(project, fallback: dict) -> dict:
     }
 
 
-def _best_deployment_result_for_model(state, am, gpu: GPU, in_len: int, out_len: int, batch_sizes: list[int]) -> Optional[DeploymentPeakResult]:
+def _best_deployment_result_for_model(
+    state,
+    am,
+    gpu: GPU,
+    in_len: int,
+    out_len: int,
+    batch_sizes: list[int],
+    prefix_hit_rate: Optional[float] = None,
+) -> Optional[DeploymentPeakResult]:
+    prefix_rate = state.prefix_hit_rate if prefix_hit_rate is None else min(max(float(prefix_hit_rate), 0.0), 1.0)
     best: Optional[DeploymentPeakResult] = None
+    spec = spec_runtime_for(state, am, am.model)
     for bs in batch_sizes:
         result = compute_data(
             am.model,
@@ -2631,9 +2852,10 @@ def _best_deployment_result_for_model(state, am, gpu: GPU, in_len: int, out_len:
             state.mu,
             state.profiled_non_kv_gb,
             am.prec,
-            state.prefix_hit_rate,
+            prefix_rate,
             state.prefill_efficiency,
             state.decode_efficiency,
+            spec,
         )
         if result is None:
             continue
@@ -2662,6 +2884,7 @@ def _deployment_capacity_for_profile(
     gpu: GPU,
     profile: dict,
     peak_factor: float,
+    prefix_hit_rate: Optional[float] = None,
 ) -> tuple[float, float]:
     """Return shape-specific daily token capacity and peak RPS.
 
@@ -2671,6 +2894,7 @@ def _deployment_capacity_for_profile(
     """
     in_len = int(profile["in_len"])
     out_len = int(profile["out_len"])
+    prefix_rate = state.prefix_hit_rate if prefix_hit_rate is None else min(max(float(prefix_hit_rate), 0.0), 1.0)
     cap = compute_data_capacity(
         am.model,
         (am.prefill_tp, am.prefill_pp, am.prefill_dp),
@@ -2681,12 +2905,15 @@ def _deployment_capacity_for_profile(
         state.mu,
         state.profiled_non_kv_gb,
         am.prec,
-        state.prefix_hit_rate,
+        prefix_rate,
         state.prefill_efficiency,
         state.decode_efficiency,
+        spec_runtime_for(state, am, am.model),
     )
     batch_sizes = _batch_axis_sweep([cap], DATA_BATCH_SIZES)
-    best = _best_deployment_result_for_model(state, am, gpu, in_len, out_len, batch_sizes)
+    best = _best_deployment_result_for_model(
+        state, am, gpu, in_len, out_len, batch_sizes, prefix_rate,
+    )
     peak_rps = best.rps if best and best.rps > 0 else 0.0
     tokens_per_request = max(float(profile["tokens_per_request"]), 1.0)
     daily_tokens = (
@@ -2823,6 +3050,7 @@ def _build_model_supply(state, profile, prefix_hit_rate, peak_factor_eff) -> lis
             prefix_hit_rate,
             state.prefill_efficiency,
             state.decode_efficiency,
+            spec_runtime_for(state, am, am.model),
         )
         batch_sizes = _batch_axis_sweep([cap], DATA_BATCH_SIZES)
         best = _best_deployment_result_for_model(
@@ -2915,9 +3143,10 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
         slo = float(getattr(p, "min_success_rate", 0.85))
         quality_floor = float(getattr(p, "quality_floor", 0.0))
         required_caps = frozenset(getattr(p, "requires", frozenset()) or frozenset())
+        project_prefix_hit_rate = min(max(float(getattr(p, "prefix_hit_rate", 0.0)), 0.0), 1.0)
         project_profile = _project_workload_profile(p, profile)
         cloud_info, cloud_pm = _cloud_price_per_m_in_preset(
-            difficulty, slo, quality_floor, project_profile, prefix_hit_rate, corpo_cloud,
+            difficulty, slo, quality_floor, project_profile, project_prefix_hit_rate, corpo_cloud,
             required_caps,
         )
         cloud_blocked = cloud_info is None
@@ -2952,6 +3181,7 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
             project_peak_factor = 1.0 if (night_batching and p.batch_eligible) else peak_factor
             shape_daily_cap, shape_peak_rps = _deployment_capacity_for_profile(
                 state, me["am"], me["gpu"], project_profile, project_peak_factor,
+                project_prefix_hit_rate,
             )
             if shape_daily_cap <= 0:
                 continue
@@ -3081,6 +3311,7 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
             "destroyed_pct": (destroyed / total * 100.0) if total > 0 else 0.0,
             "internal_cost_day": internal_cost,
             "quality_floor": quality_floor,
+            "prefix_hit_rate": project_prefix_hit_rate,
             "value_served": value_served,
             "value_spilled": (spilled / 1e6) * value_basis,
             "value_leaked": (leaked / 1e6) * value_basis,
@@ -3308,6 +3539,7 @@ def _marginal_gpu_recommendations(
 
         sim_gp.count += 1
         sim_am.gpu_count += 1
+        sim_spec = spec_runtime_for(sim, sim_am, sim_am.model)
         strategy = default_strategy(
             sim_am.model,
             sim_am.gpu_count,
@@ -3315,8 +3547,12 @@ def _marginal_gpu_recommendations(
             sim.mu,
             sim.profiled_non_kv_gb,
             sim_am.prec,
+            sim_spec,
         )
-        if not valid_strategies(sim_am.model, sim_am.gpu_count, sim_gp.gpu, sim.mu, sim.profiled_non_kv_gb, sim_am.prec):
+        if not valid_strategies(
+            sim_am.model, sim_am.gpu_count, sim_gp.gpu, sim.mu,
+            sim.profiled_non_kv_gb, sim_am.prec, sim_spec,
+        ):
             continue
         sim_am.tp, sim_am.pp, sim_am.dp = strategy
         sim_am.prefill_tp, sim_am.prefill_pp, sim_am.prefill_dp = strategy

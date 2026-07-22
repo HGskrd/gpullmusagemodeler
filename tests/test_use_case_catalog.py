@@ -23,6 +23,8 @@ class UseCaseCatalogTests(unittest.TestCase):
                 self.assertAlmostEqual(preset["tokens_day"], expected)
                 self.assertTrue(preset["scale_kind"]["formula"])
                 self.assertTrue(preset["scale_hint"])
+                self.assertGreaterEqual(preset["prefix_hit_rate"], 0.0)
+                self.assertLessEqual(preset["prefix_hit_rate"], 1.0)
 
     def test_every_scenario_has_resolvable_dated_evidence(self):
         preset_keys = {preset["key"] for preset in PROJECT_PRESETS}
@@ -83,6 +85,8 @@ class UseCaseCatalogTests(unittest.TestCase):
         self.assertIn(b"Evidence &amp; assumptions", response.data)
         self.assertIn(b"Invoice &amp; claims extraction", response.data)
         self.assertIn(b"illustrative large-enterprise scenarios", response.data)
+        self.assertIn(b"Prefix reuse", response.data)
+        self.assertIn(b"empirical", response.data)
 
 
 if __name__ == "__main__":

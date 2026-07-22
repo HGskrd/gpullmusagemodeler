@@ -58,11 +58,26 @@ class EngineeringHardeningTests(unittest.TestCase):
         payload = exported.get_json()
         self.assertEqual(payload["type"], "gpullm-scenario")
         self.assertEqual(len(payload["panel_a"]["models"]), 3)
+        self.assertEqual([gpu["gpu_type"] for gpu in payload["panel_a"]["gpus"]], ["H100"])
+        self.assertEqual(
+            [model["model_key"] for model in payload["panel_a"]["models"]],
+            ["ms32", "g26", "q35"],
+        )
+        self.assertIsNotNone(payload["panel_b"])
+        self.assertEqual(
+            [model["model_key"] for model in payload["panel_b"]["models"]],
+            ["g31", "q27", "nem3no"],
+        )
+        self.assertEqual(len(payload["panel_a"]["projects"]), 19)
+        self.assertEqual(len(payload["panel_b"]["projects"]), 19)
+        self.assertAlmostEqual(payload["panel_a"]["projects"][0]["prefix_hit_rate"], 0.10)
+        self.assertAlmostEqual(payload["panel_b"]["projects"][0]["prefix_hit_rate"], 0.10)
 
         reset = self.client.post("/session/reset", data={"tab_id": self.tab_id}, headers=self.headers)
         self.assertEqual(reset.status_code, 200)
         blank = self.client.get("/scenario/export", headers=self.headers).get_json()
         self.assertEqual(blank["panel_a"]["models"], [])
+        self.assertIsNone(blank["panel_b"])
 
         restored = self.client.post(
             "/scenario/import", data={"json": json.dumps(payload), "tab_id": self.tab_id}, headers=self.headers,
@@ -184,16 +199,36 @@ class EngineeringHardeningTests(unittest.TestCase):
     def test_prefix_panel_reflects_workload_distribution_basis(self):
         # The model card probes prefill capacity at max(task_il, avg in-dist);
         # the prefix-reuse panel must quote the same basis, not task_il alone.
-        from calc import avg_dist
+        from calc import avg_dist, effective_prefill_length
         from data import INPUT_BUCKETS
         from state import create_default_state
 
         state = create_default_state()
         basis = max(state.task_il, avg_dist(state.in_dist, INPUT_BUCKETS))
+        effective = effective_prefill_length(basis, state.prefix_hit_rate)
         response = self.client.get("/", headers=self.headers)
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
-        self.assertIn(f"Effective prefill input: {basis:,} / {basis:,} tok", html)
+        self.assertIn(f"Effective prefill input: {effective:,} / {basis:,} tok", html)
+        self.assertIn("Portfolio prefix-token reuse", html)
+        self.assertNotIn('hx-post="/settings/prefix-hit"', html)
+
+    def test_cloud_only_use_case_shows_money_paid_to_cloud(self):
+        from state import PlannerState, Project, replace_scope_states
+
+        state = PlannerState(projects=[
+            Project(
+                1, "Cloud-only workload", 0.1, 1_000_000, 100.0,
+                min_success_rate=0.5, prefix_hit_rate=0.25,
+            )
+        ])
+        replace_scope_states(f"{self.visitor_id}:{self.tab_id}", state, None)
+
+        response = self.client.get("/", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn("Cloud spend lost / day", html)
+        self.assertIn("paid to cloud (lost from on-prem)", html)
 
     def test_unserved_sublabel_is_neutral_without_demand(self):
         self.client.post("/session/reset", data={"tab_id": self.tab_id}, headers=self.headers)

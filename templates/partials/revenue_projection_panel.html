@@ -37,11 +37,11 @@
         <span class="sub">{{ f.served_tokens|fmt_num }} tok on your GPUs</span>
       </div>
       <div class="hs">
-        <span class="T">Cloud fallback</span>
+        <span class="T tip" title="Projected invoice spend for demand routed to the corporate cloud gateway. This money leaves the on-prem platform; shelved demand is reported separately.">Cloud spend lost / day</span>
         <span class="val {{ 'bad' if (f.spilled_pct + f.leaked_pct) >= 25 else ('warn' if (f.spilled_pct + f.leaked_pct) > 0 else '') }}">
-          {{ (f.spilled_pct + f.leaked_pct)|round(0)|int }}%
+          {{ p.value_cloud_day|fmt_money }}
         </span>
-        <span class="sub">{{ f.spilled_pct|round(0)|int }}% capacity spill · {{ f.leaked_pct|round(0)|int }}% model/price mismatch</span>
+        <span class="sub">{{ (f.spilled_pct + f.leaked_pct)|round(0)|int }}% fallback · {{ f.spilled_pct|round(0)|int }}% capacity spill · {{ f.leaked_pct|round(0)|int }}% mismatch</span>
       </div>
       <div class="hs">
         <span class="T">Unserved</span>
@@ -172,18 +172,20 @@
           {% if row.leaked_pct > 0 %}<div class="fate-seg leaked" style="flex:{{ row.leaked_pct }};">{% if row.leaked_pct >= 12 %}{{ row.leaked_pct|round(0)|int }}%{% endif %}</div>{% endif %}
           {% if row.destroyed_pct > 0 %}<div class="fate-seg destroyed" style="flex:{{ row.destroyed_pct }};">{% if row.destroyed_pct >= 12 %}{{ row.destroyed_pct|round(0)|int }}%{% endif %}</div>{% endif %}
         </div>
-        {% if row.any_served %}
+        {% if row.any_served or row.value_spilled + row.value_leaked > 0 or row.value_destroyed > 0 %}
         <div class="T" style="margin-top:4px;display:flex;flex-wrap:wrap;gap:8px;">
+          {% if row.any_served %}
           <span title="Revenue captured internally, priced at cloud substitute (or WTP if cloud is blocked).">💰 {{ row.value_served|fmt_money }}/day served</span>
           {% if p.cost_day > 0 %}
           <span title="Internal GPU-day cost allocated to tokens this use case consumed.">· spent {{ row.internal_cost_day|fmt_money }}/day</span>
           <span class="{{ 'good' if row.margin_day > 0 else 'bad' }}" title="equivalent value served − internal cost/day">· margin {{ row.margin_day|fmt_money }}/day</span>
           {% endif %}
+          {% endif %}
           {% if row.value_spilled + row.value_leaked > 0 %}
-          <span class="warn" title="Value that flees to cloud because capacity saturated or priced out.">· {{ (row.value_spilled + row.value_leaked)|fmt_money }}/day to cloud</span>
+          <span class="warn" title="Invoice spend paid to the cloud because capacity saturated or on-prem did not fit.">{{ '· ' if row.any_served else '' }}{{ (row.value_spilled + row.value_leaked)|fmt_money }}/day paid to cloud (lost from on-prem)</span>
           {% endif %}
           {% if row.value_destroyed > 0 %}
-          <span class="bad" title="Work shelved — cloud also above WTP, or no compatible cloud model.">· {{ row.value_destroyed|fmt_money }}/day destroyed</span>
+          <span class="bad" title="Work shelved — cloud also above WTP, or no compatible cloud model.">{{ '· ' if row.any_served or row.value_spilled + row.value_leaked > 0 else '' }}{{ row.value_destroyed|fmt_money }}/day destroyed</span>
           {% endif %}
           {% if row.co2_kg_day > 0 %}
           <span title="Day-shape-weighted CO₂ of tokens served internally for this use case. Avg = served-token-weighted across the deployed models that actually ran this work.">🌱 {{ "%.2f"|format(row.co2_kg_day) }} kg CO₂/day · avg {{ "%.1f"|format(row.co2_g_per_task_avg * 1000) }} kg/M tasks</span>
@@ -352,7 +354,7 @@
 
       <div class="lv">
         <span class="T">Workload</span>
-        <span class="T">avg {{ p.workload_in_len|round|int }} in / {{ p.workload_out_len|round|int }} out · prefix hit {{ (state.prefix_hit_rate * 100)|round|int }}%</span>
+        <span class="T">avg {{ p.workload_in_len|round|int }} in / {{ p.workload_out_len|round|int }} out · empirical portfolio prefix reuse {{ (state.prefix_hit_rate * 100)|round|int }}%</span>
       </div>
     </div>
     <div class="T" style="margin-top:6px;">

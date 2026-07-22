@@ -110,6 +110,12 @@ USE_CASE_SOURCES = {
         "published": "2025",
         "url": "https://www.anthropic.com/engineering/multi-agent-research-system",
     },
+    "vllm_prefix_metrics": {
+        "title": "Prefix Cache metrics",
+        "publisher": "vLLM",
+        "published": "current documentation",
+        "url": "https://docs.vllm.ai/en/stable/design/metrics/",
+    },
 }
 
 
@@ -192,6 +198,11 @@ USE_CASE_EVIDENCE = {
     "synthetic_generation": {"confidence": "low", "assumption": "5k tokens/example includes critique and retries; task-specific validators determine usable yield.", "source_ids": ("openai_batch", "nist_ai_rmf")},
     "catalog_enrichment": {"confidence": "low", "assumption": "2k tokens/SKU assumes compact records and outputs; images, locales, and seasonal reprocessing determine the actual load.", "source_ids": ("openai_structured_outputs", "openai_batch")},
 }
+
+# The workload-specific rates are planner priors, while this source documents
+# the token-query counters used to replace them with observed deployment data.
+for _evidence in USE_CASE_EVIDENCE.values():
+    _evidence["source_ids"] = tuple(dict.fromkeys((*_evidence["source_ids"], "vllm_prefix_metrics")))
 
 
 def enrich_use_case_details(details: dict) -> dict:

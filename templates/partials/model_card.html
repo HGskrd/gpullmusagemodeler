@@ -20,6 +20,36 @@
     </div>
   </div>
 
+  {% if not m.is_embedding_model and not m.is_realtime_only %}
+  <div class="flex" style="margin-bottom:3px;gap:3px;">
+    <span class="T" style="min-width:28px;">⚡</span>
+    <select class="prec-select" name="method" aria-label="Speculative decoding for {{ m.name }}"
+            title="Speculative decoding drafter. Native MTP / speculator checkpoints are lossless: accepted tokens match the target model's own output."
+            hx-post="/model/spec" hx-target="#main-content" hx-trigger="change" hx-include="closest .flex"
+            hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}'>
+      <option value="off" {{ 'selected' if am.spec_method == 'off' else '' }}>Spec off</option>
+      {% for sp in m.available_spec_profiles %}
+      <option value="{{ sp.method }}" {{ 'selected' if am.spec_method == sp.method else '' }}>{{ sp.label }}</option>
+      {% endfor %}
+    </select>
+    {% if am.spec_method != 'off' %}
+    <input class="prec-select" type="number" name="spec_k" min="1" max="32"
+           value="{{ am.spec_k if am.spec_k > 0 else info.spec.k }}" aria-label="Draft tokens for {{ m.name }}"
+           title="Draft tokens per speculative cycle. The profile default is calibrated; changing k extrapolates its acceptance prior."
+           hx-post="/model/spec" hx-target="#main-content" hx-trigger="change" hx-include="closest .flex"
+           hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}' style="width:58px;" />
+    {% endif %}
+  </div>
+  {% if info.spec %}
+  <div class="T" style="margin-bottom:3px;" title="{{ info.spec.profile.note }} Source: {{ info.spec.profile.source }}.">
+    {{ info.spec.profile.label }} · k={{ info.spec.k }} · τ≈{{ "%.2f"|format(info.spec.tau) }} tok/cycle{% if info.spec.draft_gb > 0 %} · +{{ "%.1f"|format(info.spec.draft_gb) }} GB draft{% endif %}{% if info.spec.speedup > 0 %} · ~{{ info.spec.speedup }}× decode @{{ info.spec.probe_bs }} users{% endif %}
+  </div>
+  {% if info.spec.speedup > 0 and info.spec.speedup < 1 %}
+  <div class="warn">⚠ Spec decode is modeled slower than baseline at {{ info.spec.probe_bs }} users — verification is compute-bound at this batch.</div>
+  {% endif %}
+  {% endif %}
+  {% endif %}
+
   <div class="T" style="margin-bottom:3px;">
     {{ "%.1f"|format(m.weight_gb(am.prec)) }} GB weights{% if info.mixed_weight_precision %} · ~{{ "%.2f"|format(info.weight_bpp) }} B/param avg{% endif %}{{ ' · MLA KV' if m.is_mla else '' }}{% if m.attention_label %} · {{ m.attention_label }}{% endif %}
   </div>

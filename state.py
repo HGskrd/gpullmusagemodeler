@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import math
 import os
 import re
@@ -10,6 +11,7 @@ import threading
 import time
 import weakref
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Optional
 
 from data import (
@@ -29,6 +31,7 @@ from data import (
     SCALE_MODELS,
     PRECISIONS,
     PRECISION_LABELS,
+    USE_CASE_PREFIX_HIT_RATES,
     normalize_gpu_count,
     normalize_precision,
 )
@@ -36,6 +39,7 @@ import cloud_policy
 from calc import (
     EfficiencyParams,
     avg_dist,
+    resolve_spec_runtime,
     valid_strategies,
 )
 
@@ -211,6 +215,11 @@ class Project:
     # below unlock_price_per_m. Hard threshold: the pool is all-or-nothing per routing pass.
     latent_jobs_day: float = 0.0
     unlock_price_per_m: float = 0.0
+    # Catalog-owned empirical prior: share of prompt tokens expected to hit
+    # Automatic Prefix Caching for this workload archetype.
+    # Derived prompt-token-weighted average of project-level empirical priors.
+    # Kept on the state because shared capacity/topology views consume one blend.
+    prefix_hit_rate: float = 0.0
     # Per-project input / output length preset. The aggregate state.in_dist / state.out_dist
     # used by calc.py are a demand-weighted blend across all projects' presets.
     in_pre: str = "Chat"
@@ -229,6 +238,7 @@ class Project:
             self.scale_value = max(0.0, float(self.scale_value))
             self.tokens_day = scale_value_to_tokens(self.scale_value, self.scale_kind)
         self.quality_floor = min(max(float(getattr(self, "quality_floor", 0.0)), 0.0), 1.0)
+        self.prefix_hit_rate = min(max(float(getattr(self, "prefix_hit_rate", 0.0)), 0.0), 1.0)
         if self.in_pre not in DIST_PRESETS:
             self.in_pre = "Chat"
         if self.out_pre not in DIST_PRESETS:
@@ -248,6 +258,9 @@ class ModelAssignment:
     prefill_tp: Optional[int] = None
     prefill_pp: Optional[int] = None
     prefill_dp: Optional[int] = None
+    # Speculative decoding: "off" disables it; spec_k == 0 uses the profile default_k.
+    spec_method: str = "off"
+    spec_k: int = 0
 
     def __post_init__(self):
         self.prec = normalize_precision(self.prec)
@@ -337,6 +350,9 @@ class PlannerState:
     decode_sched_budget: int = 16384
     
     prefix_hit_rate: float = 0.0
+    # Global per-token acceptance override for speculative decoding;
+    # 0.0 means use each profile's acceptance_alpha.
+    spec_acceptance: float = 0.0
     task_il: int = 2048
     task_ol: int = 32
     mode: str = DEFAULT_PLOT_MODE
@@ -358,6 +374,28 @@ class PlannerState:
         self.projection_day_shape = normalize_day_shape(self.projection_day_shape)
         self.corpo_cloud = normalize_corpo_cloud(self.corpo_cloud)
         self.auto_strategy = normalize_auto_strategy(self.auto_strategy)
+        try:
+            self.spec_acceptance = min(max(float(self.spec_acceptance), 0.0), 0.99)
+        except (TypeError, ValueError):
+            self.spec_acceptance = 0.0
+        for am in self.models:
+            model = MODELS.get(am.model_key)
+            allowed = {"off"}
+            if model is not None:
+                allowed.update(p.method for p in model.speculative_profiles)
+                if not model.is_realtime_only and not model.is_embedding_model:
+                    allowed.add("ngram")
+            am.spec_method = str(getattr(am, "spec_method", "off") or "off")
+            if am.spec_method not in allowed:
+                am.spec_method = "off"
+            try:
+                am.spec_k = min(max(int(getattr(am, "spec_k", 0)), 0), 32)
+            except (TypeError, ValueError):
+                am.spec_k = 0
+            if am.spec_method == "off":
+                am.spec_k = 0
+        if self.projects:
+            _sync_aggregate_distribution(self)
 
     @property
     def prefill_efficiency(self) -> EfficiencyParams:
@@ -406,21 +444,22 @@ class PlannerState:
         return next((p for p in self.projects if p.uid == uid), None)
 
 
-def create_default_state() -> PlannerState:
-    from placement import _retune_model
+DEFAULT_SCENARIO_PATH = Path(__file__).with_name("default_scenario.json")
 
-    state = PlannerState()
-    gpu_uid = _next_uid()
-    state.gpus.append(GpuPool(gpu_uid, "MI355X", 8))
-    state.models.append(ModelAssignment(_next_uid(), "q122", gpu_uid, 4, 2, 2, "bf16"))
-    state.models.append(ModelAssignment(_next_uid(), "l70", gpu_uid, 2, 1, 2, "bf16"))
-    state.models.append(ModelAssignment(_next_uid(), "q35", gpu_uid, 2, 1, 2, "bf16"))
-    for am in state.models:
-        _retune_model(state, am)
-    # A small, opinionated default project mix so the internal-market story lands immediately.
-    for preset_key in ("classify", "chatbot", "coding", "research"):
-        _add_project_from_preset(state, preset_key)
-    _sync_aggregate_distribution(state)
+
+def create_default_scenario() -> tuple[PlannerState, Optional[PlannerState]]:
+    """Return fresh validated A/B states from the bundled default scenario."""
+    # Imported lazily because scenario validation is built on the state schema.
+    from scenarios import deserialize_scenario
+
+    with DEFAULT_SCENARIO_PATH.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    return deserialize_scenario(payload)
+
+
+def create_default_state() -> PlannerState:
+    """Compatibility helper for callers that only need the primary default panel."""
+    state, _compare = create_default_scenario()
     return state
 
 
@@ -576,6 +615,11 @@ def _normalize_use_case_def(raw: dict[str, Any], fallback_key: str | None = None
     in_pre = str(raw.get("in_pre", "Chat"))
     out_pre = str(raw.get("out_pre", "Chat"))
     preset_fallback = _find_preset(_slugify_key(base_key))
+    prefix_default = (
+        float(preset_fallback.get("prefix_hit_rate", 0.0))
+        if preset_fallback is not None
+        else float(USE_CASE_PREFIX_HIT_RATES.get(_slugify_key(base_key), 0.0))
+    )
     has_scale_metadata = "scale_kind" in raw or any(
         key in raw
         for key in ("scale_model", "scale_label", "scale_unit", "scale_formula", "scale_token_multiplier")
@@ -604,6 +648,7 @@ def _normalize_use_case_def(raw: dict[str, Any], fallback_key: str | None = None
         "batch_eligible": bool(raw.get("batch_eligible", False)),
         "latent_jobs_day": _bounded_def_value("latent_jobs_day", _payload_float(raw, "latent_jobs_day", 0.0)),
         "unlock_price_per_m": _bounded_def_value("unlock_price_per_m", _payload_float(raw, "unlock_price_per_m", 0.0)),
+        "prefix_hit_rate": min(max(_payload_float(raw, "prefix_hit_rate", prefix_default), 0.0), 1.0),
         "in_pre": in_pre if in_pre in DIST_PRESETS else "Chat",
         "out_pre": out_pre if out_pre in DIST_PRESETS else "Chat",
         "scale_hint": str(raw.get("scale_hint", "")).strip()[:240],
@@ -664,6 +709,7 @@ def _apply_preset_definition(proj: Project, preset: dict, preserve_scale: bool =
     proj.min_success_rate = float(preset.get("min_success_rate", 0.85))
     proj.quality_floor = float(preset.get("quality_floor", 0.0))
     proj.unlock_price_per_m = float(preset.get("unlock_price_per_m", 0.0))
+    proj.prefix_hit_rate = min(max(float(preset.get("prefix_hit_rate", 0.0)), 0.0), 1.0)
     proj.in_pre = str(preset.get("in_pre", "Chat"))
     proj.out_pre = str(preset.get("out_pre", "Chat"))
     if preserve_scale:
@@ -701,6 +747,7 @@ def _add_project_from_preset(state: PlannerState, preset_key: str) -> Optional[P
         quality_floor=float(preset.get("quality_floor", 0.0)),
         latent_jobs_day=float(preset.get("latent_jobs_day", 0.0)),
         unlock_price_per_m=float(preset.get("unlock_price_per_m", 0.0)),
+        prefix_hit_rate=float(preset.get("prefix_hit_rate", 0.0)),
         in_pre=str(preset.get("in_pre", "Chat")),
         out_pre=str(preset.get("out_pre", "Chat")),
     )
@@ -731,6 +778,7 @@ def add_project(state: PlannerState, preset_key: Optional[str] = None) -> Projec
         quality_floor=0.0,
         latent_jobs_day=0.0,
         unlock_price_per_m=0.0,
+        prefix_hit_rate=0.0,
         in_pre="Chat",
         out_pre="Chat",
     )
@@ -801,26 +849,38 @@ def set_project_dist_preset(state: PlannerState, project_uid: int, kind: str, pr
 
 
 def _sync_aggregate_distribution(state: "PlannerState"):
-    """Recompute state.in_dist / state.out_dist as a demand-weighted blend of each
-    project's in_pre / out_pre preset. Shared capacity views consume this aggregate, while
-    routing economics can still use each project's declared shape directly."""
+    """Recompute shared workload shape and empirical prefix reuse.
+
+    Input/output distributions are demand-weighted. Prefix reuse is weighted by
+    prompt-token volume because it represents cached prompt tokens, not requests
+    or total input-plus-output demand.
+    """
     in_len = len(INPUT_BUCKETS)
     out_len = len(OUTPUT_BUCKETS)
     in_agg = [0.0] * in_len
     out_agg = [0.0] * out_len
     total = 0.0
+    prefix_weighted = 0.0
+    prompt_tokens = 0.0
     for p in state.projects:
         w = max(float(p.tokens_day), 0.0)
         if w <= 0.0:
             continue
         in_preset = DIST_PRESETS.get(p.in_pre) or DIST_PRESETS["Chat"]
         out_preset = DIST_PRESETS.get(p.out_pre) or DIST_PRESETS["Chat"]
+        mean_in = max(float(avg_dist(in_preset["in"], INPUT_BUCKETS)), 0.0)
+        mean_out = max(float(avg_dist(out_preset["out"], OUTPUT_BUCKETS)), 0.0)
+        request_tokens = mean_in + mean_out
+        prompt_weight = w * mean_in / request_tokens if request_tokens > 0 else 0.0
+        prefix_weighted += prompt_weight * min(max(float(getattr(p, "prefix_hit_rate", 0.0)), 0.0), 1.0)
+        prompt_tokens += prompt_weight
         for i in range(in_len):
             in_agg[i] += w * float(in_preset["in"][i])
         for i in range(out_len):
             out_agg[i] += w * float(out_preset["out"][i])
         total += w
     if total <= 0.0:
+        state.prefix_hit_rate = 0.0
         return
     s_in = sum(in_agg)
     s_out = sum(out_agg)
@@ -828,6 +888,7 @@ def _sync_aggregate_distribution(state: "PlannerState"):
         state.in_dist = [max(0, int(round(100 * x / s_in))) for x in in_agg]
     if s_out > 0.0:
         state.out_dist = [max(0, int(round(100 * x / s_out))) for x in out_agg]
+    state.prefix_hit_rate = prefix_weighted / prompt_tokens if prompt_tokens > 0 else 0.0
 
 
 def set_project_name(state: PlannerState, project_uid: int, name: str):
@@ -882,6 +943,7 @@ def add_use_case_def(state: PlannerState) -> dict[str, Any]:
         "batch_eligible": False,
         "latent_jobs_day": 0.0,
         "unlock_price_per_m": 0.0,
+        "prefix_hit_rate": 0.0,
         "in_pre": "Chat",
         "out_pre": "Chat",
         "scale_hint": "Set this from the organization's real usage driver.",
@@ -1018,6 +1080,7 @@ def normalize_projects(state: PlannerState):
         proj.wtp_per_m = _bounded_project_value("wtp_per_m", getattr(proj, "wtp_per_m", 1.0))
         proj.min_success_rate = _bounded_project_value("min_success_rate", getattr(proj, "min_success_rate", 0.85))
         proj.quality_floor = _bounded_project_value("quality_floor", getattr(proj, "quality_floor", 0.0))
+        proj.prefix_hit_rate = min(max(float(getattr(proj, "prefix_hit_rate", 0.0)), 0.0), 1.0)
         proj.latent_jobs_day = _bounded_project_value("latent_jobs_day", getattr(proj, "latent_jobs_day", 0.0))
         proj.unlock_price_per_m = _bounded_project_value("unlock_price_per_m", getattr(proj, "unlock_price_per_m", 0.0))
     _sync_aggregate_distribution(state)
@@ -1176,6 +1239,45 @@ def set_model_prec(state: PlannerState, model_uid: int, prec: str):
     _retune_model(state, am, preserve_existing=True)
 
 
+def set_model_spec(state: PlannerState, model_uid: int, method: str, spec_k: int):
+    from placement import _retune_model
+
+    am = state.find_model(model_uid)
+    if am is None:
+        return
+    method = str(method or "off")
+    if method != "off":
+        model = MODELS.get(am.model_key)
+        if model is None:
+            method = "off"
+        profiles = getattr(model, "speculative_profiles", ()) or ()
+        profile_methods = {getattr(p, "method", "") for p in profiles}
+        if method == "ngram":
+            # ngram needs no draft weights: available on any plain text model.
+            if model.is_realtime_only or model.is_embedding_model:
+                method = "off"
+        elif method not in profile_methods:
+            method = "off"
+    try:
+        spec_k = int(spec_k)
+    except (TypeError, ValueError):
+        spec_k = 0
+    am.spec_method = method
+    am.spec_k = min(max(spec_k, 0), 32) if method != "off" else 0
+    if method != "off" and am.gpu_count > 0:
+        gp = state.find_gpu(am.gpu_uid)
+        model = MODELS.get(am.model_key)
+        candidate = resolve_spec_runtime(model, am.spec_method, am.spec_k, state.spec_acceptance, am.prec) if model else None
+        if gp is None or candidate is None or not valid_strategies(
+            model, am.gpu_count, gp.gpu, state.mu, state.profiled_non_kv_gb, am.prec, candidate,
+        ):
+            # Do not let a drafter selection silently make the deployment
+            # disappear. Keep the known-good target-only assignment instead.
+            am.spec_method = "off"
+            am.spec_k = 0
+    _retune_model(state, am, preserve_existing=True)
+
+
 def set_model_gpu_count(state: PlannerState, model_uid: int, count: int):
     from placement import _retune_model
 
@@ -1206,6 +1308,7 @@ def set_model_strat(state: PlannerState, model_uid: int, tp: int, pp: int, dp: i
         return
     
     model = MODELS[am.model_key]
+    spec = resolve_spec_runtime(model, am.spec_method, am.spec_k, state.spec_acceptance, am.prec)
     valid = valid_strategies(
         model,
         am.gpu_count,
@@ -1213,6 +1316,7 @@ def set_model_strat(state: PlannerState, model_uid: int, tp: int, pp: int, dp: i
         state.mu,
         state.profiled_non_kv_gb,
         am.prec,
+        spec,
     )
     
     strategy = (tp, pp, dp)
@@ -1293,8 +1397,8 @@ def set_dist_value(state: PlannerState, kind: str, index: int, value: int):
         state.out_pre = ""
 
 
-def set_prefix_hit_rate(state: PlannerState, value: float):
-    state.prefix_hit_rate = min(max(value, 0.0), 1.0)
+def set_spec_acceptance(state: PlannerState, value: float):
+    state.spec_acceptance = min(max(value, 0.0), 0.99)
 
 
 def set_projection_choice(state: PlannerState, key: str, value: str):
@@ -1378,9 +1482,12 @@ def _prune_states_locked(now: float, preserve: Optional[str] = None) -> None:
 
 def reset_state(session_id: str, *, blank: bool = False) -> PlannerState:
     with _state_guard:
-        state = PlannerState() if blank else create_default_state()
+        state, compare = (PlannerState(), None) if blank else create_default_scenario()
         _states[session_id] = state
-        _compare_states.pop(session_id, None)
+        if compare is None:
+            _compare_states.pop(session_id, None)
+        else:
+            _compare_states[session_id] = compare
         _state_last_seen[session_id] = time.monotonic()
         _prune_states_locked(_state_last_seen[session_id], preserve=session_id)
         return state
@@ -1418,7 +1525,10 @@ def get_state(session_id: str) -> PlannerState:
     with _state_guard:
         _prune_states_locked(now, preserve=session_id)
         if session_id not in _states:
-            _states[session_id] = create_default_state()
+            state, compare = create_default_scenario()
+            _states[session_id] = state
+            if compare is not None:
+                _compare_states[session_id] = compare
         _state_last_seen[session_id] = now
         _prune_states_locked(now, preserve=session_id)
         s = _states[session_id]
