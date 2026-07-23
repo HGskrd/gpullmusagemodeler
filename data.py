@@ -643,6 +643,43 @@ def normalize_quality_domain(domain: str | None) -> str:
     return clean if clean in QUALITY_DOMAINS else "general"
 
 
+def normalize_quality_weights(
+    weights: dict[str, float] | None,
+    fallback_domain: str | None = "general",
+) -> dict[str, float]:
+    """Return a compact, normalized task-quality vector.
+
+    Old scenarios stored one ``quality_domain``. Treating that value as a one-hot
+    vector keeps their routing unchanged while allowing new use cases to combine
+    several independently anchored model capabilities.
+    """
+    clean: dict[str, float] = {}
+    if isinstance(weights, dict):
+        for domain, raw_weight in weights.items():
+            normalized_domain = normalize_quality_domain(domain)
+            try:
+                weight = max(0.0, float(raw_weight))
+            except (TypeError, ValueError):
+                continue
+            if weight > 0:
+                clean[normalized_domain] = clean.get(normalized_domain, 0.0) + weight
+    total = sum(clean.values())
+    if total <= 0:
+        return {normalize_quality_domain(fallback_domain): 1.0}
+    normalized = {domain: round(weight / total, 12) for domain, weight in clean.items()}
+    primary = max(normalized, key=lambda domain: (normalized[domain], domain))
+    normalized[primary] = round(normalized[primary] + (1.0 - sum(normalized.values())), 12)
+    return normalized
+
+
+def quality_weights_label(weights: dict[str, float] | None, fallback_domain: str = "general") -> str:
+    normalized = normalize_quality_weights(weights, fallback_domain)
+    ranked = sorted(normalized.items(), key=lambda item: (-item[1], item[0]))
+    return " · ".join(
+        f"{QUALITY_DOMAIN_LABELS[domain]} {weight:.0%}" for domain, weight in ranked
+    )
+
+
 def model_domain_anchor(model: Model, domain: str | None = None) -> DomainQualityAnchor | None:
     domain = normalize_quality_domain(domain)
     if domain == "general":
@@ -673,8 +710,36 @@ def effective_quality(model: Model, domain: str | None = None) -> float:
     return min(max(model_quality(model, domain) - QUALITY_CONFIDENCE_PENALTY * (1.0 - confidence), 0.0), 1.0)
 
 
+def model_profile_quality(
+    model: Model,
+    weights: dict[str, float] | None,
+    fallback_domain: str | None = "general",
+) -> float:
+    """Blend a model's domain evidence for a task-quality vector.
+
+    A weighted geometric mean prevents a very strong axis from completely hiding a
+    weak required axis, while remaining a smooth closed-form approximation. Sparse
+    axes retain the existing conservative global-quality fallback.
+    """
+    normalized = normalize_quality_weights(weights, fallback_domain)
+    log_quality = sum(
+        weight * math.log(max(effective_quality(model, domain), 1e-6))
+        for domain, weight in normalized.items()
+    )
+    return min(max(math.exp(log_quality), 0.0), 1.0)
+
+
 def model_success_rate(model: Model, difficulty: float, domain: str | None = None) -> float:
     return success_rate(effective_quality(model, domain), difficulty)
+
+
+def model_profile_success_rate(
+    model: Model,
+    difficulty: float,
+    weights: dict[str, float] | None,
+    fallback_domain: str | None = "general",
+) -> float:
+    return success_rate(model_profile_quality(model, weights, fallback_domain), difficulty)
 
 
 GPUS: dict[str, GPU] = {
@@ -2785,6 +2850,28 @@ MODELS: dict[str, Model] = {
         _mtp_profile(0.70, 0.6e9, 3, "https://arxiv.org/abs/2601.11580",
                      "Native MTP; GLM-4.5-family acceptance assumption (no per-version measurement published).", resident_params=10.4e9),
     )),
+    # GLM-5.2 retains the 744B backbone / ~40B active architecture and adds an MTP
+    # layer (the HF checkpoint reports 753B including auxiliary tensors). IndexShare
+    # sparse attention and the 1M context are published in the official config/card.
+    "glm52": Model(
+        "glm52", "GLM-5.2 744B-A40B", "GLM", "#091D2D",
+        744e9, 40e9, True, 78, 64, 64, 256, True,
+        mla_kv_dim=512,
+        mla_rope_dim=64,
+        mla_tp_supported=True,
+        hidden_dim=6144,
+        attention_label="IndexShare DSA · 1M context",
+        max_context_tokens=1024 * 1024,
+        speculative_profiles=(
+            _mtp_profile(
+                0.74, 0.65e9, 4,
+                "https://huggingface.co/zai-org/GLM-5.2",
+                "Native MTP; Z.ai reports up to 20% longer acceptance than GLM-5.1. "
+                "Acceptance remains a conservative planner prior pending a vLLM profile.",
+                resident_params=9e9,
+            ),
+        ),
+    ),
 
     "k25": Model(
         "k25",
@@ -3832,6 +3919,22 @@ MODEL_QUANTIZATION_PROFILES: dict[tuple[str, str], QuantizationProfile] = dict([
         quantized=("GLM MoE expert tensors NVFP4 by family proxy",),
         retained=("dense/routing-sensitive tensors BF16",),
     ),
+    _nvfp4_profile(
+        model_key="glm52",
+        source_repo="nvidia/GLM-5-NVFP4",
+        source_revision="dc54ff55a7e9e71b85db953d8bc22eca894b44c6",
+        source_downloads=107_715,
+        source_kind="family",
+        storage_format_counts={
+            "BF16": 25_577_755_904,
+            "U8": 364_143_181_824,
+            "F8_E4M3": 45_517_897_728,
+            "F32": 19_456,
+        },
+        compute_precision_shares={"nvfp4": 0.84, "bf16": 0.16},
+        quantized=("GLM-5 expert tensors NVFP4 by family proxy",),
+        retained=("IndexShare/MTP and routing-sensitive tensors BF16",),
+    ),
 ])
 
 
@@ -3854,7 +3957,7 @@ _AUDIO_INPUT_MODELS = (
 )
 _REASONING_MODELS = (
     "g12", "q35", "q122", "q397",
-    "glm45", "glm45a", "glm46", "glm47", "glm47f", "glm5", "glm51",
+    "glm45", "glm45a", "glm46", "glm47", "glm47f", "glm5", "glm51", "glm52",
     "k25", "kimi-k3-preview", "inkling", "inkling-small-preview",
     "ds3", "deepseek-v4-pro", "deepseek-v4-flash",
     "lfm2.5-1.2b-thinking",
@@ -3916,6 +4019,7 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "glm47f": (30.0, 64.0),
     "glm5": (50.0, 110.0),
     "glm51": (51.0, 110.0),
+    "glm52": (55.0, 120.0),  # Provisional AA-scale/verbosity proxy pending a direct AA row.
     "k25": (35.0, 87.0),
     "kimi-k3-preview": (51.0, 110.0),  # Frontier-quality proxy; no AA row or public K3 benchmarks at API launch.
     "kimi-linear-48b": (37.0, 100.0),  # Proxy from Qwen 3.5 35B-A3B until AA publishes Kimi Linear.
@@ -3957,7 +4061,10 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "laguna-m1": (44.0, 95.0),       # Proxy from Qwen 3.5 397B-A17B adjusted against Poolside coding-agent benchmarks; no AA row found.
     "laguna-xs2": (37.0, 100.0),     # Proxy from Qwen 3.5 35B-A3B; no AA page for Laguna XS.2 found.
     "laguna-xs-2-1": (37.0, 100.0),  # Same Qwen 3.5 35B-A3B proxy pending a directly comparable AA row.
-    "laguna-s-2-1": (45.0, 95.0),    # Proxy above Laguna M.1 per Poolside coding-agent claims (40.4% DeepSWE); released 2026-07-21, no AA row yet.
+    # Quality is a provisional AA-scale proxy. No comparable AA Intelligence Index
+    # output-token measurement exists yet, so keep token efficiency neutral instead of
+    # imposing the old, unrelated 95M-token family proxy (η=0.11).
+    "laguna-s-2-1": (45.0, 10.0),
     "mimo-v2.5-pro": (54.0, 92.0),
     "mimo-v2.5": (49.0, 74.0),
     "cr13": (12.0, 8.3),   # Proxy from Gemma 4 E2B (Non-reasoning); no AA page for Croissant 1.3B found.
@@ -4002,6 +4109,7 @@ AA_MODEL_QUALITY_CONFIDENCE: dict[str, float] = {
     "laguna-xs2": 0.45,
     "laguna-xs-2-1": 0.45,
     "laguna-s-2-1": 0.5,
+    "glm52": 0.65,
     "cr13": 0.25,
 }
 for _k, _confidence in AA_MODEL_QUALITY_CONFIDENCE.items():
@@ -4018,7 +4126,22 @@ _KIMI_K25_DOMAIN_SOURCE = "https://huggingface.co/moonshotai/Kimi-K2.5"
 _DEEPSEEK_V3_DOMAIN_SOURCE = "https://huggingface.co/deepseek-ai/DeepSeek-V3"
 _GEMMA4_DOMAIN_SOURCE = "https://ai.google.dev/gemma/docs/core/model_card_4"
 _GLM5_DOMAIN_SOURCE = "https://huggingface.co/zai-org/GLM-5"
+_GLM52_DOMAIN_SOURCE = "https://huggingface.co/zai-org/GLM-5.2"
+_LAGUNA_S21_DOMAIN_SOURCE = "https://huggingface.co/poolside/Laguna-S-2.1"
 _NORTH_CODE_DOMAIN_SOURCE = "https://huggingface.co/CohereLabs/North-Mini-Code-1.0"
+
+# Provisional SWE-Bench Pro -> SWE-bench Verified-equivalent crosswalk. The frozen
+# overlap cohort and ordinary least-squares fit are documented in the changelog/tests:
+# verified_pct = 40.9508834 + 0.6464964 * pro_pct. Keeping the transform explicit is
+# preferable to pretending raw percentages from differently difficult harnesses share
+# one quality axis. Extrapolated anchors carry reduced confidence.
+_SWE_PRO_TO_VERIFIED_INTERCEPT = 40.95088340339454
+_SWE_PRO_TO_VERIFIED_SLOPE = 0.6464964126552674
+
+
+def swebench_pro_to_coding_quality(score: float) -> float:
+    equivalent = _SWE_PRO_TO_VERIFIED_INTERCEPT + _SWE_PRO_TO_VERIFIED_SLOPE * float(score)
+    return min(max(equivalent / 100.0, 0.0), 1.0)
 
 
 def _domain_anchor(
@@ -4026,11 +4149,15 @@ def _domain_anchor(
     benchmark: str,
     source: str,
     *,
+    normalized_quality: float | None = None,
     confidence: float = 0.90,
     note: str = "",
 ) -> DomainQualityAnchor:
     return DomainQualityAnchor(
-        quality=min(max(float(score) / 100.0, 0.0), 1.0),
+        quality=min(max(
+            float(normalized_quality) if normalized_quality is not None else float(score) / 100.0,
+            0.0,
+        ), 1.0),
         benchmark=benchmark,
         raw_score=float(score),
         source=source,
@@ -4119,6 +4246,32 @@ MODEL_DOMAIN_QUALITY_ANCHORS: dict[str, dict[str, DomainQualityAnchor]] = {
             note="OpenHands harness with a tailored prompt and 200k context window.",
         ),
         "reasoning": _domain_anchor(86.0, "GPQA Diamond", _GLM5_DOMAIN_SOURCE),
+    },
+    "glm51": {
+        "coding": _domain_anchor(
+            58.4, "SWE-Bench Pro → Verified-equivalent", _GLM52_DOMAIN_SOURCE,
+            normalized_quality=swebench_pro_to_coding_quality(58.4),
+            confidence=0.75,
+            note="Provisional frozen-cohort linear crosswalk; raw SWE-Bench Pro score retained.",
+        ),
+        "reasoning": _domain_anchor(86.2, "GPQA Diamond", _GLM52_DOMAIN_SOURCE),
+    },
+    "glm52": {
+        "coding": _domain_anchor(
+            62.1, "SWE-Bench Pro → Verified-equivalent", _GLM52_DOMAIN_SOURCE,
+            normalized_quality=swebench_pro_to_coding_quality(62.1),
+            confidence=0.75,
+            note="Provisional frozen-cohort linear crosswalk; corroborated by DeepSWE 46.2 and Terminal-Bench 2.1 81.0.",
+        ),
+        "reasoning": _domain_anchor(91.2, "GPQA Diamond", _GLM52_DOMAIN_SOURCE),
+    },
+    "laguna-s-2-1": {
+        "coding": _domain_anchor(
+            59.4, "SWE-Bench Pro → Verified-equivalent", _LAGUNA_S21_DOMAIN_SOURCE,
+            normalized_quality=swebench_pro_to_coding_quality(59.4),
+            confidence=0.75,
+            note="Provisional frozen-cohort linear crosswalk; corroborated by DeepSWE 40.4 and Terminal-Bench 2.1 70.2.",
+        ),
     },
     "north-mini-code-1-0": {
         "coding": _domain_anchor(
@@ -4705,9 +4858,30 @@ USE_CASE_QUALITY_DOMAINS = {
     "catalog_enrichment": "vision",
 }
 
+USE_CASE_QUALITY_WEIGHTS = {
+    # Agentic repository work needs coding most, but sustained reasoning and context
+    # handling are material rather than binary decoration.
+    "coding": {"coding": 0.70, "reasoning": 0.20, "long_context": 0.10},
+    "longctx": {"long_context": 0.70, "reasoning": 0.20, "general": 0.10},
+    "summarize": {"long_context": 0.75, "general": 0.25},
+    "inbox_archive": {"long_context": 0.70, "general": 0.30},
+    "contract_review": {"long_context": 0.55, "reasoning": 0.35, "general": 0.10},
+    "research": {"reasoning": 0.65, "long_context": 0.20, "general": 0.15},
+    "evals": {"reasoning": 0.70, "general": 0.30},
+    "security_triage": {"reasoning": 0.60, "long_context": 0.20, "general": 0.20},
+    "aml_casework": {"reasoning": 0.55, "long_context": 0.30, "general": 0.15},
+    "translation": {"multilingual": 0.80, "general": 0.20},
+    "document_extraction": {"vision": 0.80, "general": 0.20},
+    "catalog_enrichment": {"vision": 0.75, "general": 0.25},
+}
+
 for _preset in PROJECT_PRESETS:
     _preset["prefix_hit_rate"] = USE_CASE_PREFIX_HIT_RATES.get(_preset["key"], 0.0)
     _preset["quality_domain"] = USE_CASE_QUALITY_DOMAINS.get(_preset["key"], "general")
+    _preset["quality_weights"] = normalize_quality_weights(
+        USE_CASE_QUALITY_WEIGHTS.get(_preset["key"]),
+        _preset["quality_domain"],
+    )
 
 DAY_SHAPES = {
     "flat": {

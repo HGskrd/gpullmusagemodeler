@@ -12,20 +12,37 @@ from data import (
     MODEL_DOMAIN_QUALITY_ANCHORS,
     QUALITY_DOMAINS,
     effective_quality,
+    model_profile_quality,
     model_domain_anchor,
     normalize_quality_domain,
+    normalize_quality_weights,
+    swebench_pro_to_coding_quality,
 )
 from scenarios import deserialize_scenario, serialize_scenario
+from placement import _model_serves_project
 from state import (
     GpuPool,
     ModelAssignment,
     PlannerState,
     Project,
+    create_default_state,
     _normalize_use_case_def,
 )
 
 
 class DomainQualityCatalogTests(unittest.TestCase):
+    def test_quality_weights_normalize_and_fall_back_to_legacy_domain(self):
+        self.assertEqual(normalize_quality_weights(None, "coding"), {"coding": 1.0})
+        self.assertEqual(normalize_quality_weights({}, "reasoning"), {"reasoning": 1.0})
+        self.assertEqual(
+            normalize_quality_weights({"coding": 7, "reasoning": 2, "invalid": 1}, "general"),
+            {"coding": 0.7, "reasoning": 0.2, "general": 0.1},
+        )
+        self.assertEqual(
+            normalize_quality_weights({"coding": -1, "reasoning": 0}, "general"),
+            {"general": 1.0},
+        )
+
     def test_domain_taxonomy_and_sparse_fallback_are_well_formed(self):
         self.assertEqual(
             set(QUALITY_DOMAINS),
@@ -58,11 +75,30 @@ class DomainQualityCatalogTests(unittest.TestCase):
         self.assertNotEqual(effective_quality(model, "coding"), effective_quality(model))
         self.assertEqual(effective_quality(model, "general"), effective_quality(model))
 
+    def test_weighted_profile_uses_each_axis_and_sparse_global_fallback(self):
+        model = MODELS["laguna-s-2-1"]
+        weights = {"coding": 0.70, "reasoning": 0.20, "long_context": 0.10}
+        score = model_profile_quality(model, weights, "coding")
+
+        self.assertGreater(score, 0.72)
+        self.assertLess(score, effective_quality(model, "coding"))
+        self.assertIsNone(model_domain_anchor(model, "reasoning"))
+
+    def test_swe_pro_crosswalk_keeps_laguna_close_to_glm52(self):
+        laguna = swebench_pro_to_coding_quality(59.4)
+        glm52 = swebench_pro_to_coding_quality(62.1)
+
+        self.assertAlmostEqual(laguna, 0.7935277031511743)
+        self.assertAlmostEqual(glm52, 0.8109831062928664)
+        self.assertLess(laguna, glm52)
+        self.assertLess(glm52 - laguna, 0.02)
+
     def test_use_case_definition_normalizes_domain_with_builtin_migration(self):
-        self.assertEqual(
-            _normalize_use_case_def({"key": "coding", "name": "Coding"})["quality_domain"],
-            "coding",
-        )
+        coding = _normalize_use_case_def({"key": "coding", "name": "Coding"})
+        self.assertEqual(coding["quality_domain"], "coding")
+        self.assertAlmostEqual(coding["quality_weights"]["coding"], 0.70)
+        self.assertAlmostEqual(coding["quality_weights"]["reasoning"], 0.20)
+        self.assertAlmostEqual(coding["quality_weights"]["long_context"], 0.10)
         self.assertEqual(
             _normalize_use_case_def(
                 {"key": "custom-domain", "name": "Custom", "quality_domain": "invalid"}
@@ -72,6 +108,47 @@ class DomainQualityCatalogTests(unittest.TestCase):
 
 
 class DomainQualityPlannerTests(unittest.TestCase):
+    def test_laguna_clears_repository_agent_vector_without_global_proxy_cliff(self):
+        project = Project(
+            99,
+            "Repository coding agent",
+            difficulty=0.55,
+            tokens_day=1.2e9,
+            wtp_per_m=4.0,
+            requires=frozenset({"tools", "ctx_128k"}),
+            min_success_rate=0.85,
+            quality_floor=0.70,
+            quality_domain="coding",
+            quality_weights={"coding": 0.70, "reasoning": 0.20, "long_context": 0.10},
+        )
+
+        self.assertTrue(_model_serves_project(MODELS["laguna-s-2-1"], project))
+
+    def test_equal_value_routing_protects_harder_coding_work_before_generic_chat(self):
+        state = create_default_state()
+        state.gpus = [GpuPool(1, "H100", 6, cost_per_gpu_hour=1.32)]
+        state.models = [
+            ModelAssignment(2, "laguna-s-2-1", 1, 6, 2, 1, "bf16", pp=3)
+        ]
+        state.projects = [
+            project for project in state.projects
+            if project.kind_key in {"chatbot", "coding", "meeting_notes"}
+        ]
+
+        projection = compute_revenue_projection(state, include_recommendations=False)
+        rows = {row["project"].kind_key: row for row in projection["projects"]}
+
+        self.assertGreater(rows["coding"]["served_pct"], 0.0)
+        self.assertLess(rows["chatbot"]["served_pct"], 1e-9)
+        self.assertEqual(
+            rows["coding"]["quality_mix_label"],
+            "Coding 70% · Reasoning 20% · Long context 10%",
+        )
+        self.assertEqual(
+            [component["domain"] for component in rows["coding"]["per_model_served"][0]["quality_components"]],
+            ["coding", "reasoning", "long_context"],
+        )
+
     def _state(self, domain="coding"):
         return PlannerState(
             gpus=[GpuPool(1, "H100", 2, cost_per_gpu_hour=0.01)],
@@ -134,6 +211,8 @@ class DomainQualityPlannerTests(unittest.TestCase):
 
         legacy_payload = serialize_scenario(self._state(), None)
         legacy_payload["panel_a"]["projects"][0].pop("quality_domain", None)
+        legacy_payload["panel_a"]["projects"][0].pop("quality_weights", None)
+        legacy_payload["panel_a"]["projects"][0].get("definition", {}).pop("quality_weights", None)
         restored_legacy, _ = deserialize_scenario(legacy_payload)
         self.assertEqual(restored_legacy.projects[0].quality_domain, "general")
 

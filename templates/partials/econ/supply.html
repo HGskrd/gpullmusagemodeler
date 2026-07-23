@@ -32,7 +32,7 @@
 
       <div class="fc-stats" style="margin-top:8px;">
         <span>GPUs <span class="v">{{ m.gpu_count }}</span></span>
-        <span>Quality <span class="v">{{ (m.effective_quality * 100)|round(0)|int }}%</span></span>
+        <span>General Q <span class="v">{{ (m.effective_quality * 100)|round(0)|int }}%</span></span>
         <span>Tariff in <span class="v">{% if m.runnable and m.internal_input_pm > 0 %}${{ '%.2f'|format(m.internal_input_pm) }}/M{% else %}—{% endif %}</span></span>
         <span>Tariff out <span class="v">{% if m.runnable and m.internal_output_pm > 0 %}${{ '%.2f'|format(m.internal_output_pm) }}/M{% else %}—{% endif %}</span></span>
         <span>Tok efficiency <span class="v">{{ '%.2f'|format(m.token_efficiency) }}×</span></span>

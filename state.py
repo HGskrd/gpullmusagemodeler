@@ -28,11 +28,13 @@ from data import (
     PROJECT_PRESETS,
     CORPO_CLOUD_DEFAULT,
     MODEL_CAPABILITIES,
+    QUALITY_DOMAINS,
     SCALE_MODELS,
     PRECISIONS,
     PRECISION_LABELS,
     USE_CASE_PREFIX_HIT_RATES,
     normalize_quality_domain,
+    normalize_quality_weights,
     normalize_gpu_count,
     normalize_precision,
 )
@@ -228,6 +230,9 @@ class Project:
     # Benchmark family used to evaluate model fit for this workload. Sparse model-domain
     # anchors fall back to the model's global quality.
     quality_domain: str = "general"
+    # Normalized multi-axis model-fit contract. Empty/legacy payloads become a one-hot
+    # vector at quality_domain.
+    quality_weights: dict[str, float] = field(default_factory=dict)
 
     def __post_init__(self):
         if not self.kind_key:
@@ -244,6 +249,14 @@ class Project:
         self.quality_floor = min(max(float(getattr(self, "quality_floor", 0.0)), 0.0), 1.0)
         self.prefix_hit_rate = min(max(float(getattr(self, "prefix_hit_rate", 0.0)), 0.0), 1.0)
         self.quality_domain = normalize_quality_domain(getattr(self, "quality_domain", "general"))
+        self.quality_weights = normalize_quality_weights(
+            getattr(self, "quality_weights", None),
+            self.quality_domain,
+        )
+        self.quality_domain = max(
+            self.quality_weights,
+            key=lambda domain: (self.quality_weights[domain], domain == self.quality_domain),
+        )
         if self.in_pre not in DIST_PRESETS:
             self.in_pre = "Chat"
         if self.out_pre not in DIST_PRESETS:
@@ -671,6 +684,20 @@ def _normalize_use_case_def(raw: dict[str, Any], fallback_key: str | None = None
                 else "general",
             )
         ),
+        "quality_weights": normalize_quality_weights(
+            raw.get(
+                "quality_weights",
+                preset_fallback.get("quality_weights")
+                if preset_fallback is not None
+                else None,
+            ),
+            raw.get(
+                "quality_domain",
+                preset_fallback.get("quality_domain", "general")
+                if preset_fallback is not None
+                else "general",
+            ),
+        ),
         "batch_eligible": bool(raw.get("batch_eligible", False)),
         "latent_jobs_day": _bounded_def_value("latent_jobs_day", _payload_float(raw, "latent_jobs_day", 0.0)),
         "unlock_price_per_m": _bounded_def_value("unlock_price_per_m", _payload_float(raw, "unlock_price_per_m", 0.0)),
@@ -735,6 +762,10 @@ def _apply_preset_definition(proj: Project, preset: dict, preserve_scale: bool =
     proj.min_success_rate = float(preset.get("min_success_rate", 0.85))
     proj.quality_floor = float(preset.get("quality_floor", 0.0))
     proj.quality_domain = normalize_quality_domain(preset.get("quality_domain", "general"))
+    proj.quality_weights = normalize_quality_weights(
+        preset.get("quality_weights"),
+        proj.quality_domain,
+    )
     proj.unlock_price_per_m = float(preset.get("unlock_price_per_m", 0.0))
     proj.prefix_hit_rate = min(max(float(preset.get("prefix_hit_rate", 0.0)), 0.0), 1.0)
     proj.in_pre = str(preset.get("in_pre", "Chat"))
@@ -773,6 +804,10 @@ def _add_project_from_preset(state: PlannerState, preset_key: str) -> Optional[P
         min_success_rate=float(preset.get("min_success_rate", 0.85)),
         quality_floor=float(preset.get("quality_floor", 0.0)),
         quality_domain=normalize_quality_domain(preset.get("quality_domain", "general")),
+        quality_weights=normalize_quality_weights(
+            preset.get("quality_weights"),
+            preset.get("quality_domain", "general"),
+        ),
         latent_jobs_day=float(preset.get("latent_jobs_day", 0.0)),
         unlock_price_per_m=float(preset.get("unlock_price_per_m", 0.0)),
         prefix_hit_rate=float(preset.get("prefix_hit_rate", 0.0)),
@@ -805,6 +840,7 @@ def add_project(state: PlannerState, preset_key: Optional[str] = None) -> Projec
         min_success_rate=0.85,
         quality_floor=0.0,
         quality_domain="general",
+        quality_weights={"general": 1.0},
         latent_jobs_day=0.0,
         unlock_price_per_m=0.0,
         prefix_hit_rate=0.0,
@@ -970,6 +1006,7 @@ def add_use_case_def(state: PlannerState) -> dict[str, Any]:
         "min_success_rate": 0.85,
         "quality_floor": 0.0,
         "quality_domain": "general",
+        "quality_weights": {"general": 1.0},
         "batch_eligible": False,
         "latent_jobs_day": 0.0,
         "unlock_price_per_m": 0.0,
@@ -1034,6 +1071,27 @@ def set_use_case_def_field(state: PlannerState, key: str, field_name: str, value
         item["batch_eligible"] = bool(value)
     elif field_name == "quality_domain":
         item["quality_domain"] = normalize_quality_domain(value)
+        item["quality_weights"] = {item["quality_domain"]: 1.0}
+    elif field_name.startswith("quality_weight_"):
+        domain = field_name.removeprefix("quality_weight_")
+        if domain not in QUALITY_DOMAINS:
+            return
+        target = min(max(0.0, float(value or 0.0)), 1.0)
+        weights = normalize_quality_weights(
+            item.get("quality_weights"),
+            item.get("quality_domain", "general"),
+        )
+        others = {key: weight for key, weight in weights.items() if key != domain}
+        other_total = sum(others.values())
+        if target >= 1.0 or other_total <= 0:
+            weights = {domain: 1.0}
+        else:
+            scale = (1.0 - target) / other_total
+            weights = {key: weight * scale for key, weight in others.items()}
+            if target > 0:
+                weights[domain] = target
+        item["quality_weights"] = normalize_quality_weights(weights, item.get("quality_domain", "general"))
+        item["quality_domain"] = max(item["quality_weights"], key=item["quality_weights"].get)
     elif field_name in PROJECT_FIELD_BOUNDS:
         item[field_name] = _bounded_def_value(field_name, float(value or 0.0))
         if field_name == "tokens_day":
@@ -1113,6 +1171,11 @@ def normalize_projects(state: PlannerState):
         proj.min_success_rate = _bounded_project_value("min_success_rate", getattr(proj, "min_success_rate", 0.85))
         proj.quality_floor = _bounded_project_value("quality_floor", getattr(proj, "quality_floor", 0.0))
         proj.quality_domain = normalize_quality_domain(getattr(proj, "quality_domain", "general"))
+        proj.quality_weights = normalize_quality_weights(
+            getattr(proj, "quality_weights", None),
+            proj.quality_domain,
+        )
+        proj.quality_domain = max(proj.quality_weights, key=proj.quality_weights.get)
         proj.prefix_hit_rate = min(max(float(getattr(proj, "prefix_hit_rate", 0.0)), 0.0), 1.0)
         proj.latent_jobs_day = _bounded_project_value("latent_jobs_day", getattr(proj, "latent_jobs_day", 0.0))
         proj.unlock_price_per_m = _bounded_project_value("unlock_price_per_m", getattr(proj, "unlock_price_per_m", 0.0))

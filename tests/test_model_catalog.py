@@ -359,8 +359,24 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertTrue({"tools", "ctx_128k", "reasoning"} <= model.capabilities)
         self.assertNotIn("images", model.capabilities)
         self.assertAlmostEqual(model.quality, aa_intelligence_to_quality(45.0))
-        self.assertAlmostEqual(model.token_efficiency, aa_output_tokens_to_efficiency(95.0))
+        self.assertAlmostEqual(model.token_efficiency, 1.0)
         self.assertAlmostEqual(model.quality_confidence, 0.5)
+
+    def test_glm52_catalog_entry_uses_official_long_context_config(self):
+        model = MODELS["glm52"]
+
+        self.assertEqual(model.name, "GLM-5.2 744B-A40B")
+        self.assertEqual(model.total_params, 744e9)
+        self.assertEqual(model.active_params, 40e9)
+        self.assertEqual(model.layers, 78)
+        self.assertEqual(model.hidden_size, 6144)
+        self.assertEqual(model.num_heads, 64)
+        self.assertEqual(model.kv_heads, 64)
+        self.assertEqual(model.max_context_tokens, 1024 * 1024)
+        self.assertTrue(model.is_mla)
+        self.assertIn("IndexShare", model.attention_label)
+        self.assertTrue({"tools", "ctx_128k", "reasoning"} <= model.capabilities)
+        self.assertTrue(any(profile.method == "mtp" for profile in model.speculative_profiles))
 
     def test_gemma4_12b_unified_catalog_entry_uses_encoder_free_specs(self):
         model = MODELS["g12"]
