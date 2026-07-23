@@ -6,9 +6,11 @@ A Flask web application for planning and modeling GPU capacity for multi-model v
 
 This project is a closed-form capacity estimator, not a request-level simulator. It combines published hardware rooflines and model architecture metadata with explicit efficiency, runtime-memory, batching, topology, prefix-cache, and workload-shape assumptions. Results are most useful for comparing scenarios and identifying capacity constraints; they are not a substitute for benchmarking the exact model, quantization, vLLM version, hardware topology, and service-level objective you intend to deploy.
 
+Model-fit routing and same-hardware swap recommendations can use sparse, sourced quality anchors for coding, reasoning, long-context, multilingual, and vision workloads. Every missing model/domain pair falls back to the existing global quality score; benchmark names and sources remain explicit because vendor harnesses are not interchangeable.
+
 Before using a result for procurement or financial planning:
 
-1. Enter an amortized GPU-hour TCO. Economic margin and expansion recommendations are incomplete without it.
+1. Review the pre-filled amortized GPU-hour TCO and replace it with your actual quote or internal chargeback rate when available.
 2. Match the input/output distributions and interactive-versus-batch mix to the real workload.
 3. Calibrate bandwidth efficiency, compute efficiency, non-KV runtime memory, and prefix-cache hit rate against representative vLLM measurements.
 4. Review model and hardware provenance, confidence, preview status, and context-window limits in the UI.

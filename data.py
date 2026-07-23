@@ -189,6 +189,7 @@ class GPU:
     tdp_watts: float = 0.0  # published board TDP — used with a utilization factor for CO2 math
     min_count: int = 1  # minimum pool size when this profile is only sold as a system/rack
     count_multiple: int = 1  # pool sizes snap to this multiple for system/rack-only profiles
+    default_tco_per_gpu_hour: float = 0.0  # researched owned-hardware TCO, USD per committed GPU-hour
 
     @property
     def mem_gb(self) -> float:
@@ -579,6 +580,39 @@ AA_QUALITY_MAX = 0.95
 AA_TOKEN_EFFICIENCY_REF_OUTPUT_TOKENS_M = 10.0
 QUALITY_CONFIDENCE_PENALTY = 0.12
 
+QUALITY_DOMAINS: tuple[str, ...] = (
+    "general",
+    "coding",
+    "reasoning",
+    "long_context",
+    "multilingual",
+    "vision",
+)
+QUALITY_DOMAIN_LABELS = {
+    "general": "General",
+    "coding": "Coding",
+    "reasoning": "Reasoning",
+    "long_context": "Long context",
+    "multilingual": "Multilingual",
+    "vision": "Vision",
+}
+
+
+@dataclass(frozen=True)
+class DomainQualityAnchor:
+    """One vendor-published benchmark point used as a domain quality signal.
+
+    Scores are stored as fractions on a 0..1 scale, but benchmark identity remains
+    explicit because (for example) SWE-bench and LiveCodeBench are not interchangeable.
+    """
+
+    quality: float
+    benchmark: str
+    raw_score: float
+    source: str
+    confidence: float = 0.90
+    note: str = ""
+
 
 def aa_intelligence_to_quality(score: float) -> float:
     clipped = min(max(score, AA_INTELLIGENCE_INDEX_MIN), AA_INTELLIGENCE_INDEX_MAX)
@@ -604,19 +638,43 @@ def aa_output_tokens_to_efficiency(output_tokens_m: float) -> float:
     return AA_TOKEN_EFFICIENCY_REF_OUTPUT_TOKENS_M / max(output_tokens_m, 0.1)
 
 
-def effective_quality(model: Model) -> float:
+def normalize_quality_domain(domain: str | None) -> str:
+    clean = str(domain or "general").strip().lower()
+    return clean if clean in QUALITY_DOMAINS else "general"
+
+
+def model_domain_anchor(model: Model, domain: str | None = None) -> DomainQualityAnchor | None:
+    domain = normalize_quality_domain(domain)
+    if domain == "general":
+        return None
+    return MODEL_DOMAIN_QUALITY_ANCHORS.get(model.key, {}).get(domain)
+
+
+def model_quality(model: Model, domain: str | None = None) -> float:
+    anchor = model_domain_anchor(model, domain)
+    return min(max(float(anchor.quality if anchor is not None else model.quality), 0.0), 1.0)
+
+
+def model_quality_confidence(model: Model, domain: str | None = None) -> float:
+    anchor = model_domain_anchor(model, domain)
+    raw = anchor.confidence if anchor is not None else getattr(model, "quality_confidence", 1.0)
+    return min(max(float(raw), 0.0), 1.0)
+
+
+def effective_quality(model: Model, domain: str | None = None) -> float:
     """Conservative quality used for routing.
 
     Direct benchmark scores keep their catalog quality. Proxy or uncertain scores are
     discounted so unknown tiny models do not pass workload gates only because their
-    throughput is attractive.
+    throughput is attractive. A sparse domain anchor replaces the global score only for
+    that domain; missing anchors preserve the legacy global result exactly.
     """
-    confidence = min(max(float(getattr(model, "quality_confidence", 1.0)), 0.0), 1.0)
-    return min(max(float(model.quality) - QUALITY_CONFIDENCE_PENALTY * (1.0 - confidence), 0.0), 1.0)
+    confidence = model_quality_confidence(model, domain)
+    return min(max(model_quality(model, domain) - QUALITY_CONFIDENCE_PENALTY * (1.0 - confidence), 0.0), 1.0)
 
 
-def model_success_rate(model: Model, difficulty: float) -> float:
-    return success_rate(effective_quality(model), difficulty)
+def model_success_rate(model: Model, difficulty: float, domain: str | None = None) -> float:
+    return success_rate(effective_quality(model, domain), difficulty)
 
 
 GPUS: dict[str, GPU] = {
@@ -731,6 +789,156 @@ GPU_TDP_WATTS = {
 for _k, _w in GPU_TDP_WATTS.items():
     if _k in GPUS:
         GPUS[_k].tdp_watts = float(_w)
+
+
+# Owned-hardware TCO defaults.  Acquisition prices are USD per GPU (or per
+# accelerator inside a complete system) researched from current vendor, retailer,
+# and market-tracker listings.  Board-only prices receive a 15% host/network/power
+# infrastructure allocation; complete systems and racks already include it.
+# Amortization is deliberately conservative at four years: hyperscalers use longer
+# schedules, while AI-native operators commonly use four-to-five-year cycles.
+GPU_TCO_PRICING_CAPTURED_AT = "2026-07-21"
+GPU_TCO_USEFUL_LIFE_HOURS = 4 * 365 * 24
+GPU_TCO_BOARD_INFRA_UPLIFT = 1.15
+GPU_TCO_FACILITY_OPS_UPLIFT = 1.10
+GPU_TCO_AVG_POWER_UTILIZATION = 0.80
+GPU_TCO_PUE = 1.50
+GPU_TCO_ELECTRICITY_USD_PER_KWH = 0.20
+
+GPU_TCO_PRICE_USD: dict[str, float] = {
+    # NVIDIA datacenter: current new/refurbished market or reported system pricing.
+    "A100": 15_000.0,
+    "A100_40": 8_000.0,
+    "A10": 2_500.0,
+    "H100": 32_000.0,
+    "H200": 38_000.0,
+    "L40S": 8_600.0,
+    "L4": 2_800.0,
+    "GB200": 3_100_000.0 / 72.0,
+    "B200": 45_000.0,
+    "B300": 50_000.0,  # proxy: GB300 rack premium over GB200
+    "GB300": 3_900_000.0 / 72.0,
+    "DGX_STATION_GB300": 110_000.0,  # channel-reported midpoint; no public list price
+    "RUBIN_NVL72": 7_800_000.0 / 72.0,  # Morgan Stanley rack estimate; preview
+    "A40": 4_500.0,
+    "A30": 4_600.0,
+    "T4": 542.0,  # current used-market typical price, not launch MSRP
+    "V100": 699.0,  # current used-market typical price, not launch MSRP
+
+    # NVIDIA workstation, desktop, and edge.
+    "RTXPRO6000_BSE": 13_250.0,  # proxy from official workstation-edition marketplace price
+    "RTXPRO6000_BW_WS": 13_250.0,
+    "RTXPRO5000_BW_72": 8_700.0,
+    "RTX6000_ADA": 7_237.0,
+    "RTX5090": 3_766.0,
+    "RTX4090": 2_264.0,
+    "RTX3090": 1_144.0,
+    "DGX_SPARK": 3_999.0,
+    "A6000": 3_500.0,
+    "A4000": 900.0,
+    "A2000_MOBILE": 600.0,  # proxy: no standalone mobile-GPU price
+    "JETSON_AGX_THOR": 3_499.0,
+
+    # AMD.  MI455X uses the reported Helios rack midpoint divided by 72 GPUs.
+    "MI250X": 1_732.0,  # current refurbished OAM market; EOL part
+    "MI300X": 12_500.0,
+    "MI325X": 15_000.0,  # proxy from reported MI300X premium
+    "MI350X": 25_000.0,
+    "MI355X": 27_500.0,  # proxy: liquid-cooled MI350X variant
+    "MI455X": 5_250_000.0 / 72.0,
+    "HELIOS_MI455X": 5_250_000.0 / 72.0,
+    "MI400": 5_250_000.0 / 72.0,
+    "RadeonProW7900": 3_999.0,
+    "RadeonAIProR9700": 1_299.0,
+
+    # Specialist accelerators, Intel, and Apple.
+    "TT_BLACKHOLE_P100A": 999.0,
+    "TT_BLACKHOLE_P150": 1_399.0,
+    "TT_GALAXY_BLACKHOLE": 110_000.0 / 32.0,
+    "FURIOSA_RNGD": 7_000.0,  # proxy: no public card price; L40S-class
+    "Gaudi2": 65_000.0 / 8.0,
+    "Gaudi3": 125_000.0 / 8.0,
+    "CrescentIsland": 8_500.0,  # proxy: preview card, RTX PRO 6000 class
+    "ArcProB70": 949.0,
+    "ArcProB60": 599.0,
+    "ArcProB50": 299.0,
+    "MAC_MINI_M4_PRO": 2_199.0,
+    "MAC_STUDIO_M4_MAX": 3_499.0,
+    "MAC_STUDIO_M3_ULTRA": 9_499.0,
+}
+
+GPU_TCO_COMPLETE_SYSTEMS = frozenset({
+    "DGX_SPARK",
+    "GB200",
+    "GB300",
+    "DGX_STATION_GB300",
+    "RUBIN_NVL72",
+    "JETSON_AGX_THOR",
+    "MI455X",
+    "HELIOS_MI455X",
+    "MI400",
+    "TT_GALAXY_BLACKHOLE",
+    "MAC_MINI_M4_PRO",
+    "MAC_STUDIO_M4_MAX",
+    "MAC_STUDIO_M3_ULTRA",
+})
+
+# Rubin board power is intentionally unpublished in the performance catalog.  The
+# TCO default still needs an energy term, so use a conservative 2 kW per-GPU rack
+# proxy without turning that estimate into a published TDP claim.
+GPU_TCO_POWER_WATTS_OVERRIDE = {"RUBIN_NVL72": 2_000.0}
+
+GPU_TCO_PRICE_SOURCES = {
+    "NVIDIA current market": "https://gpupoet.com/gpu/price-compare",
+    "NVIDIA datacenter pricing guide": "https://intuitionlabs.ai/articles/nvidia-ai-gpu-pricing-guide",
+    "NVIDIA Blackwell rack pricing": "https://www.spheron.network/blog/gb300-nvl72-vs-gb200-nvl72-pricing-availability-2026/",
+    "NVIDIA Rubin rack estimate": "https://www.tomshardware.com/tech-industry/artificial-intelligence/nvidias-memory-costs-soar-485-percent-latest-ai-systems-now-cost-usd7-8-million-to-build-memory-now-comprises-25-percent-of-the-total-cost-rubin-gpus-a-mere-usd50-000-apiece",
+    "NVIDIA DGX Station channel pricing": "https://www.servethehome.com/nvidia-dgx-station-systems-available-at-last-gb300-gb200-workstations-for-your-desktop/",
+    "NVIDIA RTX PRO official marketplace": "https://marketplace.nvidia.com/en-us/enterprise/laptops-workstations/nvidia-rtx-pro-6000-blackwell-workstation-edition/",
+    "NVIDIA DGX Spark official marketplace": "https://marketplace.nvidia.com/en-us/enterprise/personal-ai-supercomputers/dgx-spark/",
+    "NVIDIA Jetson Thor official marketplace": "https://marketplace.nvidia.com/en-us/enterprise/robotics-edge/jetson-thor-developer-kit/",
+    "AMD MI250X current refurbished market": "https://harddiskdirect.com/p41933-001-1722798.html",
+    "AMD Helios estimate": "https://www.trendforce.com/news/2026/07/21/news-amds-first-rack-scale-ai-system-helios-challenges-nvidia-with-hbm4-memory-edge-but-reportedly-comes-at-a-higher-price/",
+    "AMD MI300X estimate": "https://www.tomshardware.com/tech-industry/artificial-intelligence/nvidias-h100-ai-gpus-cost-up-to-four-times-more-than-amds-competing-mi300x-amds-chips-cost-dollar10-to-dollar15k-apiece-nvidias-h100-has-peaked-beyond-dollar40000",
+    "AMD MI350X reported price": "https://www.investors.com/news/technology/amd-stock-ai-chip-price-increase-nvidia/",
+    "AMD MI325X pricing context": "https://deploybase.ai/articles/amd-mi325x-price",
+    "AMD Radeon PRO W7900 launch pricing": "https://www.amd.com/en/products/graphics/workstations/radeon-pro/w7900.html",
+    "AMD Radeon AI PRO R9700 MSRP": "https://www.techpowerup.com/342203/amd-radeon-ai-pro-r9700-gpu-arrives-october-27-at-usd-1-299-for-retail",
+    "Tenstorrent official card pricing": "https://tenstorrent.com/en/hardware/cards",
+    "Tenstorrent Galaxy official pricing": "https://tenstorrent.com/en/hardware/galaxy",
+    "FuriosaAI RNGD availability": "https://furiosa.ai/blog/rngd-enters-mass-production-the-high-performance-ai-accelerator-for-any-data-center",
+    "Intel Gaudi official UBB pricing": "https://www.servethehome.com/intel-gaudi-2-8x-oam-ubb-65k-gaudi-3-125k-and-includes-networking/",
+    "Intel Crescent Island preview": "https://newsroom.intel.com/artificial-intelligence/intel-to-expand-ai-accelerator-portfolio-with-new-gpu",
+    "Intel Arc Pro B50 MSRP": "https://www.tomshardware.com/pc-components/gpus/intel-launches-usd299-arc-pro-b50-with-16gb-of-memory-project-battlematrix-workstations-with-24gb-arc-pro-b60-gpus",
+    "Intel Arc Pro B60 retail pricing": "https://videocardz.com/newz/intel-arc-pro-b60-24gb-professional-gpu-listed-at-599-in-stock-and-shipping",
+    "Intel Arc Pro B70 launch pricing": "https://www.phoronix.com/news/Intel-Arc-Pro-B70-Announced",
+    "Apple official Mac pricing": "https://www.apple.com/shop/buy-mac",
+    "Electricity price assumption": "https://ec.europa.eu/eurostat/en/web/products-eurostat-news/w/ddn-20260508-2",
+    "PUE assumption context": "https://datacenter.uptimeinstitute.com/rs/711-RIA-145/images/2025.Annual.Survey.Report.pdf?version=0",
+    "Useful-life assumption context": "https://siliconangle.com/2025/11/22/resetting-gpu-depreciation-ai-factories-bend-dont-break-useful-life-assumptions/",
+}
+
+
+def _researched_gpu_tco_per_hour(gpu_key: str) -> float:
+    price = GPU_TCO_PRICE_USD[gpu_key]
+    allocated_capex = price if gpu_key in GPU_TCO_COMPLETE_SYSTEMS else price * GPU_TCO_BOARD_INFRA_UPLIFT
+    amortized = allocated_capex / GPU_TCO_USEFUL_LIFE_HOURS * GPU_TCO_FACILITY_OPS_UPLIFT
+    power_watts = GPU_TCO_POWER_WATTS_OVERRIDE.get(gpu_key, GPUS[gpu_key].tdp_watts)
+    energy = (
+        power_watts / 1000.0
+        * GPU_TCO_AVG_POWER_UTILIZATION
+        * GPU_TCO_PUE
+        * GPU_TCO_ELECTRICITY_USD_PER_KWH
+    )
+    return round(amortized + energy, 2)
+
+
+GPU_TCO_DEFAULTS: dict[str, float] = {
+    _key: _researched_gpu_tco_per_hour(_key)
+    for _key in GPUS
+}
+for _key, _tco in GPU_TCO_DEFAULTS.items():
+    GPUS[_key].default_tco_per_gpu_hour = _tco
 
 
 # Announced/preview catalog entries must keep their uncertainty reviewable.  Kimi
@@ -3800,6 +4008,126 @@ for _k, _confidence in AA_MODEL_QUALITY_CONFIDENCE.items():
     if _k in MODELS:
         MODELS[_k].quality_confidence = _confidence
 
+# Sparse per-domain quality anchors. Vendor-reported benchmark fractions are kept
+# separate from the AA general-quality axis and carry their evaluation identity and
+# provenance. The routing fallback for every missing model/domain pair is the model's
+# existing global quality, so catalog coverage can grow without inventing proxies.
+_QWEN35_DOMAIN_SOURCE = "https://huggingface.co/Qwen/Qwen3.5-27B/blob/main/README.md"
+_QWEN35_397_DOMAIN_SOURCE = "https://huggingface.co/Qwen/Qwen3.5-397B-A17B-FP8"
+_KIMI_K25_DOMAIN_SOURCE = "https://huggingface.co/moonshotai/Kimi-K2.5"
+_DEEPSEEK_V3_DOMAIN_SOURCE = "https://huggingface.co/deepseek-ai/DeepSeek-V3"
+_GEMMA4_DOMAIN_SOURCE = "https://ai.google.dev/gemma/docs/core/model_card_4"
+_GLM5_DOMAIN_SOURCE = "https://huggingface.co/zai-org/GLM-5"
+_NORTH_CODE_DOMAIN_SOURCE = "https://huggingface.co/CohereLabs/North-Mini-Code-1.0"
+
+
+def _domain_anchor(
+    score: float,
+    benchmark: str,
+    source: str,
+    *,
+    confidence: float = 0.90,
+    note: str = "",
+) -> DomainQualityAnchor:
+    return DomainQualityAnchor(
+        quality=min(max(float(score) / 100.0, 0.0), 1.0),
+        benchmark=benchmark,
+        raw_score=float(score),
+        source=source,
+        confidence=confidence,
+        note=note,
+    )
+
+
+MODEL_DOMAIN_QUALITY_ANCHORS: dict[str, dict[str, DomainQualityAnchor]] = {
+    "q27": {
+        "coding": _domain_anchor(72.4, "SWE-bench Verified", _QWEN35_DOMAIN_SOURCE),
+        "reasoning": _domain_anchor(85.5, "GPQA Diamond", _QWEN35_DOMAIN_SOURCE),
+        "long_context": _domain_anchor(60.6, "LongBench v2", _QWEN35_DOMAIN_SOURCE),
+        "multilingual": _domain_anchor(82.2, "MMLU-ProX (29 languages)", _QWEN35_DOMAIN_SOURCE),
+        "vision": _domain_anchor(75.0, "MMMU-Pro", _QWEN35_DOMAIN_SOURCE),
+    },
+    "q122": {
+        "coding": _domain_anchor(72.0, "SWE-bench Verified", _QWEN35_DOMAIN_SOURCE),
+        "reasoning": _domain_anchor(86.6, "GPQA Diamond", _QWEN35_DOMAIN_SOURCE),
+        "long_context": _domain_anchor(60.2, "LongBench v2", _QWEN35_DOMAIN_SOURCE),
+        "multilingual": _domain_anchor(82.2, "MMLU-ProX (29 languages)", _QWEN35_DOMAIN_SOURCE),
+        "vision": _domain_anchor(76.9, "MMMU-Pro", _QWEN35_DOMAIN_SOURCE),
+    },
+    "q35": {
+        "coding": _domain_anchor(69.2, "SWE-bench Verified", _QWEN35_DOMAIN_SOURCE),
+        "reasoning": _domain_anchor(84.2, "GPQA Diamond", _QWEN35_DOMAIN_SOURCE),
+        "long_context": _domain_anchor(59.0, "LongBench v2", _QWEN35_DOMAIN_SOURCE),
+        "multilingual": _domain_anchor(81.0, "MMLU-ProX (29 languages)", _QWEN35_DOMAIN_SOURCE),
+        "vision": _domain_anchor(75.1, "MMMU-Pro", _QWEN35_DOMAIN_SOURCE),
+    },
+    "q397": {
+        "coding": _domain_anchor(76.4, "SWE-bench Verified", _QWEN35_397_DOMAIN_SOURCE),
+        "reasoning": _domain_anchor(88.4, "GPQA Diamond", _QWEN35_397_DOMAIN_SOURCE),
+        "long_context": _domain_anchor(63.2, "LongBench v2", _QWEN35_397_DOMAIN_SOURCE),
+    },
+    "k25": {
+        "coding": _domain_anchor(
+            76.8, "SWE-bench Verified", _KIMI_K25_DOMAIN_SOURCE,
+            note="Vendor minimal-tool harness; coding results averaged over five runs.",
+        ),
+        "reasoning": _domain_anchor(87.6, "GPQA Diamond", _KIMI_K25_DOMAIN_SOURCE),
+        "long_context": _domain_anchor(
+            61.0, "LongBench v2", _KIMI_K25_DOMAIN_SOURCE,
+            note="Prompts and input contexts standardized to approximately 128k tokens.",
+        ),
+        "multilingual": _domain_anchor(73.0, "SWE-bench Multilingual", _KIMI_K25_DOMAIN_SOURCE),
+        "vision": _domain_anchor(78.5, "MMMU-Pro", _KIMI_K25_DOMAIN_SOURCE),
+    },
+    "ds3": {
+        "coding": _domain_anchor(42.0, "SWE-bench Verified", _DEEPSEEK_V3_DOMAIN_SOURCE),
+        "reasoning": _domain_anchor(59.1, "GPQA Diamond", _DEEPSEEK_V3_DOMAIN_SOURCE),
+        "long_context": _domain_anchor(48.7, "LongBench v2", _DEEPSEEK_V3_DOMAIN_SOURCE),
+        "multilingual": _domain_anchor(79.4, "MMMLU non-English", _DEEPSEEK_V3_DOMAIN_SOURCE),
+    },
+    "g31": {
+        "coding": _domain_anchor(80.0, "LiveCodeBench v6", _GEMMA4_DOMAIN_SOURCE),
+        "reasoning": _domain_anchor(84.3, "GPQA Diamond", _GEMMA4_DOMAIN_SOURCE),
+        "long_context": _domain_anchor(
+            66.4, "MRCR v2 8-needle 128k", _GEMMA4_DOMAIN_SOURCE,
+            note="Retrieval-style long-context benchmark; not directly comparable to LongBench v2.",
+        ),
+    },
+    "g26": {
+        "coding": _domain_anchor(77.1, "LiveCodeBench v6", _GEMMA4_DOMAIN_SOURCE),
+        "reasoning": _domain_anchor(82.3, "GPQA Diamond", _GEMMA4_DOMAIN_SOURCE),
+        "long_context": _domain_anchor(44.1, "MRCR v2 8-needle 128k", _GEMMA4_DOMAIN_SOURCE),
+    },
+    "g12": {
+        "coding": _domain_anchor(72.0, "LiveCodeBench v6", _GEMMA4_DOMAIN_SOURCE),
+        "reasoning": _domain_anchor(78.8, "GPQA Diamond", _GEMMA4_DOMAIN_SOURCE),
+        "long_context": _domain_anchor(43.4, "MRCR v2 8-needle 128k", _GEMMA4_DOMAIN_SOURCE),
+    },
+    "ge4": {
+        "coding": _domain_anchor(52.0, "LiveCodeBench v6", _GEMMA4_DOMAIN_SOURCE),
+        "reasoning": _domain_anchor(58.6, "GPQA Diamond", _GEMMA4_DOMAIN_SOURCE),
+        "long_context": _domain_anchor(25.4, "MRCR v2 8-needle 128k", _GEMMA4_DOMAIN_SOURCE),
+    },
+    "ge2": {
+        "coding": _domain_anchor(44.0, "LiveCodeBench v6", _GEMMA4_DOMAIN_SOURCE),
+        "reasoning": _domain_anchor(43.4, "GPQA Diamond", _GEMMA4_DOMAIN_SOURCE),
+        "long_context": _domain_anchor(19.1, "MRCR v2 8-needle 128k", _GEMMA4_DOMAIN_SOURCE),
+    },
+    "glm5": {
+        "coding": _domain_anchor(
+            77.8, "SWE-bench Verified", _GLM5_DOMAIN_SOURCE,
+            note="OpenHands harness with a tailored prompt and 200k context window.",
+        ),
+        "reasoning": _domain_anchor(86.0, "GPQA Diamond", _GLM5_DOMAIN_SOURCE),
+    },
+    "north-mini-code-1-0": {
+        "coding": _domain_anchor(
+            67.6, "SWE-bench Verified", _NORTH_CODE_DOMAIN_SOURCE,
+            note="SWE-Agent 1.1.0; three-seed vendor evaluation.",
+        ),
+    },
+}
+
 # Text models whose quality anchor is intentionally not AA-sourced. Membership must be
 # justified inline; tests assert every other text model carries an AA_MODEL_METRICS row so
 # a new catalog entry cannot silently inherit the quality=0.5 / full-confidence defaults.
@@ -4362,8 +4690,24 @@ USE_CASE_PREFIX_HIT_RATES = {
     "catalog_enrichment": 0.35,
 }
 
+USE_CASE_QUALITY_DOMAINS = {
+    "coding": "coding",
+    "longctx": "long_context",
+    "summarize": "long_context",
+    "inbox_archive": "long_context",
+    "contract_review": "long_context",
+    "research": "reasoning",
+    "evals": "reasoning",
+    "security_triage": "reasoning",
+    "aml_casework": "reasoning",
+    "translation": "multilingual",
+    "document_extraction": "vision",
+    "catalog_enrichment": "vision",
+}
+
 for _preset in PROJECT_PRESETS:
     _preset["prefix_hit_rate"] = USE_CASE_PREFIX_HIT_RATES.get(_preset["key"], 0.0)
+    _preset["quality_domain"] = USE_CASE_QUALITY_DOMAINS.get(_preset["key"], "general")
 
 DAY_SHAPES = {
     "flat": {

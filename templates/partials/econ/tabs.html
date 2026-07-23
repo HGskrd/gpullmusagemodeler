@@ -1,0 +1,13 @@
+<div class="econ-tabs" data-econ-panel="{{ panel }}">
+  <script type="application/json" class="econ-payload">{{ ep.charts_json | safe }}</script>
+  <div class="econ-tabbar" role="group" aria-label="Economic views{% if label %} — {{ label }}{% endif %}">
+    <button type="button" class="econ-tab-btn on" data-tab="flow">Flow</button>
+    <button type="button" class="econ-tab-btn" data-tab="dash">Dashboard</button>
+    <button type="button" class="econ-tab-btn" data-tab="brief">Brief</button>
+    <button type="button" class="econ-tab-btn" data-tab="fleet">Fleet</button>
+  </div>
+  <div class="econ-tab-panel" data-tab="flow">{% include "partials/econ/flow.html" %}</div>
+  <div class="econ-tab-panel" data-tab="dash" hidden>{% include "partials/econ/dashboard.html" %}</div>
+  <div class="econ-tab-panel" data-tab="brief" hidden>{% include "partials/econ/brief.html" %}</div>
+  <div class="econ-tab-panel" data-tab="fleet" hidden>{% include "partials/econ/supply.html" %}</div>
+</div>

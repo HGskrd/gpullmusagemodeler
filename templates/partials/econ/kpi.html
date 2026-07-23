@@ -1,0 +1,29 @@
+{% set p = ep.p %}
+{% set f = ep.f %}
+<div class="kpi-strip">
+  <div class="kpi hero">
+    <div class="k-label">Equivalent value served / day</div>
+    <div class="k-val good">{{ p.value_served_day|fmt_money }}</div>
+    <div class="k-sub">{% if p.cost_day > 0 %}margin {{ p.margin_day|fmt_money }}/day · {{ '%.2f'|format(p.revenue_multiple) }}× value/cost{% else %}gross; costs not included{% endif %}</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">Cloud spend lost / day</div>
+    <div class="k-val {{ 'bad' if (f.spilled_pct + f.leaked_pct) >= 25 else ('warn' if (f.spilled_pct + f.leaked_pct) > 0 else '') }}">{{ p.value_cloud_day|fmt_money }}</div>
+    <div class="k-sub">{{ f.spilled_pct|round(0)|int }}% spill · {{ f.leaked_pct|round(0)|int }}% leak</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">Destroyed demand</div>
+    <div class="k-val {{ 'bad' if f.destroyed_pct >= 10 else ('warn' if f.destroyed_pct > 0 else '') }}">{{ f.destroyed_pct|round(0)|int }}%</div>
+    <div class="k-sub">{{ p.value_destroyed_day|fmt_money }}/day shelved</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">Fleet utilization</div>
+    <div class="k-val {{ 'good' if p.utilization >= 0.7 else ('warn' if p.utilization >= 0.3 else '') }}">{{ (p.utilization * 100)|round(0)|int }}%</div>
+    <div class="k-sub">{{ p.total_gpus_used }}/{{ p.total_gpus }} GPUs assigned</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">CO₂ / day</div>
+    <div class="k-val">{{ '%.1f'|format(p.co2_kg_day_total) }} kg</div>
+    <div class="k-sub">{{ '%.1f'|format(p.co2_g_per_task_avg * 1000) }} kg / M tasks avg</div>
+  </div>
+</div>

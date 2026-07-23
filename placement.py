@@ -321,10 +321,11 @@ def get_deployed(state: PlannerState, phase: str = "decode") -> list[ModelAssign
 def _model_serves_project(model: Model, project: Project) -> bool:
     if getattr(model, "is_realtime_only", False) or getattr(model, "embedding_profile", None) is not None:
         return False
+    domain = getattr(project, "quality_domain", "general")
     return (
         project.requires <= model.capabilities
-        and effective_quality(model) + 1e-9 >= float(getattr(project, "quality_floor", 0.0))
-        and model_success_rate(model, project.difficulty) >= project.min_success_rate
+        and effective_quality(model, domain) + 1e-9 >= float(getattr(project, "quality_floor", 0.0))
+        and model_success_rate(model, project.difficulty, domain) >= project.min_success_rate
     )
 
 
@@ -386,7 +387,7 @@ def _auto_model_value(model: Model, projects: list[Project]) -> float:
     for project in projects:
         if not _model_serves_project(model, project):
             continue
-        sr = model_success_rate(model, project.difficulty)
+        sr = model_success_rate(model, project.difficulty, getattr(project, "quality_domain", "general"))
         value += _active_project_demand(project) * max(0.0, float(project.wtp_per_m or 0.0)) * sr
     return value
 
@@ -405,7 +406,9 @@ def _auto_weighted_success(model: Model, projects: list[Project]) -> float:
     if total <= 0:
         return 0.0
     return sum(
-        _active_project_demand(project) * model_success_rate(model, project.difficulty)
+        _active_project_demand(project) * model_success_rate(
+            model, project.difficulty, getattr(project, "quality_domain", "general")
+        )
         for project in served
     ) / total
 
@@ -415,13 +418,29 @@ def _auto_quality_margin(model: Model, projects: list[Project]) -> float:
     if not served:
         return 0.0
     return min(
-        model_success_rate(model, project.difficulty) - float(project.min_success_rate)
+        model_success_rate(
+            model, project.difficulty, getattr(project, "quality_domain", "general")
+        ) - float(project.min_success_rate)
         for project in served
     )
 
 
 def _auto_covered_demand(model: Model, projects: list[Project]) -> float:
     return sum(_active_project_demand(project) for project in _auto_served_projects(model, projects))
+
+
+def _auto_portfolio_quality(model: Model, projects: list[Project]) -> float:
+    weighted = [
+        (
+            _active_project_demand(project) * max(0.01, float(project.wtp_per_m or 0.0)),
+            effective_quality(model, getattr(project, "quality_domain", "general")),
+        )
+        for project in projects
+    ]
+    total = sum(weight for weight, _ in weighted)
+    if total <= 0:
+        return effective_quality(model)
+    return sum(weight * quality for weight, quality in weighted) / total
 
 
 def _auto_required_capability_count(projects: list[Project]) -> int:
@@ -454,7 +473,7 @@ def _auto_candidate_key(
     covered_demand = _auto_covered_demand(model, projects)
     weighted_success = _auto_weighted_success(model, served)
     quality_margin = _auto_quality_margin(model, served)
-    quality = effective_quality(model)
+    quality = _auto_portfolio_quality(model, projects)
     work_size = _auto_model_work_size(model)
     kv_size = _auto_model_kv_size(model)
     prec_idx = PRECISIONS.index(prec) if prec in PRECISIONS else len(PRECISIONS)

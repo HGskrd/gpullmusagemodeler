@@ -1,0 +1,28 @@
+{% set p = ep.p %}
+<div class="kpi-strip">
+  <div class="kpi hero">
+    <div class="k-label">Fleet time-utilization</div>
+    <div class="k-val {{ 'good' if p.utilization >= 0.7 else ('warn' if p.utilization >= 0.3 else '') }}">{{ (p.utilization * 100)|round(0)|int }}%</div>
+    <div class="k-sub">GPU-weighted share of daily capacity consumed</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">GPUs assigned</div>
+    <div class="k-val">{{ p.total_gpus_used }}<span style="font-size:13px;color:var(--fg2);">/{{ p.total_gpus }}</span></div>
+    <div class="k-sub">{{ p.total_gpus - p.total_gpus_used }} idle in pool{% if p.cost_day > 0 %} but still costing{% endif %}</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">Fleet cost / day</div>
+    <div class="k-val">{{ p.cost_day|fmt_money if p.cost_day > 0 else '—' }}</div>
+    <div class="k-sub">{% if p.cost_day > 0 %}${{ '%.2f'|format(p.cost_per_m_served) }}/M served tok{% else %}set TCO to enable{% endif %}</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">Capacity / day</div>
+    <div class="k-val">{{ p.total_cap_tokens_day|fmt_num }}</div>
+    <div class="k-sub">tokens · {{ p.actual_served_tokens|fmt_num }} consumed</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">CO₂ / day</div>
+    <div class="k-val">{{ '%.1f'|format(p.co2_kg_day_total) }} kg</div>
+    <div class="k-sub">day-shape weighted</div>
+  </div>
+</div>

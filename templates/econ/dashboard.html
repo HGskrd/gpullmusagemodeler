@@ -1,0 +1,9 @@
+{% extends "econ/base.html" %}
+{% block title %}2. Executive dashboard{% endblock %}
+{% block content %}
+{% include "partials/econ/kpi.html" %}
+<div data-econ-panel="{{ panel }}">
+  <script type="application/json" class="econ-payload">{{ ep.charts_json | safe }}</script>
+  {% include "partials/econ/dashboard.html" %}
+</div>
+{% endblock %}

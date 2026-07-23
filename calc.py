@@ -33,9 +33,13 @@ from data import (
     PUBLISHED_EMBEDDING_DECONTAMINATED_BEIR,
     PUBLISHED_EMBEDDING_QUALITY,
     normalize_precision,
+    MODELS,
     carbon_intensity_avg,
     effective_quality,
+    model_domain_anchor,
     model_success_rate,
+    normalize_quality_domain,
+    QUALITY_DOMAIN_LABELS,
     success_rate,
 )
 import cloud_policy
@@ -3166,9 +3170,12 @@ def _cloud_price_per_m_in_preset(
     prefix_hit_rate: float,
     preset_name: str,
     required_capabilities: frozenset[str] = frozenset(),
+    quality_domain: str = "general",
 ) -> tuple[Optional[dict], float]:
     """Cheapest cloud model in the active corpo preset that can serve a project with the
-    given (difficulty, min_success_rate). Effective $/M is computed apples-to-apples with
+    given (difficulty, min_success_rate). ``quality_domain`` is accepted so the local and
+    cloud paths share one project contract; cloud entries currently fall back to their
+    global catalog quality until provider-domain anchors are added. Effective $/M is computed apples-to-apples with
     on-prem: sticker price × (1 / token_efficiency). A cloud is eligible only if
     success_rate(cloud.quality, difficulty) ≥ min_success_rate.
 
@@ -3377,12 +3384,13 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
         difficulty = float(getattr(p, "difficulty", 0.5))
         slo = float(getattr(p, "min_success_rate", 0.85))
         quality_floor = float(getattr(p, "quality_floor", 0.0))
+        quality_domain = normalize_quality_domain(getattr(p, "quality_domain", "general"))
         required_caps = frozenset(getattr(p, "requires", frozenset()) or frozenset())
         project_prefix_hit_rate = min(max(float(getattr(p, "prefix_hit_rate", 0.0)), 0.0), 1.0)
         project_profile = _project_workload_profile(p, profile)
         cloud_info, cloud_pm = _cloud_price_per_m_in_preset(
             difficulty, slo, quality_floor, project_profile, project_prefix_hit_rate, corpo_cloud,
-            required_caps,
+            required_caps, quality_domain,
         )
         cloud_blocked = cloud_info is None
         wtp = float(p.wtp_per_m)
@@ -3400,10 +3408,11 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
             if not (required_caps <= me["model"].capabilities):
                 cap_filtered = True
                 continue
-            if me["effective_quality"] + 1e-9 < quality_floor:
+            project_quality = effective_quality(me["model"], quality_domain)
+            if project_quality + 1e-9 < quality_floor:
                 slo_filtered = True
                 continue
-            sr = model_success_rate(me["model"], difficulty)
+            sr = model_success_rate(me["model"], difficulty, quality_domain)
             if sr + 1e-9 < slo:
                 slo_filtered = True
                 continue
@@ -3546,6 +3555,8 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
             "destroyed_pct": (destroyed / total * 100.0) if total > 0 else 0.0,
             "internal_cost_day": internal_cost,
             "quality_floor": quality_floor,
+            "quality_domain": quality_domain,
+            "quality_domain_label": QUALITY_DOMAIN_LABELS[quality_domain],
             "prefix_hit_rate": project_prefix_hit_rate,
             "value_served": value_served,
             "value_spilled": (spilled / 1e6) * value_basis,
@@ -3587,6 +3598,12 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
                     "tokens": useful_t,
                     "actual_tokens": actual_t,
                     "success_rate": sr,
+                    "effective_quality": effective_quality(me["model"], quality_domain),
+                    "quality_anchor": (
+                        model_domain_anchor(me["model"], quality_domain).benchmark
+                        if model_domain_anchor(me["model"], quality_domain) is not None
+                        else "Global quality fallback"
+                    ),
                     "retry_mult": 1.0 / max(sr, 1e-6),
                     "color": me["model"].color,
                 }
@@ -3814,4 +3831,203 @@ def _marginal_gpu_recommendations(
         })
 
     rows.sort(key=lambda r: (-r["score"], -r["margin_gain_day"], r["model_name"]))
+    return rows[:MARGINAL_RECOMMENDATION_LIMIT]
+
+
+def _model_kind_for_swap(model: Model) -> str:
+    if getattr(model, "embedding_profile", None) is not None:
+        return "embedding"
+    if getattr(model, "realtime_profile", None) is not None:
+        return "asr"
+    return "llm"
+
+
+def _portfolio_domain_quality(model: Model, projects) -> tuple[float, str, float]:
+    """Demand/value-weighted quality across the active workload domain mix.
+
+    The score is used only to shortlist and explain swap candidates; the full
+    projection simulation still decides the recommendation economics.
+    """
+    weights: dict[str, float] = defaultdict(float)
+    for project in projects:
+        domain = normalize_quality_domain(getattr(project, "quality_domain", "general"))
+        demand = max(0.0, float(getattr(project, "tokens_day", 0.0) or 0.0))
+        latent = 0.25 * max(0.0, float(getattr(project, "latent_jobs_day", 0.0) or 0.0))
+        value = max(0.01, float(getattr(project, "wtp_per_m", 0.0) or 0.0))
+        weights[domain] += (demand + latent) * value
+    if not weights or sum(weights.values()) <= 0:
+        return effective_quality(model), QUALITY_DOMAIN_LABELS["general"], 0.0
+
+    total = sum(weights.values())
+    score = sum(effective_quality(model, domain) * weight for domain, weight in weights.items()) / total
+    anchored = sum(
+        weight for domain, weight in weights.items()
+        if model_domain_anchor(model, domain) is not None
+    ) / total
+    ranked = sorted(weights.items(), key=lambda item: (-item[1], item[0]))
+    labels = [
+        f"{QUALITY_DOMAIN_LABELS[domain]} {weight / total:.0%}"
+        for domain, weight in ranked[:3]
+    ]
+    return score, " · ".join(labels), anchored
+
+
+def _swap_candidate_shortlist(current: Model, state, current_kind: str, per_slot_cap: int):
+    current_quality, _, _ = _portfolio_domain_quality(current, state.projects)
+    candidates = []
+    for cand_key, cand in MODELS.items():
+        if (
+            cand_key == current.key
+            or getattr(cand, "hidden", False)
+            or _model_kind_for_swap(cand) != current_kind
+        ):
+            continue
+        portfolio_quality, _, _ = _portfolio_domain_quality(cand, state.projects)
+        candidates.append((cand_key, cand, portfolio_quality))
+
+    cap = max(1, int(per_slot_cap))
+    nearest_n = max(1, cap // 2)
+    quality_n = max(1, cap // 4)
+    efficient_n = max(1, cap - nearest_n - quality_n)
+    selected: list[tuple[str, Model, float]] = []
+    seen: set[str] = set()
+    groups = (
+        sorted(candidates, key=lambda row: (abs(row[2] - current_quality), row[0]))[:nearest_n],
+        sorted(
+            candidates,
+            key=lambda row: (
+                -_portfolio_domain_quality(row[1], state.projects)[2],
+                -row[2],
+                row[0],
+            ),
+        )[:quality_n],
+        sorted(
+            candidates,
+            key=lambda row: (
+                row[1].active_params / max(float(row[1].token_efficiency), 1e-6),
+                -row[2],
+                row[0],
+            ),
+        )[:efficient_n],
+    )
+    for group in groups:
+        for row in group:
+            if row[0] not in seen:
+                seen.add(row[0])
+                selected.append(row)
+    if len(selected) < cap:
+        for row in sorted(candidates, key=lambda item: (abs(item[2] - current_quality), item[0])):
+            if row[0] not in seen:
+                seen.add(row[0])
+                selected.append(row)
+            if len(selected) >= cap:
+                break
+    return selected[:cap]
+
+
+def _marginal_model_swap_recommendations(
+    state,
+    base_margin: float,
+    base_cloud: float,
+    base_destroyed: float,
+    base_served_tokens: float,
+    per_slot_cap: int = 20,
+) -> list[dict]:
+    """Estimate the best same-hardware model replacements for current deployments.
+
+    Complement to _marginal_gpu_recommendations: instead of adding a GPU to an
+    existing assignment, swap the deployed model for another catalog model of the
+    same kind on the same GPUs, retune topology, and rescore the projection.
+    Candidates combine the nearest portfolio-domain quality, the strongest domain
+    quality, and the smallest inference work size, then are capped per slot to bound
+    runtime. Scoring mirrors the GPU expansion recommender.
+    """
+    rows: list[dict] = []
+    seen: set[tuple[int, int]] = set()
+    for am, gpu in _iter_resolved_models(state):
+        key = (am.uid, am.gpu_uid)
+        if key in seen:
+            continue
+        seen.add(key)
+        current = am.model
+        current_kind = _model_kind_for_swap(current)
+        pool = _swap_candidate_shortlist(current, state, current_kind, per_slot_cap)
+        current_portfolio_quality, quality_mix, current_anchor_share = _portfolio_domain_quality(
+            current, state.projects
+        )
+        evaluated = 0
+        for cand_key, cand, candidate_portfolio_quality in pool:
+            if evaluated >= per_slot_cap:
+                break
+            sim = copy.deepcopy(state)
+            sim_am = next((m for m in sim.models if m.uid == am.uid), None)
+            sim_gp = next((gp for gp in sim.gpus if gp.uid == am.gpu_uid), None)
+            if sim_am is None or sim_gp is None:
+                continue
+            sim_am.model_key = cand_key
+            # Keep the deployment's precision when the candidate supports it;
+            # fall back to bf16 rather than discarding a viable swap outright.
+            chosen_prec = None
+            chosen_spec = None
+            for prec in (sim_am.prec, "bf16"):
+                sim_am.prec = prec
+                spec = spec_runtime_for(sim, sim_am, sim_am.model)
+                if valid_strategies(
+                    sim_am.model, sim_am.gpu_count, sim_gp.gpu, sim.mu,
+                    sim.profiled_non_kv_gb, prec, spec,
+                ):
+                    chosen_prec = prec
+                    chosen_spec = spec
+                    break
+            if chosen_prec is None:
+                continue
+            evaluated += 1
+            strategy = default_strategy(
+                sim_am.model, sim_am.gpu_count, sim_gp.gpu, sim.mu,
+                sim.profiled_non_kv_gb, chosen_prec, chosen_spec,
+            )
+            sim_am.tp, sim_am.pp, sim_am.dp = strategy
+            sim_am.prefill_tp, sim_am.prefill_pp, sim_am.prefill_dp = strategy
+
+            projected = compute_revenue_projection(sim, include_recommendations=False)
+            candidate_portfolio_quality, _, candidate_anchor_share = _portfolio_domain_quality(
+                cand, state.projects
+            )
+            margin_gain = projected["margin_day"] - base_margin
+            cloud_reduced = max(0.0, base_cloud - projected["value_cloud_day"])
+            destroyed_reduced = max(0.0, base_destroyed - projected["value_destroyed_day"])
+            score = margin_gain + 0.25 * cloud_reduced + 0.50 * destroyed_reduced
+            if score <= 0 and margin_gain <= 0 and cloud_reduced <= 0 and destroyed_reduced <= 0:
+                continue
+            rows.append({
+                "current_key": am.model_key,
+                "current_name": current.name,
+                "candidate_key": cand_key,
+                "candidate_name": cand.name,
+                "gpu_name": sim_gp.gpu.name,
+                "gpu_count": sim_am.gpu_count,
+                "current_quality": current_portfolio_quality,
+                "candidate_quality": candidate_portfolio_quality,
+                "current_global_quality": effective_quality(current),
+                "candidate_global_quality": effective_quality(cand),
+                "quality_mix": quality_mix,
+                "current_anchor_share": current_anchor_share,
+                "candidate_anchor_share": candidate_anchor_share,
+                "prec": chosen_prec,
+                "margin_gain_day": margin_gain,
+                "cloud_reduced_day": cloud_reduced,
+                "destroyed_reduced_day": destroyed_reduced,
+                "served_gain_tokens": max(0.0, projected["fates"]["served_tokens"] - base_served_tokens),
+                "margin_before_day": base_margin,
+                "margin_after_day": projected["margin_day"],
+                "cloud_before_day": base_cloud,
+                "cloud_after_day": projected["value_cloud_day"],
+                "destroyed_before_day": base_destroyed,
+                "destroyed_after_day": projected["value_destroyed_day"],
+                "served_before_tokens": base_served_tokens,
+                "served_after_tokens": projected["fates"]["served_tokens"],
+                "score": score,
+            })
+
+    rows.sort(key=lambda r: (-r["score"], -r["margin_gain_day"], r["candidate_name"]))
     return rows[:MARGINAL_RECOMMENDATION_LIMIT]

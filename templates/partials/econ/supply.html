@@ -1,0 +1,87 @@
+{% set p = ep.p %}
+
+<div class="econ-card">
+  <h2>Deployed models</h2>
+  <p class="econ-card-sub">
+    Each card shows capacity pressure (demand placed ÷ daily capacity), the internal tariff,
+    and what the model is actually doing. Saturated models spill; idle models meet no use case's gates.
+  </p>
+  {% if p.models %}
+  <div class="fleet-grid">
+    {% for m in p.models %}
+    {% set cap_pct = (m.utilization * 100) | round(1) %}
+    <div class="fleet-card">
+      <div class="fc-head">
+        <span class="dot" style="background:{{ m.color }};"></span>
+        <span class="fc-name">{{ m.name }}</span>
+        <span style="margin-left:auto;">
+          {% if m.status == 'NOT RUNNABLE' %}<span class="tag bad">NOT RUNNABLE</span>
+          {% elif m.status == 'SATURATED' %}<span class="tag warn">SATURATED</span>
+          {% elif m.status == 'IDLE' %}<span class="tag muted">IDLE</span>
+          {% else %}<span class="tag good">OK</span>{% endif %}
+        </span>
+      </div>
+
+      <div class="meter" title="Demand placed: {{ m.served_tokens|fmt_num }} of {{ m.daily_tokens_cap|fmt_num }} tokens/day capacity">
+        <div class="{{ 'm-fill-warn' if m.status == 'SATURATED' else ('m-fill-idle' if m.status == 'IDLE' else 'm-fill-ok') }}" style="width:{{ [cap_pct, 100] | min }}%;"></div>
+      </div>
+      <div class="meter-label">
+        <span>{{ cap_pct|round(0)|int }}% utilized</span>
+        <span>{{ m.served_tokens|fmt_num }} / {{ m.daily_tokens_cap|fmt_num if m.runnable else '—' }} tok/day</span>
+      </div>
+
+      <div class="fc-stats" style="margin-top:8px;">
+        <span>GPUs <span class="v">{{ m.gpu_count }}</span></span>
+        <span>Quality <span class="v">{{ (m.effective_quality * 100)|round(0)|int }}%</span></span>
+        <span>Tariff in <span class="v">{% if m.runnable and m.internal_input_pm > 0 %}${{ '%.2f'|format(m.internal_input_pm) }}/M{% else %}—{% endif %}</span></span>
+        <span>Tariff out <span class="v">{% if m.runnable and m.internal_output_pm > 0 %}${{ '%.2f'|format(m.internal_output_pm) }}/M{% else %}—{% endif %}</span></span>
+        <span>Tok efficiency <span class="v">{{ '%.2f'|format(m.token_efficiency) }}×</span></span>
+        <span>CO₂ <span class="v">{% if m.co2_kg_day > 0 %}{{ '%.1f'|format(m.co2_kg_day) }} kg/day{% else %}—{% endif %}</span></span>
+      </div>
+
+      <div class="T" style="margin-top:6px;font-size:11px;">
+        {% if m.status == 'SATURATED' %}
+          All daily capacity consumed — adding GPUs stops spill to cloud.
+        {% elif m.status == 'IDLE' %}
+          No use case routed here — quality doesn't meet any SLO, or the tariff is above every WTP.
+        {% elif m.status == 'NOT RUNNABLE' %}
+          Assigned GPUs produce zero modeled capacity — adjust precision, topology, memory, or placement.
+        {% else %}
+          Serving within capacity.
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="T">Deploy at least one runnable model to see the fleet.</p>
+  {% endif %}
+</div>
+
+{% if p.models %}
+<div class="econ-card">
+  <h2>Internal tariff sheet · $/1M tokens</h2>
+  <p class="econ-card-sub">What users are charged per deployed model. Output prices scale with token efficiency — verbose models cost more per delivered output token.</p>
+  <div class="tariff-grid">
+    {% for m in p.models %}
+    <div class="tariff-pill">
+      <span class="dot" style="background:{{ m.color }};"></span>
+      <span class="tariff-model">{{ m.name }}</span>
+      <span class="tariff-price">in {% if m.runnable and m.internal_input_pm > 0 %}${{ '%.2f'|format(m.internal_input_pm) }}{% else %}—{% endif %}</span>
+      <span class="tariff-price">out {% if m.runnable and m.internal_output_pm > 0 %}${{ '%.2f'|format(m.internal_output_pm) }}{% else %}—{% endif %}</span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<div hx-get="/econ/swaps" hx-vals='{"panel":"{{ panel }}","view":"table"}'
+     hx-trigger="load" hx-swap="innerHTML"></div>
+
+{% if p.models %}
+<div class="econ-card">
+  <h2>Who serves whom</h2>
+  <p class="econ-card-sub">Useful tokens delivered per use case, split across the models that served them.</p>
+  <div class="chart-box econ-chart" data-chart="alloc" style="height:{{ 120 + (p.projects|length + p.models|length) * 26 }}px;"></div>
+</div>
+{% endif %}

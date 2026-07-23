@@ -1,0 +1,9 @@
+{% extends "econ/base.html" %}
+{% block title %}1. Money & token flow{% endblock %}
+{% block content %}
+{% include "partials/econ/kpi.html" %}
+<div data-econ-panel="{{ panel }}">
+  <script type="application/json" class="econ-payload">{{ ep.charts_json | safe }}</script>
+  {% include "partials/econ/flow.html" %}
+</div>
+{% endblock %}

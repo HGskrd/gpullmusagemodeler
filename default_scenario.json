@@ -22,7 +22,7 @@
     "embedding_doc_pre": "Doc",
     "gpus": [
       {
-        "cost_per_gpu_hour": 3.0,
+        "cost_per_gpu_hour": 1.32,
         "count": 6,
         "country": "FR",
         "gpu_type": "H100",
@@ -1217,7 +1217,7 @@
     "embedding_doc_pre": "Doc",
     "gpus": [
       {
-        "cost_per_gpu_hour": 3.0,
+        "cost_per_gpu_hour": 1.32,
         "count": 6,
         "country": "FR",
         "gpu_type": "H100",

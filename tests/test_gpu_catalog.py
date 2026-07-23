@@ -1,6 +1,14 @@
 import unittest
 
-from data import GPU_CARDS, GPUS, MODELS, PREVIEW_ASSUMPTIONS
+from data import (
+    GPU_CARDS,
+    GPUS,
+    GPU_TCO_DEFAULTS,
+    GPU_TCO_PRICE_USD,
+    MODELS,
+    PREVIEW_ASSUMPTIONS,
+)
+from scenarios import deserialize_planner_state
 from state import (
     PlannerState,
     add_gpu,
@@ -13,6 +21,40 @@ from viewmodels import get_model_info
 
 
 class GPUCatalogTests(unittest.TestCase):
+    def test_every_gpu_has_researched_tco_default(self):
+        self.assertEqual(set(GPU_TCO_PRICE_USD), set(GPUS))
+        self.assertEqual(set(GPU_TCO_DEFAULTS), set(GPUS))
+        self.assertEqual(GPU_TCO_DEFAULTS["H100"], 1.32)
+        self.assertEqual(GPU_TCO_DEFAULTS["MI400"], GPU_TCO_DEFAULTS["MI455X"])
+        self.assertGreater(GPU_TCO_DEFAULTS["RUBIN_NVL72"], GPU_TCO_DEFAULTS["GB300"])
+
+        for key, gpu in GPUS.items():
+            with self.subTest(gpu=key):
+                self.assertGreater(GPU_TCO_DEFAULTS[key], 0.0)
+                self.assertEqual(gpu.default_tco_per_gpu_hour, GPU_TCO_DEFAULTS[key])
+
+    def test_new_gpu_pools_prefill_researched_tco(self):
+        state = PlannerState()
+
+        add_gpu(state, "H100", 1)
+
+        self.assertEqual(state.gpus[0].cost_per_gpu_hour, GPUS["H100"].default_tco_per_gpu_hour)
+
+    def test_scenario_import_defaults_missing_tco_but_preserves_explicit_zero(self):
+        defaulted = deserialize_planner_state({
+            "projects": [],
+            "gpus": [{"uid": 1, "gpu_type": "H100", "count": 1}],
+            "models": [],
+        })
+        suppressed = deserialize_planner_state({
+            "projects": [],
+            "gpus": [{"uid": 1, "gpu_type": "H100", "count": 1, "cost_per_gpu_hour": 0.0}],
+            "models": [],
+        })
+
+        self.assertEqual(defaulted.gpus[0].cost_per_gpu_hour, GPUS["H100"].default_tco_per_gpu_hour)
+        self.assertEqual(suppressed.gpus[0].cost_per_gpu_hour, 0.0)
+
     def test_vera_rubin_preview_profile_uses_preliminary_vendor_specs(self):
         gpu = GPUS["RUBIN_NVL72"]
         picker_keys = {

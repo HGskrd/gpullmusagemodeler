@@ -1,0 +1,35 @@
+{% set p = ep.p %}
+{% set opp = p.value_opportunity_day %}
+
+<div class="econ-card">
+  <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+    <div>
+      <h2>Value bridge — from opportunity to what is destroyed</h2>
+      <p class="econ-card-sub" style="margin-bottom:0;">The opportunity shrinks through cloud outflow and on-prem capture; what remains at the end is destroyed demand.</p>
+    </div>
+    <div class="view-toggle" data-toggle="bridge" role="group" aria-label="Bridge units">
+      <button type="button" class="on" data-view="money">$</button>
+      <button type="button" data-view="tokens">Tokens</button>
+    </div>
+  </div>
+  {% if opp > 0 %}
+  <div class="chart-box econ-chart" data-chart="bridge" style="height:300px;margin-top:8px;"></div>
+  {% else %}
+  <p class="T">No demand routed yet.</p>
+  {% endif %}
+</div>
+
+{% if p.projects %}
+<div class="econ-card">
+  <h2>Demand outcome by use case</h2>
+  <p class="econ-card-sub">Each use case's tokens split by fate — 100% stacked.</p>
+  <div class="chart-box econ-chart" data-chart="stack" style="height:{{ 90 + p.projects|length * 34 }}px;"></div>
+</div>
+{% endif %}
+
+<div class="econ-card"
+     hx-get="/econ/swaps" hx-vals='{"panel":"{{ panel }}","view":"cards"}'
+     hx-trigger="load" hx-swap="innerHTML">
+  <h2>Best model swap — same GPUs, better economics</h2>
+  <p class="T" style="margin:0;">Analyzing catalog replacements…</p>
+</div>

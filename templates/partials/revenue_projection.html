@@ -2,14 +2,18 @@
   <div style="margin-bottom:6px;">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
       <h2 id="economic-impact" style="margin:0;">Demand and economic impact</h2>
-      <button type="button"
-              class="sm"
-              onclick="copyProjectionReport(this)"
-              title="Copy a clean text report with config, demand, routing, and supply results">
-        Copy report
-      </button>
+      <div class="flex" style="gap:6px;align-items:center;">
+        <a class="T" href="{{ url_for('econ.index') }}" target="_blank" rel="noopener"
+           title="Open the full-page presentation variants of this analysis in a new tab">Full-page views ↗</a>
+        <button type="button"
+                class="sm"
+                onclick="copyProjectionReport(this)"
+                title="Copy a clean text report with config, demand, routing, and supply results">
+          Copy report
+        </button>
+      </div>
     </div>
-    <div class="T">See where demand lands: served on your GPUs, sent to cloud because capacity or model fit is insufficient, or left unserved because no option clears the price and quality gates. Reference cloud prices come from the cheapest compatible catalog model after the same gates.</div>
+    <div class="T">See where demand lands: served on your GPUs, sent to cloud because capacity or model fit is insufficient, or destroyed because no option clears the price and quality gates. Reference cloud prices come from the cheapest compatible catalog model after the same gates.</div>
     {% if CLOUD_POLICY.active %}
       <div class="T" style="margin-top:4px;">Corporate cloud policy active: {{ CLOUD_POLICY.allowed_count }}/{{ CLOUD_POLICY.total_count }} catalog models allowed{% if CLOUD_POLICY.overridden %}; negotiated prices applied to {{ CLOUD_POLICY.overridden|length }} model(s){% endif %}.</div>
     {% endif %}
@@ -17,14 +21,14 @@
 
   <div class="compare-container">
     <div class="cp">
-      {% with state=A, panel="A", label="Config A" if B else "" %}
-        {% include "partials/revenue_projection_panel.html" %}
+      {% with ep=econ_payload(A), state=A, panel="A", label="Config A" if B else "" %}
+        {% include "partials/econ/section.html" %}
       {% endwith %}
     </div>
     {% if B %}
     <div class="cp">
-      {% with state=B, panel="B", label="Config B" %}
-        {% include "partials/revenue_projection_panel.html" %}
+      {% with ep=econ_payload(B), state=B, panel="B", label="Config B" %}
+        {% include "partials/econ/section.html" %}
       {% endwith %}
     </div>
     {% endif %}

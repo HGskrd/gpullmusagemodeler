@@ -1,0 +1,81 @@
+{% set p = ep.p %}
+{% set f = ep.f %}
+{% set margin = ep.margin %}
+{% set opp = p.value_opportunity_day %}
+
+{% if opp > 0 %}
+<div class="econ-card">
+  <h2>Dollar flow — where does a day of demand value go?</h2>
+  <p class="econ-card-sub">
+    Each dollar of demand (priced at the cheapest compatible cloud model) flows to one of three ends.
+    Served value then splits into cluster-cost coverage and net margin; cloud spend splits into
+    capacity spill and model-fit leak.
+  </p>
+  <div class="chart-box econ-chart" data-chart="sankey-money" style="height:340px;"></div>
+</div>
+{% endif %}
+
+{% if f.total_tokens > 0 %}
+<div class="econ-card">
+  <h2>Token flow — the same day in tokens</h2>
+  <p class="econ-card-sub">
+    Physical routing of {{ f.total_tokens|fmt_num }} tokens/day. Served tokens fan out to the
+    deployed models that actually delivered them (useful tokens, project perspective).
+  </p>
+  <div class="chart-box econ-chart" data-chart="sankey-tokens" style="height:340px;"></div>
+
+  <div class="fate-bar-wrap" style="margin-top:14px;">
+    <div class="fate-bar" role="img" aria-label="Demand outcome by tokens">
+      {% if f.served_pct > 0 %}<div class="fate-seg served" style="flex:{{ f.served_pct }};" title="Served on your GPUs · {{ f.served_tokens|fmt_num }} tok/day">{% if f.served_pct >= 8 %}Served {{ f.served_pct|round(0)|int }}%{% endif %}</div>{% endif %}
+      {% if f.spilled_pct > 0 %}<div class="fate-seg spilled" style="flex:{{ f.spilled_pct }};" title="Capacity saturated · {{ f.spilled_tokens|fmt_num }} tok/day">{% if f.spilled_pct >= 8 %}Spilled {{ f.spilled_pct|round(0)|int }}%{% endif %}</div>{% endif %}
+      {% if f.leaked_pct > 0 %}<div class="fate-seg leaked" style="flex:{{ f.leaked_pct }};" title="No compatible or affordable model · {{ f.leaked_tokens|fmt_num }} tok/day">{% if f.leaked_pct >= 8 %}Leaked {{ f.leaked_pct|round(0)|int }}%{% endif %}</div>{% endif %}
+      {% if f.destroyed_pct > 0 %}<div class="fate-seg destroyed" style="flex:{{ f.destroyed_pct }};" title="Destroyed · {{ f.destroyed_tokens|fmt_num }} tok/day">{% if f.destroyed_pct >= 8 %}Destroyed {{ f.destroyed_pct|round(0)|int }}%{% endif %}</div>{% endif %}
+    </div>
+    <div class="fate-legend">
+      <span><i class="sw served"></i> Served on your GPUs</span>
+      <span><i class="sw spilled"></i> Spilled — right model, not enough GPUs</span>
+      <span><i class="sw leaked"></i> Leaked — wrong or no model / priced out</span>
+      <span><i class="sw destroyed"></i> Destroyed — work shelved, no option within the price ceiling</span>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if opp <= 0 and f.total_tokens <= 0 %}
+<div class="econ-card"><p class="T" style="margin:0;">No demand routed yet — add use cases with demand &gt; 0 in the calculator.</p></div>
+{% endif %}
+
+{% if p.projects %}
+<div class="econ-card">
+  <h2>Per use case</h2>
+  <p class="econ-card-sub">Where each workload's daily value lands. Click a column to sort; click again to reverse.</p>
+  <div class="table-scroll" tabindex="0">
+  <table class="projection-table sortable-table">
+    <thead>
+      <tr>
+        <th data-col="0" data-type="text">Use case</th>
+        <th data-col="1" data-type="num">Demand</th>
+        <th data-col="2" data-type="num">Served</th>
+        <th data-col="3" data-type="num">To cloud</th>
+        <th data-col="4" data-type="num">Destroyed</th>
+        <th data-col="5" data-type="num">Value served</th>
+        <th data-col="6" data-type="num">Value lost</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in p.projects %}
+      <tr>
+        <td data-v="{{ row.name }}">{{ row.name }}</td>
+        <td data-v="{{ row.tokens_day }}">{{ row.tokens_day|fmt_num }} tok</td>
+        <td data-v="{{ row.served_pct }}" class="{{ 'good' if row.served_pct >= 99.5 else '' }}">{{ row.served_pct|round(0)|int }}%</td>
+        <td data-v="{{ row.spilled_pct + row.leaked_pct }}" class="{{ 'warn' if (row.spilled_pct + row.leaked_pct) > 0 else 'muted' }}">{{ (row.spilled_pct + row.leaked_pct)|round(0)|int }}%</td>
+        <td data-v="{{ row.destroyed_pct }}" class="{{ 'bad' if row.destroyed_pct > 0 else 'muted' }}">{{ row.destroyed_pct|round(0)|int }}%</td>
+        <td data-v="{{ row.value_served }}">{{ row.value_served|fmt_money }}/day</td>
+        <td data-v="{{ row.value_spilled + row.value_leaked + row.value_destroyed }}" class="{{ 'bad' if row.value_spilled + row.value_leaked + row.value_destroyed > 0 else 'muted' }}">{{ (row.value_spilled + row.value_leaked + row.value_destroyed)|fmt_money }}/day</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}

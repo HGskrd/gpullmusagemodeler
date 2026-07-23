@@ -29,6 +29,7 @@ from data import (
     PROJECT_PRESETS,
     MODEL_CAPABILITIES,
     CAPABILITY_LABELS,
+    QUALITY_DOMAIN_LABELS,
     SCALE_MODELS,
     COUNTRIES,
     CARBON_INTENSITY_HOURLY,
@@ -47,6 +48,7 @@ from data import (
     quality_to_aa_intelligence,
 )
 import cloud_policy
+from econ_variants import econ_bp, econ_payload
 
 from calc import (
     avg_dist,
@@ -206,6 +208,7 @@ def _enforce_single_worker() -> None:
 _enforce_single_worker()
 
 app = Flask(__name__)
+app.register_blueprint(econ_bp)
 # Only trust X-Forwarded-* when PLANNER_BEHIND_PROXY=true, i.e. when a reverse
 # proxy sets/overwrites those headers. Otherwise clients could spoof their IP
 # to evade the per-IP rate limits.
@@ -602,6 +605,7 @@ def _template_context() -> dict:
         "PROJECT_PRESETS": PROJECT_PRESETS,
         "MODEL_CAPABILITIES": MODEL_CAPABILITIES,
         "CAPABILITY_LABELS": CAPABILITY_LABELS,
+        "QUALITY_DOMAIN_LABELS": QUALITY_DOMAIN_LABELS,
         "SCALE_MODELS": SCALE_MODELS,
         "COUNTRIES": COUNTRIES,
         "VISIBLE_PLOT_MODES": VISIBLE_PLOT_MODES,
@@ -624,6 +628,7 @@ def _template_context() -> dict:
         "get_model_info": get_model_info,
         "get_model_infos": get_model_infos,
         "compute_revenue_projection": compute_revenue_projection,
+        "econ_payload": econ_payload,
         "valid_strategies": valid_strategies,
         "effective_prefill_length": effective_prefill_length,
         "strategy_label": strategy_label,
@@ -840,7 +845,8 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
                 f"{_fmt_pct(row['destroyed_pct'])} destroyed"
             )
             lines.append(
-                f"- {proj.name}: AA difficulty index {quality_to_aa_intelligence(proj.difficulty):.1f}, SLO {round(row['min_success_rate'] * 100)}%, "
+                f"- {proj.name}: {row.get('quality_domain_label', 'General')} quality domain, "
+                f"AA difficulty index {quality_to_aa_intelligence(proj.difficulty):.1f}, SLO {round(row['min_success_rate'] * 100)}%, "
                 f"floor Q {row.get('quality_floor', 0.0):.2f}, "
                 f"empirical prefix reuse {row['prefix_hit_rate'] * 100:.0f}%, "
                 f"WTP ${proj.wtp_per_m:.2f}/M; {cloud}; {fate}."
@@ -993,7 +999,7 @@ def use_case_definition_set():
             set_use_case_def_field(s, key, "scale_token_multiplier", float(raw_value or 0.0))
         elif field_name in {"scale_max", "scale_step"}:
             set_use_case_def_field(s, key, field_name, float(raw_value or 0.0))
-        elif field_name in {"name", "scale_hint", "scale_model", "scale_label", "scale_unit", "scale_formula", "in_pre", "out_pre"}:
+        elif field_name in {"name", "scale_hint", "scale_model", "scale_label", "scale_unit", "scale_formula", "quality_domain", "in_pre", "out_pre"}:
             set_use_case_def_field(s, key, field_name, raw_value)
         elif field_name in {"tokens_day", "wtp_per_m", "difficulty", "min_success_rate", "quality_floor", "latent_jobs_day", "unlock_price_per_m"}:
             set_use_case_def_field(s, key, field_name, float(raw_value or 0.0))

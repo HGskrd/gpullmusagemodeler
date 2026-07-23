@@ -135,6 +135,19 @@
       </span>
     </div>
 
+    <div class="def-row" title="Benchmark family used for model-fit and model-swap quality. Models without an anchor in this domain fall back to their global quality.">
+      <span class="T">Quality domain</span>
+      <select name="value" class="sm" aria-label="Quality domain for {{ preset.name }}"
+              hx-post="/use-cases/definition/set"
+              hx-target="#useCaseLibrary"
+              hx-trigger="change"
+              hx-vals='{"key":"{{ key }}","field":"quality_domain"}'>
+        {% for domain_key, domain_label in QUALITY_DOMAIN_LABELS.items() %}
+        <option value="{{ domain_key }}" {{ 'selected' if preset.quality_domain == domain_key else '' }}>{{ domain_label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
     <div class="pc-row" title="Success-rate floor required for eligible models.">
       <span class="T">Quality SLO</span>
       <span class="val">

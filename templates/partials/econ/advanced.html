@@ -1,0 +1,64 @@
+{% set p = ep.p %}
+<details class="card adv-card">
+  <summary><span class="T" style="font-weight:600;">Advanced · cloud gateway, day shape, night batching, workload</span></summary>
+  <div class="lever-grid" style="margin-top:8px;">
+    <div class="lv">
+      <label class="T" for="corpo-cloud-{{ panel }}">Corporate cloud gateway</label>
+      <select id="corpo-cloud-{{ panel }}" name="value"
+              hx-post="/projection/choice" hx-target="#main-content" hx-trigger="change"
+              hx-vals='{"panel":"{{ panel }}","key":"corpo_cloud"}'>
+        {% for key, preset in CORPO_CLOUD_PRESETS.items() %}
+        <option value="{{ key }}" {{ "selected" if state.corpo_cloud == key else "" }}>{{ preset.label }}</option>
+        {% endfor %}
+      </select>
+      {% if CLOUD_POLICY.active %}<span class="T">Policy filtered · {{ CLOUD_POLICY.allowed_count }}/{{ CLOUD_POLICY.total_count }} models allowed</span>{% endif %}
+      {% set gateway = CORPO_CLOUD_PRESETS.get(state.corpo_cloud) %}
+      {% if gateway %}
+      <div style="display:flex;flex-wrap:wrap;gap:3px;margin-top:4px;">
+        {% for model_key in gateway.models %}
+          {% if model_key in CLOUD_MODELS %}
+            {% set cloud = CLOUD_MODELS[model_key] %}
+            <span class="tag {{ 'warn' if cloud.price_source == 'override' else 'muted' }}" title="${{ cloud.in_per_m }}/M input · ${{ cloud.out_per_m }}/M output{{ ' · negotiated override' if cloud.price_source == 'override' else '' }}">
+              {{ cloud.label }}{% if cloud.price_source == 'override' %} · negotiated{% endif %}
+            </span>
+          {% endif %}
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="lv">
+      <label class="T" for="projection-day-shape-{{ panel }}">Day shape</label>
+      <select id="projection-day-shape-{{ panel }}" name="value"
+              hx-post="/projection/choice" hx-target="#main-content" hx-trigger="change"
+              hx-vals='{"panel":"{{ panel }}","key":"projection_day_shape"}'>
+        {% for key, shape in DAY_SHAPES.items() %}
+        <option value="{{ key }}" {{ "selected" if state.projection_day_shape == key else "" }}>{{ shape.label }}</option>
+        {% endfor %}
+      </select>
+      <span class="T">peak/mean {{ "%.2f"|format(p.peak_factor) }}× · effective {{ "%.2f"|format(p.peak_factor_eff) }}×</span>
+    </div>
+
+    <div class="lv" style="align-self:end;">
+      <label style="display:flex;align-items:center;gap:6px;font-size:11px;">
+        <input type="checkbox" name="value"
+               {{ "checked" if state.projection_night_batching else "" }}
+               hx-post="/projection/toggle" hx-target="#main-content" hx-trigger="change"
+               hx-vals='{"panel":"{{ panel }}","key":"projection_night_batching"}' />
+        <strong>Night batching</strong>
+      </label>
+      <span class="T">
+        Flattens peak for batch-eligible use cases.
+        {% if p.batch_share > 0 %}Currently {{ (p.batch_share * 100)|round(0)|int }}% of demand is batch-eligible.{% endif %}
+      </span>
+    </div>
+
+    <div class="lv">
+      <span class="T">Workload</span>
+      <span class="T">avg {{ p.workload_in_len|round|int }} in / {{ p.workload_out_len|round|int }} out · empirical portfolio prefix reuse {{ (state.prefix_hit_rate * 100)|round|int }}%</span>
+    </div>
+  </div>
+  <div class="T" style="margin-top:6px;">
+    Capacity honors the peak-factor: sustainable daily tokens = peak RPS × 86400 × tokens/req ÷ peak-factor. Day shape with bigger peaks shrinks usable capacity.
+  </div>
+</details>

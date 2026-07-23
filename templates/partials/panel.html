@@ -29,7 +29,7 @@
       <button class="ghost sm" aria-label="Remove {{ gpu.name }} pool" title="Remove {{ gpu.name }} pool" hx-post="/gpu/remove" hx-target="#main-content" hx-vals='{"panel":"{{ panel }}","uid":"{{ gp.uid }}"}' data-fast-remove style="color:var(--red);padding:2px 7px;">✕</button>
     </div>
     <div style="display:flex;align-items:center;gap:4px;margin-top:4px;">
-      <label class="T tip" for="gpu-cost-{{ panel }}-{{ gp.uid }}" style="white-space:nowrap;" title="Amortized total cost of ownership per GPU-hour: hardware capex spread over its useful life, plus power, cooling, datacenter, and ops.">TCO $/GPU·hr</label>
+      <label class="T tip" for="gpu-cost-{{ panel }}-{{ gp.uid }}" style="white-space:nowrap;" title="Amortized total cost of ownership per GPU-hour: hardware capex spread over its useful life, plus power, cooling, datacenter, and ops. New pools are pre-filled from the researched catalog default; edit it to match your quote, or set 0 to suppress economics.">TCO $/GPU·hr</label>
       <input id="gpu-cost-{{ panel }}-{{ gp.uid }}" type="number" min="0" max="100" step="0.01" name="value"
              style="width:72px;font-size:11px;"
              value="{{ "%.2f"|format(gp.cost_per_gpu_hour) }}"

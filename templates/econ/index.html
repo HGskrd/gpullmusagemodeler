@@ -1,0 +1,58 @@
+{% extends "econ/base.html" %}
+{% block content %}
+{% set p = ep.p %}
+{% set f = ep.f %}
+<div class="kpi-strip">
+  <div class="kpi hero">
+    <div class="k-label">Equivalent value served / day</div>
+    <div class="k-val good">{{ p.value_served_day|fmt_money }}</div>
+    <div class="k-sub">{% if p.cost_day > 0 %}margin {{ p.margin_day|fmt_money }}/day{% else %}costs not included{% endif %}</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">Active demand</div>
+    <div class="k-val">{{ f.total_tokens|fmt_num }}</div>
+    <div class="k-sub">tokens/day routed</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">Served internally</div>
+    <div class="k-val {{ 'good' if f.served_pct >= 75 else '' }}">{{ f.served_pct|round(0)|int }}%</div>
+    <div class="k-sub">{{ f.served_tokens|fmt_num }} tok on your GPUs</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">Cloud spend lost / day</div>
+    <div class="k-val {{ 'bad' if (f.spilled_pct + f.leaked_pct) >= 25 else ('warn' if (f.spilled_pct + f.leaked_pct) > 0 else '') }}">{{ p.value_cloud_day|fmt_money }}</div>
+    <div class="k-sub">{{ (f.spilled_pct + f.leaked_pct)|round(0)|int }}% of demand</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">Destroyed</div>
+    <div class="k-val {{ 'bad' if f.destroyed_pct >= 10 else ('warn' if f.destroyed_pct > 0 else '') }}">{{ f.destroyed_pct|round(0)|int }}%</div>
+    <div class="k-sub">{{ f.destroyed_tokens|fmt_num }} tok shelved</div>
+  </div>
+</div>
+
+<h2 class="section-heading">{{ variants|length }} ways to look at this projection</h2>
+<div class="variant-grid">
+  {% for slug, v in variants.items() %}
+  <a class="variant-tile" href="{{ url_for('econ.variant', slug=slug) }}">
+    <div class="v-num">VARIANT {{ loop.index }}</div>
+    <div class="v-title">{{ v.title }}</div>
+    <div class="v-desc">{{ v.desc }}</div>
+  </a>
+  {% endfor %}
+</div>
+
+<div class="econ-card" style="margin-top:12px;">
+  <h2>How to read these pages</h2>
+  <p class="T" style="margin:4px 0 0;">
+    Every variant renders the same underlying projection (your current Config A) — the same views
+    also power the calculator's Demand &amp; economic impact section, grouped into the
+    Flow / Dashboard / Brief / Fleet tabs there.
+    Demand from your use cases is routed to deployed models, and each token lands in one of
+    four fates — <strong>served</strong> on your GPUs, <strong>spilled</strong> to cloud for lack of capacity,
+    <strong>leaked</strong> to cloud for lack of a compatible/affordable model, or <strong>destroyed</strong>
+    when even cloud exceeds the willingness to pay.
+    Money figures are equivalent value priced at the cloud substitute, not booked revenue.
+    Edit the scenario in the <a href="{{ url_for('index') }}">calculator</a> and reload any variant to compare.
+  </p>
+</div>
+{% endblock %}

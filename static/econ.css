@@ -1,0 +1,150 @@
+/* Shared styles for the /econ/ presentation-variant pages. */
+
+.econ-topbar {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap; margin-bottom: 12px;
+}
+.econ-topbar h1 { margin: 0; font-size: 20px; }
+.econ-topbar .T { margin: 2px 0 0; }
+
+/* ── KPI tiles ─────────────────────────────────────────────────────────── */
+.kpi-strip {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px; margin-bottom: 12px;
+}
+.kpi {
+  background: var(--bg0); border: 1px solid var(--b1); border-radius: var(--rl);
+  padding: 10px 12px;
+}
+.kpi .k-label { font-size: 11px; color: var(--fg1); }
+.kpi .k-val {
+  font-family: var(--mono); font-size: 22px; font-weight: 600;
+  color: var(--fg0); line-height: 1.2; margin: 3px 0 1px;
+}
+.kpi .k-sub { font-size: 11px; color: var(--fg2); }
+.kpi .k-val.good { color: var(--acc2); }
+.kpi .k-val.bad { color: var(--red); }
+.kpi .k-val.warn { color: var(--amber); }
+.kpi.hero { grid-row: span 1; border-color: color-mix(in srgb, var(--acc2) 40%, var(--b1)); }
+.kpi.hero .k-val { font-size: 28px; }
+
+/* ── Section cards ─────────────────────────────────────────────────────── */
+.econ-card {
+  background: var(--bg0); border: 1px solid var(--b1); border-radius: var(--rl);
+  padding: 12px 14px; margin-bottom: 12px;
+}
+.econ-card > h2 { margin: 0 0 4px; font-size: 14px; }
+.econ-card > .econ-card-sub { margin: 0 0 8px; font-size: 11px; color: var(--fg1); }
+
+/* ── Gallery index ─────────────────────────────────────────────────────── */
+.variant-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+}
+.variant-tile {
+  display: block; background: var(--bg0); border: 1px solid var(--b1);
+  border-radius: var(--rl); padding: 14px; text-decoration: none; color: var(--fg0);
+  transition: border-color .1s, transform .1s;
+}
+.variant-tile:hover { border-color: var(--b2); transform: translateY(-1px); }
+.variant-tile .v-num {
+  font-family: var(--mono); font-size: 11px; color: var(--fg2);
+}
+.variant-tile .v-title { font-size: 15px; font-weight: 600; margin: 2px 0 4px; }
+.variant-tile .v-desc { font-size: 12px; color: var(--fg1); line-height: 1.45; }
+
+/* ── Narrative brief (variant 3) ───────────────────────────────────────── */
+.brief {
+  max-width: 880px; margin: 0 auto;
+  background: var(--bg0); border: 1px solid var(--b1); border-radius: var(--rl);
+  padding: 28px 34px; font-size: 14px; line-height: 1.65;
+}
+.brief .b-kicker {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--fg2); margin-bottom: 4px;
+}
+.brief h2 { font-size: 22px; margin: 0 0 4px; line-height: 1.3; }
+.brief .b-date { font-size: 11px; color: var(--fg2); margin-bottom: 16px; }
+.brief h3 {
+  font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--fg1); border-bottom: 1px solid var(--b1);
+  padding-bottom: 3px; margin: 20px 0 8px;
+}
+.brief p { margin: 6px 0; }
+.brief .fig { font-family: var(--mono); font-weight: 600; white-space: nowrap; }
+.brief .fig.good { color: var(--acc2); }
+.brief .fig.bad { color: var(--red); }
+.brief .fig.warn { color: var(--amber); }
+.brief ul { margin: 6px 0; padding-left: 20px; }
+.brief li { margin: 4px 0; }
+.brief .b-action {
+  border-left: 3px solid var(--acc2);
+  background: color-mix(in srgb, var(--acc2) 7%, var(--bg0));
+  padding: 8px 12px; margin: 8px 0; border-radius: 0 var(--r) var(--r) 0;
+}
+.brief .b-foot { margin-top: 20px; font-size: 11px; color: var(--fg2); }
+
+/* ── Fleet cockpit (variant 5) ─────────────────────────────────────────── */
+.fleet-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 10px;
+}
+.fleet-card {
+  border: 1px solid var(--b1); border-radius: var(--rl); padding: 10px 12px;
+  background: var(--bg0);
+}
+.fleet-card .fc-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.fleet-card .fc-name { font-weight: 600; font-size: 13px; }
+.fleet-card .fc-stats {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 2px 12px;
+  font-size: 11px; color: var(--fg1);
+}
+.fleet-card .fc-stats .v { font-family: var(--mono); color: var(--fg0); font-weight: 600; }
+.meter { height: 8px; border-radius: 4px; background: var(--bg2); border: 1px solid var(--b1); overflow: hidden; }
+.meter > div { height: 100%; }
+.meter-label {
+  display: flex; justify-content: space-between;
+  font-size: 10px; color: var(--fg2); font-family: var(--mono); margin-top: 2px;
+}
+.m-fill-ok { background: var(--acc2); }
+.m-fill-warn { background: var(--amber); }
+.m-fill-idle { background: var(--bg3); }
+.m-fill-cap { background: var(--acc); }
+.m-fill-demand { background: var(--amber); }
+
+/* Semantic fate colors on econ pages: green served → amber spill → red leak →
+   dark maroon destroyed. Scoped so the main planner page keeps its palette. */
+body.econ .fate-seg.destroyed { background: #7f1d1d; }
+body.econ .fate-legend i.sw.destroyed { background: #7f1d1d; }
+
+/* Fate bars (.fate-bar/.fate-seg/.fate-legend) come from style.css. */
+.chart-box { width: 100%; }
+
+@media (max-width: 900px) {
+  .brief { padding: 18px 16px; }
+}
+
+/* Sortable tables */
+.sortable-table th[data-col] { cursor: pointer; user-select: none; white-space: nowrap; }
+.sortable-table th[data-col]:hover { color: var(--acc); }
+.sortable-table th.sort-asc::after { content: ' ▲'; font-size: 9px; }
+.sortable-table th.sort-desc::after { content: ' ▼'; font-size: 9px; }
+
+/* View toggle (bridge units, swap table views) */
+.view-toggle { display: inline-flex; border: 1px solid var(--b1); border-radius: var(--r); overflow: hidden; }
+.view-toggle button {
+  border: none; border-radius: 0; background: var(--bg2);
+  padding: 3px 10px; font-size: 11px; color: var(--fg0); cursor: pointer;
+}
+.view-toggle button + button { border-left: 1px solid var(--b1); }
+.view-toggle button.on { background: var(--fg0); color: var(--bg0); }
+
+/* Economics section tabs */
+.econ-tabbar { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 10px; }
+.econ-tab-btn {
+  background: var(--bg2); border: 1px solid var(--b1); border-radius: var(--r);
+  padding: 3px 10px; color: var(--fg0); cursor: pointer;
+  white-space: nowrap; font-size: 12px;
+}
+.econ-tab-btn:hover { background: var(--bg3); }
+.econ-tab-btn.on { background: var(--fg0); color: var(--bg0); border-color: var(--fg0); }

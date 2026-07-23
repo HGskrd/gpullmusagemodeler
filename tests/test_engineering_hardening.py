@@ -228,14 +228,19 @@ class EngineeringHardeningTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
         self.assertIn("Cloud spend lost / day", html)
-        self.assertIn("paid to cloud (lost from on-prem)", html)
+        # The KPI tile and the per-use-case table both surface the cloud outflow.
+        from calc import compute_revenue_projection
+        projection = compute_revenue_projection(state)
+        self.assertGreater(projection["value_cloud_day"], 0)
+        self.assertIn(app_module.fmt_money(projection["value_cloud_day"]), html)
+        self.assertIn("To cloud", html)
 
     def test_unserved_sublabel_is_neutral_without_demand(self):
         self.client.post("/session/reset", data={"tab_id": self.tab_id}, headers=self.headers)
         response = self.client.get("/", headers=self.headers)
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
-        self.assertIn("no demand routed yet", html)
+        self.assertIn("No demand routed yet", html)
         self.assertNotIn("no compatible option within the price ceiling", html)
 
 

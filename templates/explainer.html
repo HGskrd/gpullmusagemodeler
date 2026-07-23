@@ -176,9 +176,11 @@
   <h3>TCO $/GPU·hr</h3>
   <p>
     Amortized total cost of ownership per GPU-hour: hardware capex spread over its useful life,
-    plus power, cooling, datacenter, and ops. When set (non-zero), it powers the daily cluster
-    cost and the <em>revenue multiple / margin</em> readout in the internal-market panel. Leave it at 0
-    and those readouts are suppressed.
+    plus power, cooling, datacenter, and ops. New pools are pre-filled from the researched
+    four-year catalog default (board prices include host/network allocation; complete systems
+    use their system price). Edit it to match your actual quote or internal chargeback rate.
+    When set (non-zero), it powers the daily cluster cost and the <em>revenue multiple / margin</em>
+    readout in the internal-market panel. Leave it at 0 and those readouts are suppressed.
   </p>
 
   <h3>Memory cap</h3>
@@ -402,7 +404,10 @@
       models cost more without pretending the fixed prompt grew too.</dd>
     <dt>Difficulty</dt><dd>Calibration input displayed on the AA Intelligence Index scale and
       converted to the internal quality axis. It is paired with each model's benchmark-anchored
-      <em>quality</em> via <code>success_rate(quality, difficulty)</code> to decide eligibility;
+      <em>quality</em> via <code>success_rate(quality, difficulty)</code> to decide eligibility.
+      Each use case selects a general, coding, reasoning, long-context, multilingual, or
+      vision benchmark domain. A sourced model-domain anchor is used when available;
+      otherwise the model's global quality is retained exactly;
       it is not an Elo rating or a claim that the benchmark directly measures your workload.</dd>
     <dt>Quality SLO</dt><dd>Floor on <code>success_rate</code>. Candidate models below this are
       rejected. The card derives a <em>Needs model quality ≥ q</em> line inline — invert

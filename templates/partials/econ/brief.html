@@ -1,0 +1,107 @@
+{% set p = ep.p %}
+{% set f = ep.f %}
+{% set aa = ep.aa %}
+{% set opp = p.value_opportunity_day %}
+{% set lost = p.value_lost_day %}
+
+<div class="brief">
+  <div class="b-kicker">Demand &amp; economics brief{% if label %} · {{ label }}{% endif %}</div>
+  <h2>
+    {% if f.total_tokens <= 0 %}
+      No demand routed yet
+    {% elif lost <= 0 %}
+      Every token of demand is served on-prem — {{ p.value_served_day|fmt_money }}/day of equivalent value captured
+    {% else %}
+      {{ f.served_pct|round(0)|int }}% of demand stays on-prem; {{ lost|fmt_money }}/day escapes to cloud or is destroyed
+    {% endif %}
+  </h2>
+  <div class="b-date">{{ p.day_shape_label }} day shape · gateway preset “{{ p.corpo_cloud_label }}”</div>
+
+  <h3>The situation</h3>
+  {% if f.total_tokens <= 0 %}
+    <p>No use case carries demand yet. Add use cases with demand above zero in the calculator and this brief will describe the routed market.</p>
+  {% else %}
+  <p>
+    The platform sees <span class="fig">{{ f.total_tokens|fmt_num }} tokens/day</span> of active demand
+    ({{ p.baseline_tokens_day|fmt_num }} baseline + {{ p.latent_active_tokens_day|fmt_num }} activated latent demand)
+    across <span class="fig">{{ p.projects|length }}</span> use case{{ 's' if p.projects|length != 1 }}.
+    Priced at the cheapest compatible cloud substitute, that demand is worth
+    <span class="fig">{{ opp|fmt_money }}/day</span> in equivalent value.
+  </p>
+  <p>
+    Of that, <span class="fig good">{{ p.value_served_day|fmt_money }}/day</span>
+    ({{ (p.value_capture_rate * 100)|round(0)|int }}% of opportunity, {{ f.served_tokens|fmt_num }} tokens)
+    is served on your GPUs.
+    {% if p.value_cloud_day > 0 %}
+    <span class="fig warn">{{ p.value_cloud_day|fmt_money }}/day</span> leaves as cloud invoice spend
+    ({{ f.spilled_pct|round(0)|int }}% spilled because capacity is saturated,
+    {{ f.leaked_pct|round(0)|int }}% leaked because no compatible or affordable model is deployed).
+    {% endif %}
+    {% if p.value_destroyed_day > 0 %}
+    <span class="fig bad">{{ p.value_destroyed_day|fmt_money }}/day</span> is destroyed entirely —
+    even the cloud reference is above what these workloads are willing to pay, so the work is shelved.
+    {% endif %}
+  </p>
+  {% endif %}
+
+  {% if p.cost_day > 0 and f.total_tokens > 0 %}
+  <h3>The economics</h3>
+  <p>
+    The cluster costs <span class="fig">{{ p.cost_day|fmt_money }}/day</span>
+    ({{ p.total_gpus }} GPUs, {{ p.total_gpus_used }} assigned to models),
+    which works out to <span class="fig">${{ '%.2f'|format(p.cost_per_m_served) }}/M</span> served tokens.
+    Against the equivalent value served, that is a net margin of
+    <span class="fig {{ 'good' if p.margin_day >= 0 else 'bad' }}">{{ p.margin_day|fmt_money }}/day</span>
+    — a value-to-cost multiple of <span class="fig {{ 'good' if p.revenue_multiple >= 1.5 else ('warn' if p.revenue_multiple >= 1 else 'bad') }}">{{ '%.2f'|format(p.revenue_multiple) }}×</span>.
+    Fleet time-utilization is <span class="fig">{{ (p.utilization * 100)|round(0)|int }}%</span>.
+  </p>
+  {% endif %}
+
+  {% if p.projects and f.total_tokens > 0 %}
+  <h3>What needs attention</h3>
+  <ul>
+    {% for row in p.projects %}
+      {% if row.destroyed_pct >= 50 %}
+      <li><strong>{{ row.name }}</strong> — mostly destroyed (<span class="fig bad">{{ row.destroyed_pct|round(0)|int }}%</span>).
+        {% if row.cloud_blocked %}No cloud model in the catalog meets its SLO at AA {{ '%.1f'|format(aa(row.difficulty)) }}, so unserved demand has nowhere to go.
+        {% else %}Cloud reference {{ row.cloud_label }} at ${{ '%.2f'|format(row.cloud_pm) }}/M sits above its ${{ '%.2f'|format(row.wtp_per_m) }}/M willingness to pay.{% endif %}
+        Worth <span class="fig bad">{{ row.value_destroyed|fmt_money }}/day</span> of lost work.</li>
+      {% elif row.spilled_pct >= 15 %}
+      <li><strong>{{ row.name }}</strong> — capacity-bound: <span class="fig warn">{{ row.spilled_pct|round(0)|int }}%</span> spills to cloud
+        (<span class="fig warn">{{ row.value_spilled|fmt_money }}/day</span>). Adding GPUs on the serving model directly recovers this.</li>
+      {% elif row.leaked_pct >= 15 %}
+      <li><strong>{{ row.name }}</strong> — fit problem: <span class="fig warn">{{ row.leaked_pct|round(0)|int }}%</span> leaks to cloud
+        (<span class="fig warn">{{ row.value_leaked|fmt_money }}/day</span>).
+        {% if not row.has_compatible %}No deployed model is compatible{% else %}Deployed options are priced above its ceiling{% endif %} — this is a model-selection fix, not a capacity fix.</li>
+      {% elif row.served_pct > 99.5 %}
+      <li><strong>{{ row.name }}</strong> — fully served on-prem
+        {% if row.any_suboptimal %}<span class="fig warn">via a stretched model, paying a token tax on quality</span>{% else %}at {{ row.value_served|fmt_money }}/day{% endif %}.</li>
+      {% endif %}
+      {% if row.latent_close_to_unlock %}
+      <li><strong>{{ row.name }}</strong> — latent pool near unlock: cheapest internal offer is
+        <span class="fig">${{ '%.2f'|format(row.cheapest_effective_pm) }}/M</span>, needs ≤
+        <span class="fig">${{ '%.2f'|format(row.unlock_price_per_m) }}/M</span> to activate
+        {{ row.latent_jobs_day|fmt_num }} tok/day of waiting demand.</li>
+      {% endif %}
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  <div hx-get="/econ/swaps" hx-vals='{"panel":"{{ panel }}","view":"action"}'
+       hx-trigger="load" hx-swap="innerHTML"></div>
+
+  {% if p.co2_kg_day_total > 0 %}
+  <h3>Footprint</h3>
+  <p>
+    Serving this demand emits <span class="fig">{{ '%.1f'|format(p.co2_kg_day_total) }} kg CO₂/day</span>
+    (avg <span class="fig">{{ '%.1f'|format(p.co2_g_per_task_avg * 1000) }} kg per million tasks</span>,
+    day-shape weighted at the cluster's grid intensity).
+  </p>
+  {% endif %}
+
+  <div class="b-foot">
+    Method: demand is routed highest-WTP-first to the cheapest tier-compatible deployed model at or below
+    min(WTP, cloud reference). Value figures are equivalent value priced at the cloud substitute — not booked revenue.
+    Internal cost allocates GPU-day TCO; idle pool GPUs count toward cost but not toward served-token tariffs.
+  </div>
+</div>

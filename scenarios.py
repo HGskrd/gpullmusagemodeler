@@ -16,6 +16,7 @@ from data import (
     INPUT_BUCKETS,
     MODELS,
     OUTPUT_BUCKETS,
+    normalize_quality_domain,
     normalize_gpu_count,
     normalize_precision,
 )
@@ -106,6 +107,7 @@ def _project_definition_payload(proj: Project) -> dict:
         "requires": sorted(proj.requires),
         "min_success_rate": float(proj.min_success_rate),
         "quality_floor": float(getattr(proj, "quality_floor", 0.0)),
+        "quality_domain": normalize_quality_domain(getattr(proj, "quality_domain", "general")),
         "batch_eligible": bool(proj.batch_eligible),
         "prefix_hit_rate": float(getattr(proj, "prefix_hit_rate", 0.0)),
         "unlock_price_per_m": float(proj.unlock_price_per_m),
@@ -163,6 +165,7 @@ def _project_from_payload(state: PlannerState, item: dict) -> Project:
         "requires": (),
         "min_success_rate": 0.85,
         "quality_floor": 0.0,
+        "quality_domain": "general",
         "batch_eligible": False,
         "prefix_hit_rate": 0.0,
         "latent_jobs_day": 0.0,
@@ -216,6 +219,9 @@ def _project_from_payload(state: PlannerState, item: dict) -> Project:
         quality_floor=_bounded_project_value(
             "quality_floor",
             _payload_float(definition, "quality_floor", float(base.get("quality_floor", 0.0))),
+        ),
+        quality_domain=normalize_quality_domain(
+            definition.get("quality_domain", base.get("quality_domain", "general"))
         ),
         prefix_hit_rate=min(max(
             _payload_float(definition, "prefix_hit_rate", float(base.get("prefix_hit_rate", 0.0))),
@@ -364,7 +370,13 @@ def deserialize_planner_state(payload: Any) -> PlannerState:
             country = "FR"
         state.gpus.append(GpuPool(
             new_uid, gpu_type, count,
-            _scenario_float(row, "cost_per_gpu_hour", 0.0, 0.0, 1_000_000.0),
+            _scenario_float(
+                row,
+                "cost_per_gpu_hour",
+                GPUS[gpu_type].default_tco_per_gpu_hour,
+                0.0,
+                1_000_000.0,
+            ),
             country,
         ))
 

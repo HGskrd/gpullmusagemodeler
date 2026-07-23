@@ -1,0 +1,107 @@
+{% if view == "action" %}
+  {% if swap_recs %}
+  {% set rec = swap_recs[0] %}
+  <h3>Recommended next step</h3>
+  <div class="b-action">
+    Replace <strong>{{ rec.current_name }}</strong> with <strong>{{ rec.candidate_name }}</strong> on the existing
+    {{ rec.gpu_count }}× {{ rec.gpu_name }} — no new hardware. Modeled
+    <span class="fig good">{{ rec.margin_gain_day|fmt_money }}/day</span> margin gain,
+    <span class="fig">{{ rec.cloud_reduced_day|fmt_money }}/day</span> of cloud spend avoided, and
+    <span class="fig">{{ rec.destroyed_reduced_day|fmt_money }}/day</span> of destroyed work recovered
+    (+{{ rec.served_gain_tokens|fmt_num }} tokens/day served).
+  </div>
+  {% elif gpu_recs %}
+  {% set rec = gpu_recs[0] %}
+  <h3>Recommended next step</h3>
+  <div class="b-action">
+    Add <strong>+{{ rec.added_gpus }} {{ rec.gpu_name }}</strong> to <strong>{{ rec.model_name }}</strong>:
+    modeled <span class="fig good">{{ rec.margin_gain_day|fmt_money }}/day</span> margin gain,
+    <span class="fig">{{ rec.cloud_reduced_day|fmt_money }}/day</span> of cloud spend avoided, and
+    <span class="fig">{{ rec.destroyed_reduced_day|fmt_money }}/day</span> of destroyed work recovered
+    (+{{ rec.served_gain_tokens|fmt_num }} tokens/day served).
+  </div>
+  {% endif %}
+
+{% elif view == "cards" %}
+  {% if swap_recs %}
+  <h2>Best model swap — same GPUs, better economics</h2>
+  <p class="econ-card-sub">Modeled one-for-one model replacements on the existing fleet, ranked by combined margin and avoided loss.</p>
+  <div class="variant-grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr));">
+    {% for rec in swap_recs[:3] %}
+    <div class="variant-tile" style="cursor:default;">
+      <div class="v-num">SWAP · {{ rec.gpu_count }}× {{ rec.gpu_name }}</div>
+      <div class="v-title">{{ rec.current_name }} → {{ rec.candidate_name }}</div>
+      <div class="v-desc">
+        portfolio fit {{ (rec.current_quality * 100)|round(0)|int }}% → {{ (rec.candidate_quality * 100)|round(0)|int }}%
+        ({{ rec.quality_mix }}) ·
+        <span class="{{ 'good' if rec.margin_gain_day > 0 }}">{{ rec.margin_gain_day|fmt_money }}/day margin</span>
+        · {{ rec.cloud_reduced_day|fmt_money }} cloud avoided
+        · {{ rec.destroyed_reduced_day|fmt_money }} destroyed recovered
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <h2>Best model swap — same GPUs, better economics</h2>
+  <p class="T" style="margin:0;">No replacement scores an improvement on the current configuration.</p>
+  {% endif %}
+
+{% else %}
+  {% if swap_recs %}
+  <div class="econ-card econ-swap-views">
+    <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+      <div>
+        <h2>Best model swap — same GPUs, better economics</h2>
+        <p class="econ-card-sub" style="margin-bottom:0;">Modeled one-for-one model replacements on the existing fleet, ranked by combined margin gain and avoided loss. Quality is demand/value-weighted across each configuration's domain mix; missing model-domain anchors fall back to global quality.</p>
+      </div>
+      <div class="view-toggle" data-toggle="swap" data-prefix="swap-{{ panel }}-" role="group" aria-label="Swap table view">
+        <button type="button" class="on" data-view="arrows">Before → after</button>
+        <button type="button" data-view="delta">± per cell</button>
+      </div>
+    </div>
+
+    <div class="table-scroll" tabindex="0" style="margin-top:8px;" id="swap-{{ panel }}-Arrows">
+    <table class="projection-table">
+      <thead>
+        <tr><th>Swap</th><th>On</th><th>Portfolio fit</th><th>Margin / day</th><th>Cloud spend / day</th><th>Destroyed / day</th><th>Served tok / day</th></tr>
+      </thead>
+      <tbody>
+        {% for rec in swap_recs[:3] %}
+        <tr>
+          <td>{{ rec.current_name }} → <strong>{{ rec.candidate_name }}</strong></td>
+          <td>{{ rec.gpu_count }}× {{ rec.gpu_name }}</td>
+          <td title="{{ rec.quality_mix }}; anchored coverage {{ (rec.current_anchor_share * 100)|round|int }}% → {{ (rec.candidate_anchor_share * 100)|round|int }}%">{{ (rec.current_quality * 100)|round(0)|int }}% → {{ (rec.candidate_quality * 100)|round(0)|int }}%</td>
+          <td>{{ rec.margin_before_day|fmt_money }} → <span class="{{ 'good' if rec.margin_after_day > rec.margin_before_day else ('bad' if rec.margin_after_day < rec.margin_before_day else '') }}">{{ rec.margin_after_day|fmt_money }}</span></td>
+          <td>{{ rec.cloud_before_day|fmt_money }} → <span class="{{ 'good' if rec.cloud_after_day < rec.cloud_before_day else ('bad' if rec.cloud_after_day > rec.cloud_before_day else '') }}">{{ rec.cloud_after_day|fmt_money }}</span></td>
+          <td>{{ rec.destroyed_before_day|fmt_money }} → <span class="{{ 'good' if rec.destroyed_after_day < rec.destroyed_before_day else ('bad' if rec.destroyed_after_day > rec.destroyed_before_day else '') }}">{{ rec.destroyed_after_day|fmt_money }}</span></td>
+          <td>{{ rec.served_before_tokens|fmt_num }} → <span class="{{ 'good' if rec.served_after_tokens > rec.served_before_tokens else '' }}">{{ rec.served_after_tokens|fmt_num }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+
+    <div class="table-scroll" tabindex="0" style="margin-top:8px;" id="swap-{{ panel }}-Delta" hidden>
+    <table class="projection-table">
+      <thead>
+        <tr><th>Swap</th><th>On</th><th>Portfolio fit</th><th>Margin / day</th><th>Cloud spend / day</th><th>Destroyed / day</th><th>Served tok / day</th></tr>
+      </thead>
+      <tbody>
+        {% for rec in swap_recs[:3] %}
+        {% set qdelta = (rec.candidate_quality - rec.current_quality) * 100 %}
+        <tr>
+          <td>{{ rec.current_name }} → <strong>{{ rec.candidate_name }}</strong></td>
+          <td>{{ rec.gpu_count }}× {{ rec.gpu_name }}</td>
+          <td class="{{ 'good' if qdelta > 0 else ('bad' if qdelta < 0 else 'muted') }}">{{ ('+' if qdelta > 0 else '') ~ qdelta|round(0)|int }} pts</td>
+          <td class="{{ 'good' if rec.margin_gain_day > 0 else ('bad' if rec.margin_gain_day < 0 else 'muted') }}">{{ ('+' if rec.margin_gain_day > 0 else '') ~ rec.margin_gain_day|fmt_money }}</td>
+          <td class="{{ 'good' if rec.cloud_reduced_day > 0 else 'muted' }}">{% if rec.cloud_reduced_day > 0 %}−{{ rec.cloud_reduced_day|fmt_money }}{% else %}±$0{% endif %}</td>
+          <td class="{{ 'good' if rec.destroyed_reduced_day > 0 else 'muted' }}">{% if rec.destroyed_reduced_day > 0 %}−{{ rec.destroyed_reduced_day|fmt_money }}{% else %}±$0{% endif %}</td>
+          <td class="{{ 'good' if rec.served_gain_tokens > 0 else 'muted' }}">{% if rec.served_gain_tokens > 0 %}+{{ rec.served_gain_tokens|fmt_num }}{% else %}±0{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+  {% endif %}
+{% endif %}
