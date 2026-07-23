@@ -12,7 +12,7 @@
     <div class="T">
       AA {{ "%.1f"|format(quality_to_aa_intelligence(proj.difficulty)) }}
       · SLO {{ (proj.min_success_rate * 100)|round|int }}%
-      · {{ QUALITY_DOMAIN_LABELS.get(proj.quality_domain, 'General') }}
+      · {{ quality_weights_label(proj.quality_weights, proj.quality_domain) }}
       · {{ proj.in_pre }}/{{ proj.out_pre }}
       · prefix reuse {{ (proj.prefix_hit_rate * 100)|round|int }}% empirical
       · needs q≥{{ "%.2f"|format(q_floor) }}

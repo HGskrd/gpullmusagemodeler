@@ -17,6 +17,7 @@ from data import (
     MODELS,
     OUTPUT_BUCKETS,
     normalize_quality_domain,
+    normalize_quality_weights,
     normalize_gpu_count,
     normalize_precision,
 )
@@ -108,6 +109,10 @@ def _project_definition_payload(proj: Project) -> dict:
         "min_success_rate": float(proj.min_success_rate),
         "quality_floor": float(getattr(proj, "quality_floor", 0.0)),
         "quality_domain": normalize_quality_domain(getattr(proj, "quality_domain", "general")),
+        "quality_weights": normalize_quality_weights(
+            getattr(proj, "quality_weights", None),
+            getattr(proj, "quality_domain", "general"),
+        ),
         "batch_eligible": bool(proj.batch_eligible),
         "prefix_hit_rate": float(getattr(proj, "prefix_hit_rate", 0.0)),
         "unlock_price_per_m": float(proj.unlock_price_per_m),
@@ -166,6 +171,7 @@ def _project_from_payload(state: PlannerState, item: dict) -> Project:
         "min_success_rate": 0.85,
         "quality_floor": 0.0,
         "quality_domain": "general",
+        "quality_weights": {"general": 1.0},
         "batch_eligible": False,
         "prefix_hit_rate": 0.0,
         "latent_jobs_day": 0.0,
@@ -222,6 +228,10 @@ def _project_from_payload(state: PlannerState, item: dict) -> Project:
         ),
         quality_domain=normalize_quality_domain(
             definition.get("quality_domain", base.get("quality_domain", "general"))
+        ),
+        quality_weights=normalize_quality_weights(
+            definition.get("quality_weights", base.get("quality_weights")),
+            definition.get("quality_domain", base.get("quality_domain", "general")),
         ),
         prefix_hit_rate=min(max(
             _payload_float(definition, "prefix_hit_rate", float(base.get("prefix_hit_rate", 0.0))),

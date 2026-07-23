@@ -30,6 +30,7 @@ from data import (
     MODEL_CAPABILITIES,
     CAPABILITY_LABELS,
     QUALITY_DOMAIN_LABELS,
+    MODEL_DOMAIN_QUALITY_ANCHORS,
     SCALE_MODELS,
     COUNTRIES,
     CARBON_INTENSITY_HOURLY,
@@ -43,6 +44,7 @@ from data import (
     gpus_by_vendor,
     required_quality,
     effective_quality,
+    quality_weights_label,
     success_rate,
     aa_intelligence_to_quality,
     quality_to_aa_intelligence,
@@ -606,6 +608,8 @@ def _template_context() -> dict:
         "MODEL_CAPABILITIES": MODEL_CAPABILITIES,
         "CAPABILITY_LABELS": CAPABILITY_LABELS,
         "QUALITY_DOMAIN_LABELS": QUALITY_DOMAIN_LABELS,
+        "MODEL_DOMAIN_QUALITY_ANCHORS": MODEL_DOMAIN_QUALITY_ANCHORS,
+        "quality_weights_label": quality_weights_label,
         "SCALE_MODELS": SCALE_MODELS,
         "COUNTRIES": COUNTRIES,
         "VISIBLE_PLOT_MODES": VISIBLE_PLOT_MODES,
@@ -693,6 +697,9 @@ def _projection_diagnostic(row: dict) -> str:
     if row["cap_blocked_for_project"]:
         caps = ", ".join(row["requires"]) or "required capabilities"
         return f"No deployed model supplies {caps}; {round(row['leaked_pct'] + row['destroyed_pct'])}% cannot be served on-prem."
+    if row.get("quality_floor_blocked_for_project"):
+        mix = row.get("quality_mix_label", row.get("quality_domain_label", "General"))
+        return f"No deployed model clears quality Q {row['quality_floor']:.2f} for {mix}."
     if row["slo_blocked_for_project"]:
         return f"No deployed model meets the {slo}% SLO at difficulty index {difficulty_index:.1f}."
     if row["served"] > 0 and row["spilled"] > 0:
@@ -845,7 +852,7 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
                 f"{_fmt_pct(row['destroyed_pct'])} destroyed"
             )
             lines.append(
-                f"- {proj.name}: {row.get('quality_domain_label', 'General')} quality domain, "
+                f"- {proj.name}: {row.get('quality_mix_label', row.get('quality_domain_label', 'General'))} quality mix, "
                 f"AA difficulty index {quality_to_aa_intelligence(proj.difficulty):.1f}, SLO {round(row['min_success_rate'] * 100)}%, "
                 f"floor Q {row.get('quality_floor', 0.0):.2f}, "
                 f"empirical prefix reuse {row['prefix_hit_rate'] * 100:.0f}%, "
@@ -989,6 +996,11 @@ def use_case_definition_set():
             set_use_case_def_field(s, key, "min_success_rate", float(raw_value or 0.0) / 100.0)
         elif field_name == "quality_floor_pct":
             set_use_case_def_field(s, key, "quality_floor", float(raw_value or 0.0) / 100.0)
+        elif field_name.startswith("quality_weight_") and field_name.endswith("_pct"):
+            domain = field_name.removeprefix("quality_weight_").removesuffix("_pct")
+            set_use_case_def_field(
+                s, key, f"quality_weight_{domain}", float(raw_value or 0.0) / 100.0
+            )
         elif field_name == "difficulty_aa_index":
             set_use_case_def_field(s, key, "difficulty", aa_intelligence_to_quality(float(raw_value or 0.0)))
         elif field_name == "difficulty_elo":  # Legacy form payloads from pre-AA-index UI.

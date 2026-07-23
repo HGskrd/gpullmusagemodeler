@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2026-07-23
+
+### Added
+
+- Added real multi-axis task-quality profiles. Built-in workloads now carry normalized domain weights (for example repository coding is 70% coding, 20% reasoning, and 10% long-context), routing uses a conservative weighted geometric blend, scenario exports preserve the vector, and the use-case editor exposes every component.
+- Added GLM-5.2 with its published 744B backbone / 40B-active planner accounting, 78-layer IndexShare DSA configuration, 1M context, native MTP, and sourced reasoning/coding evidence.
+- Added provisional, explicitly labeled SWE-Bench Pro → SWE-bench Verified-equivalent calibration for Laguna S 2.1, GLM-5.1, and GLM-5.2. The frozen overlap-cohort fit is `verified% = 40.9508834 + 0.6464964 × pro%`; raw scores and reduced confidence remain attached to each anchor.
+
+### Changed
+
+- Removed Laguna S 2.1's unsourced 95M-output-token proxy (`η=0.11`). Until a directly comparable Artificial Analysis verbosity row exists, the planner uses neutral `η=1.0` instead of allowing an unrelated family proxy to dominate fleet economics.
+- Equal-WTP workloads now route harder, more capability-constrained contracts first rather than using preset insertion order as the tie-breaker.
+- Model-fit diagnostics distinguish capability, absolute quality-floor, SLO, and capacity rejection, and projection rows expose the weighted quality components and benchmark/fallback used for each.
+
 ## 2026-07-22
 
 ### Added

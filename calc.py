@@ -37,8 +37,12 @@ from data import (
     carbon_intensity_avg,
     effective_quality,
     model_domain_anchor,
-    model_success_rate,
+    model_profile_quality,
+    model_profile_success_rate,
     normalize_quality_domain,
+    normalize_quality_weights,
+    quality_weights_label,
+    required_quality,
     QUALITY_DOMAIN_LABELS,
     success_rate,
 )
@@ -3376,15 +3380,33 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
 
     supply = _build_model_supply(state, profile, prefix_hit_rate, peak_factor_eff)
 
-    # Project routing — serve higher WTP first, so demand destruction falls on lower-value
-    # workloads when capacity is tight (realistic triage).
-    projects_sorted = sorted(projects, key=lambda p: (-float(p.wtp_per_m), p.uid))
+    # Project routing — serve higher WTP first. Within the same value tier, protect the
+    # harder/scarcer contract before easy generic work; insertion-order/UID must not let
+    # customer-service demand consume a coding model before an equally valued repository
+    # workload merely because that preset appears first.
+    projects_sorted = sorted(
+        projects,
+        key=lambda p: (
+            -float(p.wtp_per_m),
+            -required_quality(
+                float(getattr(p, "difficulty", 0.5)),
+                float(getattr(p, "min_success_rate", 0.85)),
+                quality_floor=float(getattr(p, "quality_floor", 0.0)),
+            ),
+            -len(getattr(p, "requires", frozenset()) or frozenset()),
+            p.uid,
+        ),
+    )
     routed: dict[int, dict] = {}
     for p in projects_sorted:
         difficulty = float(getattr(p, "difficulty", 0.5))
         slo = float(getattr(p, "min_success_rate", 0.85))
         quality_floor = float(getattr(p, "quality_floor", 0.0))
         quality_domain = normalize_quality_domain(getattr(p, "quality_domain", "general"))
+        quality_weights = normalize_quality_weights(
+            getattr(p, "quality_weights", None),
+            quality_domain,
+        )
         required_caps = frozenset(getattr(p, "requires", frozenset()) or frozenset())
         project_prefix_hit_rate = min(max(float(getattr(p, "prefix_hit_rate", 0.0)), 0.0), 1.0)
         project_profile = _project_workload_profile(p, profile)
@@ -3400,22 +3422,27 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
         # project needs done; token efficiency affects generated/output tokens only, so the
         # actual GPU tokens burned per useful token depends on this workload's input/output mix.
         candidates: list[dict] = []
-        cap_filtered = False
-        slo_filtered = False
+        runnable_seen = False
+        capability_compatible_seen = False
+        floor_compatible_seen = False
+        slo_compatible_seen = False
         for me in supply:
             if not me["runnable"]:
                 continue
+            runnable_seen = True
             if not (required_caps <= me["model"].capabilities):
-                cap_filtered = True
                 continue
-            project_quality = effective_quality(me["model"], quality_domain)
+            capability_compatible_seen = True
+            project_quality = model_profile_quality(me["model"], quality_weights, quality_domain)
             if project_quality + 1e-9 < quality_floor:
-                slo_filtered = True
                 continue
-            sr = model_success_rate(me["model"], difficulty, quality_domain)
+            floor_compatible_seen = True
+            sr = model_profile_success_rate(
+                me["model"], difficulty, quality_weights, quality_domain
+            )
             if sr + 1e-9 < slo:
-                slo_filtered = True
                 continue
+            slo_compatible_seen = True
             token_mult = _actual_token_multiplier(
                 me["token_efficiency"],
                 float(project_profile["in_len"]),
@@ -3557,6 +3584,8 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
             "quality_floor": quality_floor,
             "quality_domain": quality_domain,
             "quality_domain_label": QUALITY_DOMAIN_LABELS[quality_domain],
+            "quality_weights": quality_weights,
+            "quality_mix_label": quality_weights_label(quality_weights, quality_domain),
             "prefix_hit_rate": project_prefix_hit_rate,
             "value_served": value_served,
             "value_spilled": (spilled / 1e6) * value_basis,
@@ -3570,8 +3599,12 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
             "requires": sorted(required_caps),
             "min_success_rate": slo,
             "has_compatible": bool(candidates),
-            "cap_blocked_for_project": cap_filtered and not candidates,
-            "slo_blocked_for_project": slo_filtered and not candidates,
+            "cap_blocked_for_project": runnable_seen and not capability_compatible_seen,
+            "quality_floor_blocked_for_project": (
+                capability_compatible_seen and not floor_compatible_seen
+            ),
+            "slo_blocked_for_project": floor_compatible_seen and not slo_compatible_seen,
+            "capacity_blocked_for_project": slo_compatible_seen and not candidates,
             # True when *any* of the actually-serving candidates isn't a near-perfect fit
             # (success_rate < ~1.0) — used by the UI to flag "served, but via a stretched model".
             "any_suboptimal": any(sr < 0.99 for *_, sr in per_model_served),
@@ -3598,12 +3631,32 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
                     "tokens": useful_t,
                     "actual_tokens": actual_t,
                     "success_rate": sr,
-                    "effective_quality": effective_quality(me["model"], quality_domain),
-                    "quality_anchor": (
-                        model_domain_anchor(me["model"], quality_domain).benchmark
-                        if model_domain_anchor(me["model"], quality_domain) is not None
-                        else "Global quality fallback"
+                    "effective_quality": model_profile_quality(
+                        me["model"], quality_weights, quality_domain
                     ),
+                    "quality_anchor": " · ".join(
+                        (
+                            model_domain_anchor(me["model"], domain).benchmark
+                            if model_domain_anchor(me["model"], domain) is not None
+                            else f"{QUALITY_DOMAIN_LABELS[domain]} global fallback"
+                        )
+                        for domain in quality_weights
+                    ),
+                    "quality_components": [
+                        {
+                            "domain": domain,
+                            "label": QUALITY_DOMAIN_LABELS[domain],
+                            "weight": weight,
+                            "effective_quality": effective_quality(me["model"], domain),
+                            "benchmark": (
+                                model_domain_anchor(me["model"], domain).benchmark
+                                if model_domain_anchor(me["model"], domain) is not None
+                                else "Global quality fallback"
+                            ),
+                            "anchored": model_domain_anchor(me["model"], domain) is not None,
+                        }
+                        for domain, weight in quality_weights.items()
+                    ],
                     "retry_mult": 1.0 / max(sr, 1e-6),
                     "color": me["model"].color,
                 }
@@ -3851,10 +3904,16 @@ def _portfolio_domain_quality(model: Model, projects) -> tuple[float, str, float
     weights: dict[str, float] = defaultdict(float)
     for project in projects:
         domain = normalize_quality_domain(getattr(project, "quality_domain", "general"))
+        project_weights = normalize_quality_weights(
+            getattr(project, "quality_weights", None),
+            domain,
+        )
         demand = max(0.0, float(getattr(project, "tokens_day", 0.0) or 0.0))
         latent = 0.25 * max(0.0, float(getattr(project, "latent_jobs_day", 0.0) or 0.0))
         value = max(0.01, float(getattr(project, "wtp_per_m", 0.0) or 0.0))
-        weights[domain] += (demand + latent) * value
+        project_weight = (demand + latent) * value
+        for component_domain, component_weight in project_weights.items():
+            weights[component_domain] += project_weight * component_weight
     if not weights or sum(weights.values()) <= 0:
         return effective_quality(model), QUALITY_DOMAIN_LABELS["general"], 0.0
 

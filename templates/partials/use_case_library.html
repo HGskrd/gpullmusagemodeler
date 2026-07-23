@@ -135,17 +135,27 @@
       </span>
     </div>
 
-    <div class="def-row" title="Benchmark family used for model-fit and model-swap quality. Models without an anchor in this domain fall back to their global quality.">
-      <span class="T">Quality domain</span>
-      <select name="value" class="sm" aria-label="Quality domain for {{ preset.name }}"
-              hx-post="/use-cases/definition/set"
-              hx-target="#useCaseLibrary"
-              hx-trigger="change"
-              hx-vals='{"key":"{{ key }}","field":"quality_domain"}'>
-        {% for domain_key, domain_label in QUALITY_DOMAIN_LABELS.items() %}
-        <option value="{{ domain_key }}" {{ 'selected' if preset.quality_domain == domain_key else '' }}>{{ domain_label }}</option>
-        {% endfor %}
-      </select>
+    <div class="def-row" title="Weighted model-fit vector. Each benchmark family is calibrated independently before the weighted geometric blend; missing model anchors use conservative global quality.">
+      <span class="T">Quality mix</span>
+      <span class="T">{{ quality_weights_label(preset.quality_weights, preset.quality_domain) }}</span>
+    </div>
+    <div class="def-grid">
+      {% for domain_key, domain_label in QUALITY_DOMAIN_LABELS.items() %}
+      <label class="pc-row">
+        <span class="T">{{ domain_label }}</span>
+        <span class="val">
+          <input type="text" class="val-input" inputmode="numeric"
+                 aria-label="{{ domain_label }} quality weight percent for {{ preset.name }}"
+                 value="{{ ((preset.quality_weights.get(domain_key, 0.0)) * 100)|round|int }}"
+                 name="value"
+                 hx-post="/use-cases/definition/set"
+                 hx-target="#useCaseLibrary"
+                 hx-trigger="change, keyup[key=='Enter']"
+                 hx-vals='{"key":"{{ key }}","field":"quality_weight_{{ domain_key }}_pct"}' />
+          <span class="T">%</span>
+        </span>
+      </label>
+      {% endfor %}
     </div>
 
     <div class="pc-row" title="Success-rate floor required for eligible models.">

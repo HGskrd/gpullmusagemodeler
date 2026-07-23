@@ -13,7 +13,8 @@ from data import (
     GPU,
     Model,
     effective_quality,
-    model_success_rate,
+    model_profile_quality,
+    model_profile_success_rate,
     required_quality,
 )
 from calc import (
@@ -322,10 +323,11 @@ def _model_serves_project(model: Model, project: Project) -> bool:
     if getattr(model, "is_realtime_only", False) or getattr(model, "embedding_profile", None) is not None:
         return False
     domain = getattr(project, "quality_domain", "general")
+    weights = getattr(project, "quality_weights", None)
     return (
         project.requires <= model.capabilities
-        and effective_quality(model, domain) + 1e-9 >= float(getattr(project, "quality_floor", 0.0))
-        and model_success_rate(model, project.difficulty, domain) >= project.min_success_rate
+        and model_profile_quality(model, weights, domain) + 1e-9 >= float(getattr(project, "quality_floor", 0.0))
+        and model_profile_success_rate(model, project.difficulty, weights, domain) + 1e-9 >= project.min_success_rate
     )
 
 
@@ -387,7 +389,12 @@ def _auto_model_value(model: Model, projects: list[Project]) -> float:
     for project in projects:
         if not _model_serves_project(model, project):
             continue
-        sr = model_success_rate(model, project.difficulty, getattr(project, "quality_domain", "general"))
+        sr = model_profile_success_rate(
+            model,
+            project.difficulty,
+            getattr(project, "quality_weights", None),
+            getattr(project, "quality_domain", "general"),
+        )
         value += _active_project_demand(project) * max(0.0, float(project.wtp_per_m or 0.0)) * sr
     return value
 
@@ -406,8 +413,11 @@ def _auto_weighted_success(model: Model, projects: list[Project]) -> float:
     if total <= 0:
         return 0.0
     return sum(
-        _active_project_demand(project) * model_success_rate(
-            model, project.difficulty, getattr(project, "quality_domain", "general")
+        _active_project_demand(project) * model_profile_success_rate(
+            model,
+            project.difficulty,
+            getattr(project, "quality_weights", None),
+            getattr(project, "quality_domain", "general"),
         )
         for project in served
     ) / total
@@ -418,8 +428,11 @@ def _auto_quality_margin(model: Model, projects: list[Project]) -> float:
     if not served:
         return 0.0
     return min(
-        model_success_rate(
-            model, project.difficulty, getattr(project, "quality_domain", "general")
+        model_profile_success_rate(
+            model,
+            project.difficulty,
+            getattr(project, "quality_weights", None),
+            getattr(project, "quality_domain", "general"),
         ) - float(project.min_success_rate)
         for project in served
     )
@@ -433,7 +446,11 @@ def _auto_portfolio_quality(model: Model, projects: list[Project]) -> float:
     weighted = [
         (
             _active_project_demand(project) * max(0.01, float(project.wtp_per_m or 0.0)),
-            effective_quality(model, getattr(project, "quality_domain", "general")),
+            model_profile_quality(
+                model,
+                getattr(project, "quality_weights", None),
+                getattr(project, "quality_domain", "general"),
+            ),
         )
         for project in projects
     ]
