@@ -28,6 +28,7 @@ from calc import (
     model_gpu_flops,
     optimize_spec_k,
     per_tp_linear_attention_state_bytes,
+    per_replica_kv_cache_bytes,
     resolve_spec_runtime,
     spec_acceptance_len,
     spec_finite_output_tau,
@@ -72,6 +73,66 @@ class CoreCapacityMathTests(unittest.TestCase):
         convolution = 2 * ((4 * 8) / 4 + (2 * 2 * 4) / 2)
         expected = 2 * (recurrent + convolution) * 2
         self.assertEqual(per_tp_linear_attention_state_bytes(model, "bf16", 4), expected)
+
+    def test_sparse_attention_bounds_selected_tokens_and_models_indexer_work(self):
+        model = Model(
+            "sparse", "Sparse", "Test", "#000", 1, 1, False, 4, 8, 8, 16, False,
+            sparse_attention_top_k=32,
+            sparse_indexer_heads=2,
+            sparse_indexer_head_dim=4,
+            sparse_indexer_layers=2,
+        )
+        pr = 3
+        seq = 128
+        selected_attention = 4 * pr * 4 * (8 * 16) * 32
+        decode_indexer = 2 * pr * 2 * (2 * 4) * seq
+        prefill_indexer = decode_indexer * seq
+
+        self.assertEqual(
+            _decode_attention_work(model, pr, seq, 1),
+            selected_attention + decode_indexer,
+        )
+        self.assertEqual(
+            _prefill_attention_work(model, pr, seq, 1),
+            selected_attention * seq + prefill_indexer,
+        )
+
+        short_seq = 16
+        short_selected_attention = 4 * pr * 4 * (8 * 16) * short_seq
+        short_indexer = 2 * pr * 2 * (2 * 4) * short_seq
+        self.assertEqual(
+            _decode_attention_work(model, pr, short_seq, 1),
+            short_selected_attention + short_indexer,
+        )
+
+    def test_local_and_global_kv_heads_are_sharded_independently(self):
+        model = Model(
+            "split-kv", "Split KV", "Test", "#000", 1, 1, False, 2, 8, 8, 128, False,
+            local_attention_layers=1,
+            local_attention_window=10,
+            local_kv_heads=2,
+            local_kv_head_dim=64,
+            global_kv_heads=8,
+            global_head_dim=128,
+        )
+        # TP4 shards the 8-head global cache four ways, but the 2-head local
+        # cache only two ways and therefore duplicates it across two ranks.
+        global_cache = 1000 * (2 * 8 * 128) / 4
+        local_cache = 10 * (2 * 2 * 64) / 2
+        self.assertEqual(
+            per_replica_kv_cache_bytes(model, 1000, "bf16", 1, 4),
+            (global_cache + local_cache) * 2,
+        )
+
+    def test_glm52_indexshare_matches_published_long_context_flop_reduction(self):
+        glm51 = MODELS["glm51"]
+        glm52 = MODELS["glm52"]
+        seq = 1024 * 1024
+        glm51_flops = 2 * glm51.active_params + _decode_attention_work(glm51, 1, seq, 1)
+        glm52_flops = 2 * glm52.active_params + _decode_attention_work(glm52, 1, seq, 1)
+
+        self.assertGreater(glm51_flops, glm52_flops)
+        self.assertAlmostEqual(glm51_flops / glm52_flops, 2.9, delta=0.2)
 
     def test_dense_tp_models_two_all_reduces_per_layer(self):
         model = Model("tiny", "Tiny", "Test", "#000", 1, 1, False, 4, 4, 4, 8, False)

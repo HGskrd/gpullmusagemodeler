@@ -359,12 +359,23 @@ def _kv_projection_count(m: Model) -> int:
     return 1 if m.shared_key_value else 2
 
 
+def _kv_heads_for_layer(m: Model, global_layer: bool = False) -> int:
+    if global_layer and m.global_kv_heads > 0:
+        return m.global_kv_heads
+    if not global_layer and m.local_attention_layers > 0:
+        return m.local_kv_head_count
+    return m.kv_heads
+
+
 def _kv_elems_per_layer(m: Model, global_layer: bool = False) -> int:
     if m.is_mla:
         return m.mla_kv_dim + m.mla_rope_dim
     if global_layer and m.global_kv_heads > 0:
-        heads = m.global_kv_heads
+        heads = _kv_heads_for_layer(m, global_layer=True)
         head_dim = m.global_head_dim or m.head_dim
+    elif not global_layer and m.local_attention_layers > 0:
+        heads = _kv_heads_for_layer(m, global_layer=False)
+        head_dim = m.local_kv_head_size
     else:
         heads = m.kv_heads
         head_dim = m.head_dim
@@ -438,7 +449,19 @@ def kv_cache_bytes_for_sequence(m: Model, seq_len: float, prec: str) -> float:
 def per_replica_kv_cache_bytes(m: Model, seq_len: float, prec: str, pp: int, tp: int) -> float:
     pp = max(pp, 1)
     pp_fraction = _pp_peak_fraction(m, pp)
-    token_cache = kv_cache_bytes_for_sequence(m, seq_len, prec) * pp_fraction / kv_shards(m, tp)
+    if m.is_mla:
+        token_cache = kv_cache_bytes_for_sequence(m, seq_len, prec) / kv_shards(m, tp)
+    else:
+        full_layers, local_layers = _split_attention_layers(m.kv_layer_count, m.local_attention_layers)
+        full_cache = full_layers * max(float(seq_len), 0.0) * _kv_bytes_per_layer(m, prec, global_layer=True)
+        local_cache = (
+            local_layers * _local_context_tokens(m, seq_len) * _kv_bytes_per_layer(m, prec, global_layer=False)
+        )
+        token_cache = (
+            full_cache / kv_shards_for_heads(_kv_heads_for_layer(m, global_layer=True), tp)
+            + local_cache / kv_shards_for_heads(_kv_heads_for_layer(m, global_layer=False), tp)
+        )
+    token_cache *= pp_fraction
     linear_state = per_tp_linear_attention_state_bytes(m, prec, tp) * pp_fraction
     return token_cache + linear_state
 
@@ -471,17 +494,44 @@ def _linear_attention_work(m: Model, seq_len: float) -> float:
     return layers * heads * head_dim * head_dim * max(seq_len, 0.0)
 
 
+def _sparse_attention_context(m: Model, seq_len: float) -> float:
+    seq = max(seq_len, 0.0)
+    top_k = max(int(m.sparse_attention_top_k), 0)
+    return min(seq, float(top_k)) if top_k > 0 else seq
+
+
+def _sparse_indexer_work(m: Model, pr: int, seq_len: float, *, prefill: bool) -> float:
+    """Closed-form DSA indexer work under the estimator's attention conventions.
+
+    The lightweight indexer performs one QK-style dot product over the available
+    context. During prefill all query positions run that scan; decode has one scan
+    per active sequence. IndexShare is represented by the explicit number of
+    layers that evaluate an indexer, with other layers reusing their selected KV
+    positions.
+    """
+    layers = max(int(m.sparse_indexer_layers), 0)
+    heads = max(int(m.sparse_indexer_heads), 0)
+    head_dim = max(int(m.sparse_indexer_head_dim), 0)
+    if layers <= 0 or heads <= 0 or head_dim <= 0:
+        return 0.0
+    seq = max(seq_len, 0.0)
+    query_positions = seq if prefill else 1.0
+    # One QK matmul at two FLOPs per multiply-add.
+    return 2 * pr * layers * heads * head_dim * query_positions * seq
+
+
 def _decode_attention_work(m: Model, pr: int, avg_seq: float, pp: int) -> float:
     full_layers, local_layers = _split_attention_layers(m.attention_layer_count, m.local_attention_layers)
     full_width = m.attention_query_head_count * m.head_dim
-    local_width = m.local_attention_head_count * m.head_dim
-    full_work = full_layers * full_width * max(avg_seq, 0.0)
+    local_width = m.local_attention_head_count * m.local_attention_head_size
+    full_work = full_layers * full_width * _sparse_attention_context(m, avg_seq)
     local_work = local_layers * local_width * _local_context_tokens(m, avg_seq)
     linear_work = _linear_attention_work(m, 1.0)
     # QK and AV are each one matrix multiply (2 FLOPs per multiply-add).
     dot_product_work = 4 * pr * (full_work + local_work)
+    indexer_work = _sparse_indexer_work(m, pr, avg_seq, prefill=False)
     recurrent_work = 2 * pr * linear_work
-    return (dot_product_work + recurrent_work) * _pp_peak_fraction(m, pp)
+    return (dot_product_work + indexer_work + recurrent_work) * _pp_peak_fraction(m, pp)
 
 
 def _realtime_audio_encoder_work(profile, pr: int, pp: int) -> float:
@@ -507,13 +557,14 @@ def _prefill_attention_work(m: Model, pr: int, seq_len: int, pp: int) -> float:
     seq = max(float(seq_len), 0.0)
     full_layers, local_layers = _split_attention_layers(m.attention_layer_count, m.local_attention_layers)
     full_width = m.attention_query_head_count * m.head_dim
-    local_width = m.local_attention_head_count * m.head_dim
-    full_work = full_layers * full_width * seq * seq
+    local_width = m.local_attention_head_count * m.local_attention_head_size
+    full_work = full_layers * full_width * seq * _sparse_attention_context(m, seq)
     local_work = local_layers * local_width * seq * _local_context_tokens(m, seq)
     linear_work = _linear_attention_work(m, seq)
     dot_product_work = 4 * pr * (full_work + local_work)
+    indexer_work = _sparse_indexer_work(m, pr, seq, prefill=True)
     recurrent_work = 2 * pr * linear_work
-    return (dot_product_work + recurrent_work) * _pp_peak_fraction(m, pp)
+    return (dot_product_work + indexer_work + recurrent_work) * _pp_peak_fraction(m, pp)
 
 
 def gpu_supports_mxfp4(g: GPU) -> bool:
@@ -647,21 +698,33 @@ def tp_supported(m: Model, tp: int) -> bool:
     # we model them explicitly instead of allowing any TP because kv_heads == 1.
     if m.is_mla and not m.mla_tp_supported:
         return tp == 1
-    kv_heads = max(1, m.kv_heads)
+    kv_head_counts = {max(1, m.kv_heads)}
+    if m.global_kv_heads > 0:
+        kv_head_counts.add(m.global_kv_heads)
+    if m.local_attention_layers > 0:
+        kv_head_counts.add(m.local_kv_head_count)
+    return all(tp <= heads and heads % tp == 0 or tp > heads and tp % heads == 0 for heads in kv_head_counts)
+
+
+def kv_duplication_groups_for_heads(kv_heads: int, tp: int) -> int:
+    kv_heads = max(1, kv_heads)
     if tp <= kv_heads:
-        return m.kv_heads % tp == 0
-    return tp % kv_heads == 0
-
-
-def kv_duplication_groups(m: Model, tp: int) -> int:
-    kv_heads = max(1, m.kv_heads)
-    if not tp_supported(m, tp) or tp <= kv_heads:
         return 1
     return tp // kv_heads
 
 
+def kv_shards_for_heads(kv_heads: int, tp: int) -> int:
+    return max(1, tp // kv_duplication_groups_for_heads(kv_heads, tp))
+
+
+def kv_duplication_groups(m: Model, tp: int) -> int:
+    if not tp_supported(m, tp):
+        return 1
+    return kv_duplication_groups_for_heads(m.kv_heads, tp)
+
+
 def kv_shards(m: Model, tp: int) -> int:
-    return max(1, tp // kv_duplication_groups(m, tp))
+    return kv_shards_for_heads(m.kv_heads, tp)
 
 
 def compute_memory(

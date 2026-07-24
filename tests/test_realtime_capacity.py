@@ -129,7 +129,6 @@ class RealtimeCapacityTests(unittest.TestCase):
             "moonshine-streaming-small",
             "moonshine-streaming-medium",
             "fun-asr-nano-2512",
-            "granite-4.0-1b-speech",
             "nvidia-parakeet-tdt-0.6b-v3",
         ]
         state = PlannerState(
@@ -171,7 +170,6 @@ class RealtimeCapacityTests(unittest.TestCase):
         for key in new_asr_models:
             self.assertIn(key, seen_keys)
 
-        self.assertFalse(next(ds for ds in datasets if ds["_modelKey"] == "granite-4.0-1b-speech")["_asrStreaming"])
         self.assertFalse(next(ds for ds in datasets if ds["_modelKey"] == "nvidia-parakeet-tdt-0.6b-v3")["_asrStreaming"])
         self.assertTrue(next(ds for ds in datasets if ds["_modelKey"] == "nvidia-nemotron-speech-streaming-0.6b")["_asrStreaming"])
         self.assertTrue(next(ds for ds in datasets if ds["_modelKey"] == "nvidia-nemotron-3.5-asr-streaming-0.6b")["_asrStreaming"])

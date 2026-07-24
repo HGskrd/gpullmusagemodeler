@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2026-07-24
+
+### Changed
+
+- Corrected GLM-5.1 to its official 78-layer MLA/DSA geometry and 202,752-token context. GLM-5.1/5.2 throughput now models top-2048 sparse attention plus full-context indexer work; GLM-5.2 evaluates 21 full indexers and reuses their selections across the remaining layers, reproducing the published approximately 2.9× 1M-context per-token FLOP reduction.
+- Completed a source-backed model-catalog audit pass. Corrected GLM 4.5–5, Qwen 3.5 MoE, Gemma 4, MiMo V2.5, Laguna M.1, Cohere North Mini Code, LFM, Nemotron, Mistral/Ministral/Devstral, Croissant, DenseOn, and Moonshine planner geometry/context values. Added separate local/global KV-head accounting so hybrid attention models shard the two cache types correctly. Audio architectures whose encoder or parallel-stream work cannot yet be represented are now explicitly labeled as conservative proxies.
+
 ## 2026-07-23
 
 ### Added

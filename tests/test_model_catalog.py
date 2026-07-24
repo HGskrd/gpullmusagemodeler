@@ -261,7 +261,10 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(north.total_params, 30e9)
         self.assertEqual(north.active_params, 3e9)
         self.assertTrue({"tools", "ctx_128k"} <= north.capabilities)
-        self.assertIn("coding MoE proxy", north.attention_label)
+        self.assertEqual(north.layers, 49)
+        self.assertEqual(north.num_heads, 32)
+        self.assertEqual(north.local_attention_layers, 36)
+        self.assertEqual(north.local_attention_window, 4096)
         self.assertAlmostEqual(north.quality, aa_intelligence_to_quality(37.0))
         self.assertAlmostEqual(north.quality_confidence, 0.45)
 
@@ -302,14 +305,14 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertTrue(model.is_moe)
         self.assertEqual(model.total_params, 225e9)
         self.assertEqual(model.active_params, 23e9)
-        self.assertEqual(model.layers, 64)
+        self.assertEqual(model.layers, 70)
         self.assertEqual(model.num_heads, 64)
         self.assertEqual(model.kv_heads, 8)
         self.assertEqual(model.head_dim, 128)
         self.assertEqual(model.hidden_size, 4096)
-        self.assertEqual(model.local_attention_layers, 48)
-        self.assertEqual(model.local_attention_window, 512)
-        self.assertIn("proxy", model.attention_label)
+        self.assertEqual(model.local_attention_layers, 0)
+        self.assertEqual(model.max_context_tokens, 262144)
+        self.assertNotIn("proxy", model.attention_label)
         self.assertTrue({"tools", "ctx_128k", "reasoning"} <= model.capabilities)
         self.assertNotIn("images", model.capabilities)
         self.assertAlmostEqual(model.quality, aa_intelligence_to_quality(44.0))
@@ -362,6 +365,27 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertAlmostEqual(model.token_efficiency, 1.0)
         self.assertAlmostEqual(model.quality_confidence, 0.5)
 
+    def test_glm51_catalog_entry_uses_official_dsa_config(self):
+        model = MODELS["glm51"]
+
+        self.assertEqual(model.name, "GLM-5.1 744B-A40B")
+        self.assertEqual(model.total_params, 744e9)
+        self.assertEqual(model.active_params, 40e9)
+        self.assertEqual(model.layers, 78)
+        self.assertEqual(model.hidden_size, 6144)
+        self.assertEqual(model.num_heads, 64)
+        self.assertEqual(model.kv_heads, 64)
+        self.assertEqual(model.head_dim, 256)
+        self.assertEqual(model.max_context_tokens, 202752)
+        self.assertTrue(model.is_mla)
+        self.assertEqual(model.mla_kv_dim, 512)
+        self.assertEqual(model.mla_rope_dim, 64)
+        self.assertEqual(model.sparse_attention_top_k, 2048)
+        self.assertEqual(model.sparse_indexer_heads, 32)
+        self.assertEqual(model.sparse_indexer_head_dim, 128)
+        self.assertEqual(model.sparse_indexer_layers, 78)
+        self.assertIn("DSA", model.attention_label)
+
     def test_glm52_catalog_entry_uses_official_long_context_config(self):
         model = MODELS["glm52"]
 
@@ -372,11 +396,38 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(model.hidden_size, 6144)
         self.assertEqual(model.num_heads, 64)
         self.assertEqual(model.kv_heads, 64)
+        self.assertEqual(model.head_dim, 256)
         self.assertEqual(model.max_context_tokens, 1024 * 1024)
         self.assertTrue(model.is_mla)
+        self.assertEqual(model.mla_kv_dim, 512)
+        self.assertEqual(model.mla_rope_dim, 64)
+        self.assertEqual(model.sparse_attention_top_k, 2048)
+        self.assertEqual(model.sparse_indexer_heads, 32)
+        self.assertEqual(model.sparse_indexer_head_dim, 128)
+        self.assertEqual(model.sparse_indexer_layers, 21)
         self.assertIn("IndexShare", model.attention_label)
         self.assertTrue({"tools", "ctx_128k", "reasoning"} <= model.capabilities)
         self.assertTrue(any(profile.method == "mtp" for profile in model.speculative_profiles))
+
+    def test_audited_hybrid_and_long_context_entries_use_published_geometry(self):
+        q397 = MODELS["q397"]
+        self.assertEqual((q397.layers, q397.hidden_size, q397.attention_layer_count), (60, 4096, 15))
+        self.assertEqual((q397.linear_attention_layer_count, q397.linear_attention_head_count), (45, 64))
+        self.assertEqual(q397.max_context_tokens, 262144)
+
+        gemma = MODELS["g26"]
+        self.assertEqual((gemma.layers, gemma.hidden_size), (30, 2816))
+        self.assertEqual((gemma.local_attention_layers, gemma.local_attention_window), (25, 1024))
+        self.assertEqual((gemma.local_kv_heads, gemma.global_kv_heads), (8, 2))
+
+        mimo = MODELS["mimo-v2.5"]
+        self.assertEqual((mimo.layers, mimo.hidden_size), (48, 4096))
+        self.assertEqual((mimo.local_attention_layers, mimo.local_attention_window), (39, 128))
+        self.assertEqual((mimo.local_kv_heads, mimo.global_kv_heads), (4, 8))
+        self.assertEqual(mimo.max_context_tokens, 1024 * 1024)
+
+        self.assertEqual(MODELS["laguna-m1"].layers, 70)
+        self.assertEqual(MODELS["denseon"].embedding_profile.max_sequence_length, 512)
 
     def test_gemma4_12b_unified_catalog_entry_uses_encoder_free_specs(self):
         model = MODELS["g12"]
@@ -625,10 +676,10 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertAlmostEqual(profile.audio_ms_per_token, 160.0)
         self.assertAlmostEqual(profile.tokens_per_second, 6.25)
         self.assertEqual(profile.audio_encoder_params, 1.2e9)
-        self.assertEqual(profile.audio_tokens_per_step, 4)
-        self.assertEqual(profile.audio_attention_layers, 32)
-        self.assertEqual(profile.audio_attention_heads, 20)
-        self.assertEqual(profile.audio_attention_head_dim, 64)
+        self.assertEqual(profile.audio_tokens_per_step, 1)
+        self.assertEqual(profile.audio_attention_layers, 16)
+        self.assertEqual(profile.audio_attention_heads, 64)
+        self.assertEqual(profile.audio_attention_head_dim, 16)
 
     def test_added_asr_catalog_entries_have_profiles(self):
         expected = {
@@ -688,7 +739,7 @@ class ModelCatalogTests(unittest.TestCase):
 
     def test_embedding_catalog_entries_cover_dense_and_late_modes(self):
         expected = {
-            "denseon": ("single", 768, 8192),
+            "denseon": ("single", 768, 512),
             "lateon": ("late", 128, 300),
             "bge-m3": ("hybrid", 1024, 8192),
             "mxbai-embed-large-v1": ("single", 1024, 512),
@@ -789,7 +840,7 @@ class ModelCatalogTests(unittest.TestCase):
         model = MODELS["denseon"]
         stats = embedding_doc_stats(model, EMBEDDING_DOC_PRESETS["Doc"], EMBEDDING_DOC_BUCKETS, "bf16")
 
-        self.assertGreater(stats.mean_seq_len, 1000)
+        self.assertLessEqual(stats.mean_seq_len, 512)
         self.assertGreaterEqual(stats.p90_seq_len, stats.p50_seq_len)
         self.assertGreater(stats.mean_output_bytes_per_input, 0)
 

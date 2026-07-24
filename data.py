@@ -424,6 +424,9 @@ class Model:
     local_attention_layers: int = 0
     local_attention_window: int = 0
     local_attention_heads: int = 0
+    local_attention_head_dim: int = 0
+    local_kv_heads: int = 0
+    local_kv_head_dim: int = 0
     global_kv_heads: int = 0
     global_head_dim: int = 0
     shared_key_value: bool = False
@@ -434,6 +437,14 @@ class Model:
     linear_attention_k_head_dim: int = 0
     linear_attention_conv_kernel: int = 0
     attention_query_heads: int = 0
+    # Sparse attention keeps a bounded set of selected KV positions but still
+    # runs a lightweight indexer over the available context. Index-sharing
+    # architectures can evaluate that indexer in fewer layers than the main
+    # attention stack and reuse the selected positions in the remaining layers.
+    sparse_attention_top_k: int = 0
+    sparse_indexer_heads: int = 0
+    sparse_indexer_head_dim: int = 0
+    sparse_indexer_layers: int = 0
     attention_label: str = ""
     capabilities_override: frozenset[str] | None = None
     realtime_profile: RealtimeProfile | None = None
@@ -498,6 +509,18 @@ class Model:
     @property
     def local_attention_head_count(self) -> int:
         return self.local_attention_heads or self.attention_query_head_count
+
+    @property
+    def local_attention_head_size(self) -> int:
+        return self.local_attention_head_dim or self.head_dim
+
+    @property
+    def local_kv_head_count(self) -> int:
+        return self.local_kv_heads or self.kv_heads
+
+    @property
+    def local_kv_head_size(self) -> int:
+        return self.local_kv_head_dim or self.local_attention_head_size
 
     @property
     def attention_query_head_count(self) -> int:
@@ -1621,12 +1644,12 @@ MIMO_V25_ASR_PROFILE = RealtimeProfile(
     target_delay_ms=1600,
     state_tokens=8192,
     source="XiaomiMiMo/MiMo-V2.5-ASR + XiaomiMiMo/MiMo-Audio-Tokenizer",
-    note="ASR stream demand approximates MiMo-Audio-Tokenizer's 25 Hz RVQ stream after the 4-frame patch grouping used by the ASR model, i.e. 6.25 audio patches/sec. The companion tokenizer is modeled as extra audio work.",
+    note="ASR stream demand uses the published four-frame patch grouping (6.25 groups/sec). The catalog records the ASR encoder's 16-layer, 64-head × 16-dim local geometry; end-to-end tokenizer/adaptor work remains a conservative proxy.",
     audio_encoder_params=1.2e9,
-    audio_tokens_per_step=4,
-    audio_attention_layers=32,
-    audio_attention_heads=20,
-    audio_attention_head_dim=64,
+    audio_tokens_per_step=1,
+    audio_attention_layers=16,
+    audio_attention_heads=64,
+    audio_attention_head_dim=16,
     audio_attention_window=25,
 )
 NEMOTRON_SPEECH_STREAMING_PROFILE = RealtimeProfile(
@@ -1681,7 +1704,7 @@ KYUTAI_STT_1B_PROFILE = RealtimeProfile(
     target_delay_ms=500,
     state_tokens=750,
     source="kyutai/stt-1b-en_fr",
-    note="Kyutai delayed-streams profile uses the published 12.5 Hz Mimi frame rate, 32 audio tokens per frame, and 0.5 s text delay.",
+    note="Kyutai delayed-streams profile uses the published 12.5 Hz Mimi frame rate, 32 audio tokens per frame, and 0.5 s text delay. Capacity remains a conservative shared-trunk proxy until parallel codebook streams and the depformer are modeled separately.",
 )
 KYUTAI_STT_2_6B_PROFILE = RealtimeProfile(
     label="Streaming ASR",
@@ -1690,7 +1713,7 @@ KYUTAI_STT_2_6B_PROFILE = RealtimeProfile(
     target_delay_ms=2500,
     state_tokens=375,
     source="kyutai/stt-2.6b-en",
-    note="Kyutai delayed-streams profile uses the published 12.5 Hz Mimi frame rate and 2.5 s text delay; the Transformers config uses a 375-token sliding window.",
+    note="Kyutai delayed-streams profile uses the published 12.5 Hz Mimi frame rate, 32 audio tokens per frame, and 2.5 s text delay; the Transformers config uses a 375-token sliding window. Capacity remains a conservative shared-trunk proxy until parallel codebook streams and the depformer are modeled separately.",
 )
 MOONSHINE_STREAMING_TINY_PROFILE = RealtimeProfile(
     label="Streaming ASR",
@@ -1726,7 +1749,7 @@ FUN_ASR_NANO_PROFILE = RealtimeProfile(
     target_delay_ms=160,
     state_tokens=8192,
     source="FunAudioLLM/Fun-ASR-Nano-2512",
-    note="Fun-ASR-Nano is published as a low-latency realtime 800M ASR model; planner timing uses a conservative 160 ms streaming tick because no comparable chunk table is published.",
+    note="Fun-ASR-Nano is published as a low-latency realtime 800M ASR model; planner timing uses a conservative 160 ms streaming tick because no comparable chunk table is published. The 50-block SenseVoice encoder/adaptor is not yet separately simulated, so this is an explicitly conservative proxy.",
 )
 GRANITE_4_1B_SPEECH_PROFILE = RealtimeProfile(
     label="Offline ASR",
@@ -2190,9 +2213,9 @@ def _lfm_text_model(
         hidden_dim=hidden_dim,
         attention_layers=attention_layers,
         attention_query_heads=num_heads,
-        attention_label=f"{conv_layers} LIV conv + {attention_layers} GQA, ctx 32k",
+        attention_label=f"{conv_layers} LIV conv + {attention_layers} GQA, ctx 128k",
         capabilities_override=capabilities,
-        max_context_tokens=32768,
+        max_context_tokens=128000,
     )
 
 
@@ -2205,9 +2228,9 @@ MODELS: dict[str, Model] = {
             label="DenseOn",
             kind="single",
             output_dim=768,
-            max_sequence_length=8192,
+            max_sequence_length=512,
             source="lightonai/DenseOn",
-            note="ModernBERT-base dense retrieval model; single-vector counterpart to LateOn.",
+            note="ModernBERT-base dense retrieval model; SentenceTransformers serving cap is 512 tokens (the backbone positional limit is higher).",
             pooling="CLS",
         ),
     ),
@@ -2541,7 +2564,11 @@ MODELS: dict[str, Model] = {
     )),
     "l70": Model("l70", "Llama 3.1 70B", "Meta", "#2B7A78", 70.6e9, 70.6e9, False, 80, 64, 8, 128, False),
 
-    "ge2": Model("ge2", "Gemma 4 E2B", "Gemma", "#5D8C3C", 2e9, 2e9, False, 26, 16, 8, 128, False, speculative_profiles=(
+    "ge2": Model("ge2", "Gemma 4 E2B", "Gemma", "#5D8C3C", 2e9, 2e9, False, 35, 8, 1, 256, False,
+        hidden_dim=1536, local_attention_layers=28, local_attention_window=512,
+        local_attention_heads=8, local_attention_head_dim=256, local_kv_heads=1,
+        local_kv_head_dim=256, global_kv_heads=1, global_head_dim=256,
+        attention_label="28 sliding 512 + 7 full attention", max_context_tokens=131072, speculative_profiles=(
         _mtp_profile(0.40, 0.08e9, 1, "https://huggingface.co/google/gemma-4-E2B-it-assistant",
                      "Gemma 4 assistant checkpoint served through vLLM's MTP path. No acceptance benchmark is published; "
                      "alpha=.40 is an explicitly conservative planning prior, not a measured result.",
@@ -2575,7 +2602,12 @@ MODELS: dict[str, Model] = {
         shared_key_value=True,
         attention_label="40 sliding 1k + 8 global p-RoPE; encoder-free image/audio projection",
     ),
-    "g26": Model("g26", "Gemma 4 26B-A4B", "Gemma", "#8AB85C", 26e9, 4e9, True, 48, 32, 8, 128, False, speculative_profiles=(
+    "g26": Model("g26", "Gemma 4 26B-A4B", "Gemma", "#8AB85C", 26e9, 4e9, True, 30, 16, 2, 512, False,
+        hidden_dim=2816, local_attention_layers=25, local_attention_window=1024,
+        local_attention_heads=16, local_attention_head_dim=256, local_kv_heads=8,
+        local_kv_head_dim=256, global_kv_heads=2, global_head_dim=512,
+        shared_key_value=True, attention_label="25 sliding 1k + 5 full p-RoPE", max_context_tokens=262144,
+        speculative_profiles=(
         _mtp_profile(0.40, 0.4e9, 1, "https://huggingface.co/google/gemma-4-26B-A4B-it-assistant",
                      "Gemma 4 assistant checkpoint served through vLLM's MTP path. No acceptance benchmark is published; "
                      "alpha=.40 is an explicitly conservative planning prior, not a measured result.",
@@ -2588,6 +2620,9 @@ MODELS: dict[str, Model] = {
         attention_layers=60,
         local_attention_layers=50,
         local_attention_window=1024,
+        local_attention_head_dim=256,
+        local_kv_heads=16,
+        local_kv_head_dim=256,
         global_kv_heads=4,
         global_head_dim=512,
         shared_key_value=True,
@@ -2802,17 +2837,29 @@ MODELS: dict[str, Model] = {
                             exact_weight_bytes=4.26e9, supported_ks=(4, 8, 16),
                             acceptance_alpha_by_k=((4, 0.8227), (8, 0.8765), (16, 0.8841))),
         )),
-    "q35": Model("q35", "Qwen 3.5 35B-A3B", "Qwen", "#7F77DD", 35e9, 3e9, True, 64, 16, 4, 128, False, speculative_profiles=(
+    "q35": Model("q35", "Qwen 3.5 35B-A3B", "Qwen", "#7F77DD", 35e9, 3e9, True, 40, 16, 2, 256, False,
+        hidden_dim=2048, attention_layers=10, linear_attention_layers=30, linear_attention_heads=32,
+        linear_attention_head_dim=128, linear_attention_k_heads=16, linear_attention_k_head_dim=128,
+        linear_attention_conv_kernel=4, attention_label="30 Gated DeltaNet + 10 full attention",
+        max_context_tokens=262144, speculative_profiles=(
         _mtp_profile(0.70, 0.1e9, 3, "https://www.lmsys.org/blog/2026-06-15-next-generation-speculative-decoding-dflash-v2/",
                      "Native MTP documented for Qwen 3.5 397B; family assumption here — no per-size acceptance published.",
                      resident_params=0.55e9),
     )),
-    "q122": Model("q122", "Qwen 3.5 122B-A10B", "Qwen", "#D85A30", 122e9, 10e9, True, 96, 32, 8, 128, False, speculative_profiles=(
+    "q122": Model("q122", "Qwen 3.5 122B-A10B", "Qwen", "#D85A30", 122e9, 10e9, True, 48, 32, 2, 256, False,
+        hidden_dim=3072, attention_layers=12, linear_attention_layers=36, linear_attention_heads=64,
+        linear_attention_head_dim=128, linear_attention_k_heads=16, linear_attention_k_head_dim=128,
+        linear_attention_conv_kernel=4, attention_label="36 Gated DeltaNet + 12 full attention",
+        max_context_tokens=262144, speculative_profiles=(
         _mtp_profile(0.70, 0.15e9, 3, "https://www.lmsys.org/blog/2026-06-15-next-generation-speculative-decoding-dflash-v2/",
                      "Native MTP documented for Qwen 3.5 397B; family assumption here — no per-size acceptance published.",
                      resident_params=1.3e9),
     )),
-    "q397": Model("q397", "Qwen 3.5 397B-A17B", "Qwen", "#A6422A", 397e9, 17e9, True, 96, 64, 8, 128, False, speculative_profiles=(
+    "q397": Model("q397", "Qwen 3.5 397B-A17B", "Qwen", "#A6422A", 397e9, 17e9, True, 60, 32, 2, 256, False,
+        hidden_dim=4096, attention_layers=15, linear_attention_layers=45, linear_attention_heads=64,
+        linear_attention_head_dim=128, linear_attention_k_heads=16, linear_attention_k_head_dim=128,
+        linear_attention_conv_kernel=4, attention_label="45 Gated DeltaNet + 15 full attention",
+        max_context_tokens=262144, speculative_profiles=(
         _mtp_profile(0.70, 0.2e9, 3, "https://www.lmsys.org/blog/2026-06-15-next-generation-speculative-decoding-dflash-v2/",
                      "Native MTP benchmarked by LMSYS/Modal (7 draft steps optimal at concurrency 1); "
                      "default k=3 is the conservative serving choice.", resident_params=4.2e9),
@@ -2821,38 +2868,71 @@ MODELS: dict[str, Model] = {
                         "beats MTP at concurrencies 1-32. Uses the exact 1B checkpoint size; alpha=.78 is a conservative cross-workload prior."),
     )),
 
-    "glm45a": Model("glm45a", "GLM-4.5-Air 106B-A12B", "GLM", "#2F7E9F", 106e9, 12e9, True, 56, 64, 8, 128, False, speculative_profiles=(
+    "glm45a": Model("glm45a", "GLM-4.5-Air 106B-A12B", "GLM", "#2F7E9F", 106e9, 12e9, True, 46, 96, 8, 128, False,
+        hidden_dim=4096, max_context_tokens=131072, speculative_profiles=(
         _mtp_profile(0.70, 0.25e9, 3, "https://arxiv.org/abs/2601.11580",
                      "GLM-4.5 ships a native MTP head. SpecDecode-Bench measured 1.3-1.8x on GLM-4.5-Air (vLLM/H100); "
                      "per-position acceptance degrades across the drafted tokens.", resident_params=1.9e9),
     )),
-    "glm45": Model("glm45", "GLM-4.5 355B-A32B", "GLM", "#2B6D8A", 355e9, 32e9, True, 62, 96, 8, 128, False, speculative_profiles=(
+    "glm45": Model("glm45", "GLM-4.5 355B-A32B", "GLM", "#2B6D8A", 355e9, 32e9, True, 92, 96, 8, 128, False,
+        hidden_dim=5120, max_context_tokens=131072, speculative_profiles=(
         _mtp_profile(0.70, 0.55e9, 3, "https://arxiv.org/abs/2601.11580",
                      "GLM-4.5 ships a native MTP head; acceptance is the GLM-4.5-Air SpecDecode-Bench assumption.", resident_params=5.8e9),
     )),
-    "glm46": Model("glm46", "GLM-4.6 357B-A32B", "GLM", "#275C75", 357e9, 32e9, True, 62, 96, 8, 128, False, speculative_profiles=(
+    "glm46": Model("glm46", "GLM-4.6 357B-A32B", "GLM", "#275C75", 357e9, 32e9, True, 92, 96, 8, 128, False,
+        hidden_dim=5120, max_context_tokens=202752, speculative_profiles=(
         _mtp_profile(0.70, 0.55e9, 3, "https://arxiv.org/abs/2601.11580",
                      "Native MTP; GLM-4.5-family acceptance assumption (no per-version measurement published).", resident_params=5.8e9),
     )),
-    "glm47": Model("glm47", "GLM-4.7 358B-A32B", "GLM", "#214A61", 358e9, 32e9, True, 62, 96, 8, 128, False, speculative_profiles=(
+    "glm47": Model("glm47", "GLM-4.7 358B-A32B", "GLM", "#214A61", 358e9, 32e9, True, 92, 96, 8, 128, False,
+        hidden_dim=5120, max_context_tokens=202752, speculative_profiles=(
         _mtp_profile(0.70, 0.55e9, 3, "https://arxiv.org/abs/2601.11580",
                      "Native MTP; GLM-4.5-family acceptance assumption (no per-version measurement published).", resident_params=5.8e9),
     )),
-    "glm47f": Model("glm47f", "GLM-4.7-Flash 31B-A3B", "GLM", "#3F93BA", 31e9, 3e9, True, 48, 32, 8, 128, False, speculative_profiles=(
+    "glm47f": Model("glm47f", "GLM-4.7-Flash 31B-A3B", "GLM", "#3F93BA", 31e9, 3e9, True, 47, 20, 20, 256, True,
+        mla_kv_dim=512, mla_rope_dim=64, mla_tp_supported=True, hidden_dim=2048,
+        attention_label="MLA · 202,752 context", max_context_tokens=202752, speculative_profiles=(
         _mtp_profile(0.70, 0.1e9, 3, "https://arxiv.org/abs/2601.11580",
                      "Native MTP; GLM-4.5-family acceptance assumption (no per-version measurement published).", resident_params=0.65e9),
     )),
-    "glm5": Model("glm5", "GLM-5 744B-A40B", "GLM", "#16354A", 744e9, 40e9, True, 72, 128, 8, 128, False, speculative_profiles=(
+    "glm5": Model("glm5", "GLM-5 744B-A40B", "GLM", "#16354A", 744e9, 40e9, True, 78, 64, 64, 256, True,
+        mla_kv_dim=512, mla_rope_dim=64, mla_tp_supported=True, hidden_dim=6144,
+        sparse_attention_top_k=2048, sparse_indexer_heads=32, sparse_indexer_head_dim=128,
+        sparse_indexer_layers=78, attention_label="DSA top-2048 · 202,752 context",
+        max_context_tokens=202752, speculative_profiles=(
         _mtp_profile(0.70, 0.6e9, 3, "https://arxiv.org/abs/2601.11580",
                      "Native MTP; GLM-4.5-family acceptance assumption (no per-version measurement published).", resident_params=10.4e9),
     )),
-    "glm51": Model("glm51", "GLM-5.1 744B-A40B", "GLM", "#0F273A", 744e9, 40e9, True, 72, 128, 8, 128, False, speculative_profiles=(
-        _mtp_profile(0.70, 0.6e9, 3, "https://arxiv.org/abs/2601.11580",
-                     "Native MTP; GLM-4.5-family acceptance assumption (no per-version measurement published).", resident_params=10.4e9),
-    )),
-    # GLM-5.2 retains the 744B backbone / ~40B active architecture and adds an MTP
-    # layer (the HF checkpoint reports 753B including auxiliary tensors). IndexShare
-    # sparse attention and the 1M context are published in the official config/card.
+    # Official GLM-5.1 config: 78-layer MLA + DSA, top-2048 indexer in every
+    # layer, and 202,752-token context. The 744B figure is the backbone; the
+    # optional MTP resident footprint is accounted for by its spec profile.
+    "glm51": Model(
+        "glm51", "GLM-5.1 744B-A40B", "GLM", "#0F273A",
+        744e9, 40e9, True, 78, 64, 64, 256, True,
+        mla_kv_dim=512,
+        mla_rope_dim=64,
+        mla_tp_supported=True,
+        hidden_dim=6144,
+        sparse_attention_top_k=2048,
+        sparse_indexer_heads=32,
+        sparse_indexer_head_dim=128,
+        sparse_indexer_layers=78,
+        attention_label="DSA top-2048 · 202,752 context",
+        max_context_tokens=202752,
+        speculative_profiles=(
+            _mtp_profile(
+                0.70, 0.6e9, 3,
+                "https://huggingface.co/zai-org/GLM-5.1",
+                "Native MTP; conservative acceptance prior because no public "
+                "per-position serving profile is available.",
+                resident_params=9.9e9,
+            ),
+        ),
+    ),
+    # GLM-5.2 retains the 744B backbone / ~40B active architecture and improves
+    # its MTP layer (the HF checkpoint reports 753B including auxiliary tensors).
+    # IndexShare sparse attention and the 1M context are published in the official
+    # config/card.
     "glm52": Model(
         "glm52", "GLM-5.2 744B-A40B", "GLM", "#091D2D",
         744e9, 40e9, True, 78, 64, 64, 256, True,
@@ -2860,7 +2940,13 @@ MODELS: dict[str, Model] = {
         mla_rope_dim=64,
         mla_tp_supported=True,
         hidden_dim=6144,
-        attention_label="IndexShare DSA · 1M context",
+        sparse_attention_top_k=2048,
+        sparse_indexer_heads=32,
+        sparse_indexer_head_dim=128,
+        # Config indexer_types contains 21 full indexers; the other 57 layers
+        # reuse the nearest full layer's selected positions.
+        sparse_indexer_layers=21,
+        attention_label="IndexShare DSA top-2048 (21/78 indexers) · 1M context",
         max_context_tokens=1024 * 1024,
         speculative_profiles=(
             _mtp_profile(
@@ -2868,7 +2954,7 @@ MODELS: dict[str, Model] = {
                 "https://huggingface.co/zai-org/GLM-5.2",
                 "Native MTP; Z.ai reports up to 20% longer acceptance than GLM-5.1. "
                 "Acceptance remains a conservative planner prior pending a vLLM profile.",
-                resident_params=9e9,
+                resident_params=9.4e9,
             ),
         ),
     ),
@@ -2951,7 +3037,8 @@ MODELS: dict[str, Model] = {
         linear_attention_k_heads=32,
         linear_attention_k_head_dim=128,
         linear_attention_conv_kernel=4,
-        attention_label="20 KDA + 7 MLA",
+        attention_label="20 KDA + 7 MLA · 1M context",
+        max_context_tokens=1_048_576,
     ),
 
     "inkling": Model(
@@ -2971,9 +3058,11 @@ MODELS: dict[str, Model] = {
         local_attention_layers=55,
         local_attention_window=512,
         local_attention_heads=64,
+        local_kv_heads=16,
+        local_kv_head_dim=128,
         global_kv_heads=8,
         global_head_dim=128,
-        attention_label="55 SWA 512 + 11 global; relative position + SConv",
+        attention_label="55 SWA 512 + 11 global; relative position + SConv; native 8-layer MTP",
         max_context_tokens=1_048_576,
     ),
     # Thinking Machines has announced the preview's size and benchmark results,
@@ -3020,6 +3109,7 @@ MODELS: dict[str, Model] = {
         local_attention_window=4096,
         local_attention_heads=128,
         attention_label="24 SWA 4k + 8 global",
+        max_context_tokens=131072,
     ),
     "command-a-03-2025": Model(
         "command-a-03-2025",
@@ -3038,6 +3128,7 @@ MODELS: dict[str, Model] = {
         local_attention_layers=60,
         local_attention_window=4096,
         attention_label="Cohere gated-config proxy, ctx 256k",
+        max_context_tokens=262144,
     ),
     "command-r7b-12-2024": Model(
         "command-r7b-12-2024",
@@ -3054,6 +3145,7 @@ MODELS: dict[str, Model] = {
         False,
         hidden_dim=4096,
         attention_label="Cohere gated-config proxy, ctx 128k",
+        max_context_tokens=131072,
     ),
     "north-mini-code-1-0": Model(
         "north-mini-code-1-0",
@@ -3063,13 +3155,17 @@ MODELS: dict[str, Model] = {
         30e9,
         3e9,
         True,
-        64,
-        16,
+        49,
+        32,
         4,
         128,
         False,
         hidden_dim=2048,
-        attention_label="Cohere coding MoE proxy, ctx 256k",
+        local_attention_layers=36,
+        local_attention_window=4096,
+        local_attention_heads=32,
+        attention_label="13 full + 36 SWA 4k",
+        max_context_tokens=262144,
     ),
     "tiny-aya-global": _tiny_aya_model(
         "tiny-aya-global",
@@ -3092,22 +3188,27 @@ MODELS: dict[str, Model] = {
         "#0369A1",
     ),
 
-    "minimax25": Model("minimax25", "MiniMax M2.5 229B-A10B", "MiniMax", "#2C6D9B", 229e9, 10e9, True, 62, 48, 8, 128, False, speculative_profiles=(
+    "minimax25": Model("minimax25", "MiniMax M2.5 229B-A10B", "MiniMax", "#2C6D9B", 229e9, 10e9, True, 62, 48, 8, 128, False,
+        hidden_dim=3072, max_context_tokens=196608, speculative_profiles=(
         _mtp_profile(0.80, 0.2e9, 2, "https://huggingface.co/MiniMaxAI",
                      "MiniMax ships an optional ~10.5 GB MTP drafter artifact (see the NVFP4 profile storage note); "
                      "resident bytes use that artifact exactly; alpha is an unmeasured planning prior.",
                      exact_weight_bytes=10.5e9, resident_params=5e9),
     )),
-    "minimax27": Model("minimax27", "MiniMax M2.7 229B-A10B", "MiniMax", "#1D5276", 229e9, 10e9, True, 62, 48, 8, 128, False, speculative_profiles=(
+    "minimax27": Model("minimax27", "MiniMax M2.7 229B-A10B", "MiniMax", "#1D5276", 229e9, 10e9, True, 62, 48, 8, 128, False,
+        hidden_dim=3072, max_context_tokens=204800, speculative_profiles=(
         _mtp_profile(0.80, 0.2e9, 2, "https://huggingface.co/MiniMaxAI",
                      "MiniMax ships an optional ~10.5 GB MTP drafter artifact (see the NVFP4 profile storage note); "
                      "resident bytes use that artifact exactly; alpha is an unmeasured planning prior.",
                      exact_weight_bytes=10.5e9, resident_params=5e9),
     )),
 
-    "nem3s": Model("nem3s", "Nemotron 3 Super 120B-A12B", "Nemotron", "#6FA7C9", 120e9, 12e9, True, 88, 32, 2, 128, False, kv_layers=8),
-    "nem3n": Model("nem3n", "Nemotron 3 Nano 30B-A3B", "Nemotron", "#98C5DE", 31.6e9, 3.2e9, True, 52, 32, 2, 128, False, kv_layers=6),
-    "nem3no": Model("nem3no", "Nemotron 3 Nano Omni 30B-A3B", "Nemotron", "#B7D5E8", 30e9, 3e9, True, 52, 32, 2, 128, False, kv_layers=6),
+    "nem3s": Model("nem3s", "Nemotron 3 Super 120B-A12B", "Nemotron", "#6FA7C9", 120e9, 12e9, True, 88, 32, 2, 128, False,
+        kv_layers=8, hidden_dim=4096, max_context_tokens=1_048_576),
+    "nem3n": Model("nem3n", "Nemotron 3 Nano 30B-A3B", "Nemotron", "#98C5DE", 31.6e9, 3.2e9, True, 52, 32, 2, 128, False,
+        kv_layers=6, hidden_dim=2688, max_context_tokens=1_048_576),
+    "nem3no": Model("nem3no", "Nemotron 3 Nano Omni 30B-A3B", "Nemotron", "#B7D5E8", 30e9, 3e9, True, 52, 32, 2, 128, False,
+        kv_layers=6, hidden_dim=2688, max_context_tokens=262144),
 
     "ds3": Model(
         "ds3",
@@ -3124,6 +3225,8 @@ MODELS: dict[str, Model] = {
         True,
         512,
         64,
+        hidden_dim=7168,
+        max_context_tokens=163840,
         bf16_weight_bytes_per_param=MIXED_NATIVE_BF16_WEIGHT_BPP,
         fp8_weight_bytes_per_param=MIXED_NATIVE_FP8_WEIGHT_BPP,
         speculative_profiles=(
@@ -3196,10 +3299,13 @@ MODELS: dict[str, Model] = {
     ),
 
     "mi7": Model("mi7", "Mistral 7B", "Mistral", "#e07020", 7e9, 7e9, False, 32, 32, 8, 128, False, max_context_tokens=32768),
-    "mx87": Model("mx87", "Mixtral 8×7B (45B-A12B)", "Mistral", "#cc6633", 45e9, 12e9, True, 32, 32, 8, 128, False, max_context_tokens=32768),
-    "cs22": Model("cs22", "Codestral 22B", "Mistral", "#d4882e", 22e9, 22e9, False, 56, 32, 8, 128, False, max_context_tokens=32768),
-    "ms24": Model("ms24", "Mistral Small 3.1 24B", "Mistral", "#b87530", 24e9, 24e9, False, 40, 32, 8, 128, False),
-    "ms32": Model("ms32", "Mistral Small 3.2 24B", "Mistral", "#C18438", 24e9, 24e9, False, 40, 32, 8, 128, False),
+    "mx87": Model("mx87", "Mixtral 8×7B (46.7B-A12.9B)", "Mistral", "#cc6633", 46.7e9, 12.9e9, True, 32, 32, 8, 128, False, max_context_tokens=32768),
+    "cs22": Model("cs22", "Codestral 22B", "Mistral", "#d4882e", 22e9, 22e9, False, 56, 48, 8, 128, False,
+        hidden_dim=6144, max_context_tokens=32768),
+    "ms24": Model("ms24", "Mistral Small 3.1 24B", "Mistral", "#b87530", 24e9, 24e9, False, 40, 32, 8, 128, False,
+        hidden_dim=5120, max_context_tokens=131072),
+    "ms32": Model("ms32", "Mistral Small 3.2 24B", "Mistral", "#C18438", 24e9, 24e9, False, 40, 32, 8, 128, False,
+        hidden_dim=5120, max_context_tokens=131072),
     "voxtral-realtime-mini-4b": Model(
         "voxtral-realtime-mini-4b",
         "Voxtral Mini Realtime 4B",
@@ -3388,9 +3494,9 @@ MODELS: dict[str, Model] = {
         34e6,
         False,
         12,
-        5,
-        5,
-        64,
+        8,
+        8,
+        40,
         False,
         hidden_dim=320,
         local_attention_layers=6,
@@ -3408,9 +3514,9 @@ MODELS: dict[str, Model] = {
         123e6,
         False,
         20,
-        10,
-        10,
-        62,
+        8,
+        8,
+        64,
         False,
         hidden_dim=620,
         local_attention_layers=10,
@@ -3428,8 +3534,8 @@ MODELS: dict[str, Model] = {
         245e6,
         False,
         28,
-        12,
-        12,
+        10,
+        10,
         64,
         False,
         hidden_dim=768,
@@ -3471,7 +3577,8 @@ MODELS: dict[str, Model] = {
         128,
         False,
         hidden_dim=2048,
-        attention_label="Offline speech LLM 128k ctx",
+        attention_label="Offline speech LLM 4k ctx · speech encoder/projection proxy",
+        max_context_tokens=4096,
         capabilities_override=frozenset(),
         realtime_profile=GRANITE_4_1B_SPEECH_PROFILE,
     ),
@@ -3514,17 +3621,25 @@ MODELS: dict[str, Model] = {
     # Mistral does not publish a parameter count for Medium 3.1; keep a hidden
     # legacy entry so older saved states continue to resolve cleanly.
     "mm31": Model("mm31", "Mistral Medium 3.1 (legacy)", "Mistral", "#AD6A2C", 24e9, 24e9, False, 40, 32, 8, 128, False, hidden=True),
-    "mistral-medium-3.5-preview": Model("mistral-medium-3.5-preview", "Mistral Medium 3.5 128B", "Mistral", "#A95F24", 128e9, 128e9, False, 88, 96, 8, 128, False),
-    "ms4": Model("ms4", "Mistral Small 4 119B-A6.5B", "Mistral", "#93511F", 119e9, 6.5e9, True, 64, 64, 8, 128, False),
-    "ml3": Model("ml3", "Mistral Large 3 675B-A41B", "Mistral", "#7A3B18", 675e9, 41e9, True, 96, 128, 8, 128, False),
+    "mistral-medium-3.5-preview": Model("mistral-medium-3.5-preview", "Mistral Medium 3.5 128B", "Mistral", "#A95F24", 128e9, 128e9, False, 88, 96, 8, 128, False,
+        attention_label="Architecture proxy · ctx 256k", max_context_tokens=262144),
+    "ms4": Model("ms4", "Mistral Small 4 119B-A6.5B", "Mistral", "#93511F", 119e9, 6.5e9, True, 64, 64, 8, 128, False,
+        attention_label="Architecture proxy · ctx 256k", max_context_tokens=262144),
+    "ml3": Model("ml3", "Mistral Large 3 675B-A41B", "Mistral", "#7A3B18", 675e9, 41e9, True, 96, 128, 8, 128, False,
+        attention_label="Architecture proxy · ctx 256k", max_context_tokens=262144),
     "ml123": Model("ml123", "Mistral Large 2 123B", "Mistral", "#994422", 123e9, 123e9, False, 88, 96, 8, 128, False),
 
-    "n3": Model("n3", "Ministral 3 3B", "Ministral", "#E2A552", 3e9, 3e9, False, 28, 24, 8, 128, False),
-    "n8": Model("n8", "Ministral 3 8B", "Ministral", "#D69343", 8e9, 8e9, False, 32, 32, 8, 128, False),
-    "n14": Model("n14", "Ministral 3 14B", "Ministral", "#CA8136", 14e9, 14e9, False, 40, 32, 8, 128, False),
+    "n3": Model("n3", "Ministral 3 3B", "Ministral", "#E2A552", 3e9, 3e9, False, 26, 32, 8, 128, False,
+        hidden_dim=3072, max_context_tokens=262144),
+    "n8": Model("n8", "Ministral 3 8B", "Ministral", "#D69343", 8e9, 8e9, False, 34, 32, 8, 128, False,
+        hidden_dim=4096, max_context_tokens=262144),
+    "n14": Model("n14", "Ministral 3 14B", "Ministral", "#CA8136", 14e9, 14e9, False, 40, 32, 8, 128, False,
+        hidden_dim=5120, max_context_tokens=262144),
 
-    "dv24": Model("dv24", "Devstral Small 2 24B", "Devstral", "#B85F59", 24e9, 24e9, False, 40, 32, 8, 128, False),
-    "dv123": Model("dv123", "Devstral 2 123B", "Devstral", "#94423E", 123e9, 123e9, False, 88, 96, 8, 128, False),
+    "dv24": Model("dv24", "Devstral Small 2 24B", "Devstral", "#B85F59", 24e9, 24e9, False, 40, 32, 8, 128, False,
+        hidden_dim=5120, max_context_tokens=393216),
+    "dv123": Model("dv123", "Devstral 2 123B", "Devstral", "#94423E", 123e9, 123e9, False, 88, 96, 8, 128, False,
+        hidden_dim=12288, max_context_tokens=262144),
 
     # ZAYA1-base/reasoning-base config: 16 physical heads, CCA attention in 8-query-head
     # latent space, 2 KV heads, and 40 attention-bearing layers.
@@ -3571,8 +3686,8 @@ MODELS: dict[str, Model] = {
         attention_label="Legacy proxy",
     ),
 
-    # Poolside has not published the Laguna M.1 config; keep the public 225B-A23B
-    # facts and use a conservative Laguna-family attention proxy for capacity math.
+    # Official Laguna M.1 config: 70 all-global MoE layers (the first three are
+    # dense), 4096 hidden width, 64 Q / 8 KV heads, and 256k context.
     "laguna-m1": Model(
         "laguna-m1",
         "Laguna M.1 225B-A23B",
@@ -3581,16 +3696,14 @@ MODELS: dict[str, Model] = {
         225e9,
         23e9,
         True,
-        64,
+        70,
         64,
         8,
         128,
         False,
         hidden_dim=4096,
-        local_attention_layers=48,
-        local_attention_window=512,
-        local_attention_heads=64,
-        attention_label="16 global + 48 SWA 512 (proxy)",
+        attention_label="70 global attention · 3 dense + 67 MoE",
+        max_context_tokens=262144,
     ),
     "laguna-xs2": Model("laguna-xs2", "Laguna XS.2 33B-A3B", "Poolside", "#0891B2", 33e9, 3e9, True, 40, 48, 8, 128, False, hidden_dim=2048, local_attention_layers=30, local_attention_window=512, local_attention_heads=64, attention_label="10 global + 30 SWA 512"),
     # Poolside states that XS 2.1 retains the XS.2 architecture.  Its public release
@@ -3611,10 +3724,21 @@ MODELS: dict[str, Model] = {
         42e9,
         True,
         70,
-        48,
-        8,
         128,
+        8,
+        192,
         False,
+        hidden_dim=6144,
+        local_attention_layers=60,
+        local_attention_window=128,
+        local_attention_heads=128,
+        local_attention_head_dim=192,
+        local_kv_heads=8,
+        local_kv_head_dim=128,
+        global_kv_heads=8,
+        global_head_dim=128,
+        attention_label="60 SWA 128 + 10 global · 1 dense + 69 MoE",
+        max_context_tokens=1_048_576,
         bf16_weight_bytes_per_param=MIXED_NATIVE_BF16_WEIGHT_BPP,
         fp8_weight_bytes_per_param=MIXED_NATIVE_FP8_WEIGHT_BPP,
         speculative_profiles=(
@@ -3645,10 +3769,21 @@ MODELS: dict[str, Model] = {
         15e9,
         True,
         48,
-        32,
+        64,
         8,
-        128,
+        192,
         False,
+        hidden_dim=4096,
+        local_attention_layers=39,
+        local_attention_window=128,
+        local_attention_heads=64,
+        local_attention_head_dim=192,
+        local_kv_heads=4,
+        local_kv_head_dim=128,
+        global_kv_heads=8,
+        global_head_dim=128,
+        attention_label="39 SWA 128 + 9 global · 1 dense + 47 MoE",
+        max_context_tokens=1_048_576,
         bf16_weight_bytes_per_param=MIXED_NATIVE_BF16_WEIGHT_BPP,
         fp8_weight_bytes_per_param=MIXED_NATIVE_FP8_WEIGHT_BPP,
         speculative_profiles=(
@@ -3663,7 +3798,8 @@ MODELS: dict[str, Model] = {
         ),
     ),
 
-    "cr13": Model("cr13", "Croissant 1.3B", "Croissant", "#dda050", 1.3e9, 1.3e9, False, 22, 16, 4, 96, False),
+    "cr13": Model("cr13", "Croissant 1.3B", "Croissant", "#dda050", 1.3e9, 1.3e9, False, 24, 16, 16, 128, False,
+        hidden_dim=2048, max_context_tokens=2048),
 }
 
 
