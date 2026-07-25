@@ -1,5 +1,7 @@
 # Changelog
 
+- Added Gemma 4 E2B, E4B, and 12B Unified as separate non-streaming multilingual ASR catalog entries while retaining their general-purpose LLM entries. The ASR profiles use Google's published 40 ms audio-token rate, 30-second input limit, E2B/E4B 305M Conformer encoder metadata, encoder-free 12B projection, and English/French FLEURS WER.
+
 All notable changes to this project will be documented in this file.
 
 ## 2026-07-24

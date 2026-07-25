@@ -118,6 +118,9 @@ class RealtimeCapacityTests(unittest.TestCase):
 
     def test_asr_quality_chart_uses_sourced_wer_points(self):
         new_asr_models = [
+            "gemma-4-e2b-asr",
+            "gemma-4-e4b-asr",
+            "gemma-4-12b-unified-asr",
             "nvidia-nemotron-speech-streaming-0.6b",
             "nvidia-nemotron-3.5-asr-streaming-0.6b",
             "nvidia-parakeet-unified-0.6b",
@@ -156,6 +159,12 @@ class RealtimeCapacityTests(unittest.TestCase):
         self.assertEqual(PUBLISHED_ASR_WER["voxtral-realtime-mini-4b"]["fr_mls"], 5.64)
         self.assertEqual(PUBLISHED_ASR_WER["mimo-v2.5-asr"]["en"], 5.73)
         self.assertNotIn("fr_covost", PUBLISHED_ASR_WER["mimo-v2.5-asr"])
+        self.assertEqual(PUBLISHED_ASR_WER["gemma-4-e2b-asr"]["en"], 8.0)
+        self.assertEqual(PUBLISHED_ASR_WER["gemma-4-e2b-asr"]["fr_fleurs"], 10.1)
+        self.assertEqual(PUBLISHED_ASR_WER["gemma-4-e4b-asr"]["en"], 6.5)
+        self.assertEqual(PUBLISHED_ASR_WER["gemma-4-e4b-asr"]["fr_fleurs"], 8.0)
+        self.assertEqual(PUBLISHED_ASR_WER["gemma-4-12b-unified-asr"]["en"], 6.3)
+        self.assertEqual(PUBLISHED_ASR_WER["gemma-4-12b-unified-asr"]["fr_fleurs"], 8.1)
         self.assertEqual(PUBLISHED_ASR_WER["nvidia-nemotron-3.5-asr-streaming-0.6b"]["en"], 7.99)
         self.assertEqual(PUBLISHED_ASR_WER["nvidia-nemotron-3.5-asr-streaming-0.6b"]["fr_fleurs"], 9.45)
         self.assertEqual(PUBLISHED_ASR_WER["nvidia-parakeet-tdt-0.6b-v3"]["fr_covost"], 6.38)
