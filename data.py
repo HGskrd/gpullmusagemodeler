@@ -1,7 +1,7 @@
 """GPU, model, and distribution data definitions."""
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 
 FP8_SPEEDUP_DEFAULT = 1.4
@@ -1652,6 +1652,36 @@ MIMO_V25_ASR_PROFILE = RealtimeProfile(
     audio_attention_head_dim=16,
     audio_attention_window=25,
 )
+GEMMA_4_E2B_ASR_PROFILE = RealtimeProfile(
+    label="Offline Multilingual ASR",
+    tokens_per_second=25.0,
+    audio_ms_per_token=40.0,
+    target_delay_ms=30000,
+    state_tokens=750,
+    source="google/gemma-4-E2B-it + Gemma 4 Technical Report",
+    note="Gemma 4 accepts up to 30 seconds of audio as 750 40 ms tokens. E2B uses Google's frozen 305M-parameter USM-style encoder with two downsampling convolutions and 12 Conformer layers; offline capacity remains a conservative one-audio-token-per-planner-step proxy.",
+    audio_encoder_params=305e6,
+    audio_attention_layers=12,
+    audio_attention_heads=8,
+    audio_attention_head_dim=128,
+    audio_attention_window=13,
+    streaming=False,
+)
+GEMMA_4_E4B_ASR_PROFILE = replace(
+    GEMMA_4_E2B_ASR_PROFILE,
+    source="google/gemma-4-E4B-it + Gemma 4 Technical Report",
+    note="Gemma 4 accepts up to 30 seconds of audio as 750 40 ms tokens. E4B uses Google's frozen 305M-parameter USM-style encoder with two downsampling convolutions and 12 Conformer layers; offline capacity remains a conservative one-audio-token-per-planner-step proxy.",
+)
+GEMMA_4_12B_ASR_PROFILE = RealtimeProfile(
+    label="Offline Multilingual ASR",
+    tokens_per_second=25.0,
+    audio_ms_per_token=40.0,
+    target_delay_ms=30000,
+    state_tokens=750,
+    source="google/gemma-4-12B-it + Gemma 4 Technical Report",
+    note="Gemma 4 12B accepts up to 30 seconds of 16 kHz audio as 750 40 ms (640-sample) vectors projected directly into the LLM embedding space. It has no separate audio encoder; offline capacity uses one projected audio token per planner step.",
+    streaming=False,
+)
 NEMOTRON_SPEECH_STREAMING_PROFILE = RealtimeProfile(
     label="Streaming ASR",
     tokens_per_second=1000.0 / 560.0,
@@ -1809,6 +1839,8 @@ PARAKEET_TDT_06B_V3_PROFILE = RealtimeProfile(
 #   where the catalog model has a current public result.
 # - https://arxiv.org/abs/2603.11243
 #   IBM Granite 4.0 Speech paper, CommonVoice French full-AR WER.
+# - https://arxiv.org/abs/2607.02770
+#   Google Gemma 4 Technical Report, Tables 7-8, FLEURS English and French WER.
 # French rows are filled only when a source-backed French WER was found; models
 # that are English-only or have no published French table intentionally omit the
 # French benchmark keys unless the whole model is marked placeholder.
@@ -1840,6 +1872,18 @@ ASR_WER_LANGUAGE_SOURCES: dict[str, dict[str, str]] = {
     },
     "mimo-v2.5-asr": {
         "en": "Xiaomi MiMo General English Recognition Open ASR average WER.",
+    },
+    "gemma-4-e2b-asr": {
+        "en": "Google Gemma 4 Technical Report Table 7, FLEURS English WER.",
+        "fr_fleurs": "Google Gemma 4 Technical Report Table 7, FLEURS French WER.",
+    },
+    "gemma-4-e4b-asr": {
+        "en": "Google Gemma 4 Technical Report Table 7, FLEURS English WER.",
+        "fr_fleurs": "Google Gemma 4 Technical Report Table 7, FLEURS French WER.",
+    },
+    "gemma-4-12b-unified-asr": {
+        "en": "Google Gemma 4 Technical Report Table 8, FLEURS English WER.",
+        "fr_fleurs": "Google Gemma 4 Technical Report Table 8, FLEURS French WER.",
     },
     "nvidia-nemotron-speech-streaming-0.6b": {
         "en": "NVIDIA comparison table, HuggingFace OpenASR average WER at 0.56 s streaming latency.",
@@ -1900,6 +1944,18 @@ PUBLISHED_ASR_WER: dict[str, dict[str, float]] = {
     },
     "mimo-v2.5-asr": {
         "en": 5.73,
+    },
+    "gemma-4-e2b-asr": {
+        "en": 8.0,
+        "fr_fleurs": 10.1,
+    },
+    "gemma-4-e4b-asr": {
+        "en": 6.5,
+        "fr_fleurs": 8.0,
+    },
+    "gemma-4-12b-unified-asr": {
+        "en": 6.3,
+        "fr_fleurs": 8.1,
     },
     "nvidia-nemotron-speech-streaming-0.6b": {
         "en": 7.09,
@@ -3801,6 +3857,38 @@ MODELS: dict[str, Model] = {
     "cr13": Model("cr13", "Croissant 1.3B", "Croissant", "#dda050", 1.3e9, 1.3e9, False, 24, 16, 16, 128, False,
         hidden_dim=2048, max_context_tokens=2048),
 }
+
+# Keep Gemma 4's general-purpose LLM entries in the LLM picker while exposing
+# dedicated ASR workload variants with identical decoder geometry.
+MODELS.update({
+    "gemma-4-e2b-asr": replace(
+        MODELS["ge2"],
+        key="gemma-4-e2b-asr",
+        name="Gemma 4 E2B ASR",
+        cat="Audio",
+        capabilities_override=frozenset(),
+        realtime_profile=GEMMA_4_E2B_ASR_PROFILE,
+        speculative_profiles=(),
+    ),
+    "gemma-4-e4b-asr": replace(
+        MODELS["ge4"],
+        key="gemma-4-e4b-asr",
+        name="Gemma 4 E4B ASR",
+        cat="Audio",
+        capabilities_override=frozenset(),
+        realtime_profile=GEMMA_4_E4B_ASR_PROFILE,
+        speculative_profiles=(),
+    ),
+    "gemma-4-12b-unified-asr": replace(
+        MODELS["g12"],
+        key="gemma-4-12b-unified-asr",
+        name="Gemma 4 12B Unified ASR",
+        cat="Audio",
+        capabilities_override=frozenset(),
+        realtime_profile=GEMMA_4_12B_ASR_PROFILE,
+        speculative_profiles=(),
+    ),
+})
 
 
 QUANTIZATION_CAPTURED_AT = "2026-05-22"

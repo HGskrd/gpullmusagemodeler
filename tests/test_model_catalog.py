@@ -683,6 +683,9 @@ class ModelCatalogTests(unittest.TestCase):
 
     def test_added_asr_catalog_entries_have_profiles(self):
         expected = {
+            "gemma-4-e2b-asr": ("Gemma 4 E2B ASR", 2.0e9, False),
+            "gemma-4-e4b-asr": ("Gemma 4 E4B ASR", 4.0e9, False),
+            "gemma-4-12b-unified-asr": ("Gemma 4 12B Unified ASR", 11.95e9, False),
             "nvidia-nemotron-speech-streaming-0.6b": ("NVIDIA Nemotron Speech Streaming 0.6B", 0.6e9, True),
             "nvidia-nemotron-3.5-asr-streaming-0.6b": ("NVIDIA Nemotron 3.5 ASR Streaming 0.6B", 0.6e9, True),
             "nvidia-parakeet-unified-0.6b": ("NVIDIA Parakeet Unified 0.6B", 0.6e9, True),
@@ -713,6 +716,36 @@ class ModelCatalogTests(unittest.TestCase):
                 self.assertEqual(profile.streaming, streaming)
                 self.assertGreater(profile.tokens_per_second, 0)
                 self.assertGreater(profile.target_delay_ms, 0)
+
+    def test_gemma4_asr_variants_reuse_decoder_geometry_and_model_audio_frontends(self):
+        expected = {
+            "gemma-4-e2b-asr": ("ge2", 305e6),
+            "gemma-4-e4b-asr": ("ge4", 305e6),
+            "gemma-4-12b-unified-asr": ("g12", 0.0),
+        }
+
+        for asr_key, (llm_key, audio_encoder_params) in expected.items():
+            with self.subTest(model=asr_key):
+                model = MODELS[asr_key]
+                llm = MODELS[llm_key]
+                profile = model.realtime_profile
+
+                self.assertEqual(model.layers, llm.layers)
+                self.assertEqual(model.hidden_size, llm.hidden_size)
+                self.assertEqual(model.num_heads, llm.num_heads)
+                self.assertEqual(model.kv_heads, llm.kv_heads)
+                self.assertEqual(model.max_context_tokens, llm.max_context_tokens)
+                self.assertEqual(model.capabilities, frozenset())
+                self.assertFalse(profile.streaming)
+                self.assertEqual(profile.audio_ms_per_token, 40.0)
+                self.assertEqual(profile.tokens_per_second, 25.0)
+                self.assertEqual(profile.state_tokens, 750)
+                self.assertEqual(profile.target_delay_ms, 30000)
+                self.assertEqual(profile.audio_encoder_params, audio_encoder_params)
+
+        self.assertEqual(MODELS["gemma-4-e2b-asr"].realtime_profile.audio_attention_layers, 12)
+        self.assertEqual(MODELS["gemma-4-e4b-asr"].realtime_profile.audio_attention_layers, 12)
+        self.assertIn("no separate audio encoder", MODELS["gemma-4-12b-unified-asr"].realtime_profile.note)
 
     def test_nemotron_35_asr_streaming_catalog_entry_uses_hf_card(self):
         model = MODELS["nvidia-nemotron-3.5-asr-streaming-0.6b"]
