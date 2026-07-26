@@ -1,5 +1,6 @@
 """Flask application for vLLM Multi-Model Planner."""
 
+import gzip
 import json
 import hmac
 import math
@@ -563,6 +564,40 @@ def _set_identity_cookie(response):
             samesite="Lax",
             secure=app.config["SESSION_COOKIE_SECURE"] or request.is_secure,
         )
+    return response
+
+
+@app.after_request
+def _compress_large_text_responses(response):
+    """Compress large HTMX/JSON responses when the client supports gzip."""
+    if (
+        request.method == "HEAD"
+        or response.status_code < 200
+        or response.status_code >= 300
+        or response.direct_passthrough
+        or response.headers.get("Content-Encoding")
+        or "no-transform" in response.headers.get("Cache-Control", "")
+    ):
+        return response
+
+    content_type = response.mimetype or ""
+    compressible = (
+        content_type.startswith("text/")
+        or content_type in {"application/json", "application/javascript", "image/svg+xml"}
+    )
+    if not compressible:
+        return response
+
+    response.vary.add("Accept-Encoding")
+    if request.accept_encodings["gzip"] <= 0:
+        return response
+
+    body = response.get_data()
+    if len(body) < 1024:
+        return response
+
+    response.set_data(gzip.compress(body, compresslevel=4))
+    response.headers["Content-Encoding"] = "gzip"
     return response
 
 
