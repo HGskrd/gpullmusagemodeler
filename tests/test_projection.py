@@ -1,11 +1,25 @@
 import unittest
+from unittest.mock import patch
 
 from calc import avg_dist, compute_revenue_projection, latent_activation_share
 from data import DIST_PRESETS, INPUT_BUCKETS, OUTPUT_BUCKETS
+from econ_variants import econ_payload
 from state import GpuPool, ModelAssignment, PlannerState, Project, _sync_aggregate_distribution
 
 
 class RevenueProjectionTests(unittest.TestCase):
+    def test_main_economics_payload_defers_expansion_recommendations(self):
+        state = PlannerState()
+
+        with patch(
+            "econ_variants.compute_revenue_projection",
+            wraps=compute_revenue_projection,
+        ) as projection:
+            payload = econ_payload(state)
+
+        projection.assert_called_once_with(state, include_recommendations=False)
+        self.assertEqual(payload["p"]["recommendations"], [])
+
     def test_prefix_reuse_is_prompt_token_weighted_across_use_cases(self):
         low = Project(
             1, "Short input", 0.1, 1_000_000, 10.0,

@@ -156,7 +156,11 @@ def compute_swap_recs(state, p: dict) -> list[dict]:
 
 def econ_payload(state) -> dict:
     """Shared view-model for the economics partials (variant pages + main section)."""
-    p = compute_revenue_projection(state)
+    # Expansion recommendations simulate an extra GPU for every deployed model.
+    # They are intentionally fetched through /econ/swaps; computing them here
+    # would put that search on every HTMX click even though the main economics
+    # section does not render the recommendations.
+    p = compute_revenue_projection(state, include_recommendations=False)
     p["value_opportunity_day"] = p["value_served_day"] + p["value_lost_day"]
     preset = cloud_policy.corpo_presets().get(p["corpo_cloud"]) or {}
     p["corpo_cloud_label"] = preset.get("label", p["corpo_cloud"])
