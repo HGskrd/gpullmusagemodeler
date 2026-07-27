@@ -143,6 +143,7 @@ For local debugging, add `DEBUG=1` or `FLASK_DEBUG=1`.
 | `PLANNER_MAX_IMPORT_BYTES` | Maximum scenario/use-case JSON import size; defaults to `1048576` |
 | `PLANNER_MAX_REQUEST_BYTES` | Maximum total HTTP request size; defaults to `2097152` |
 | `PLANNER_RATE_LIMIT_PER_MINUTE` | Per-IP mutation-request limit; defaults to `600` |
+| `PLANNER_RATE_LIMIT_MAX_IDENTITIES` | Maximum source addresses tracked for rate limiting; defaults to `20000`. Expired windows are swept first; if the map is still over the cap the least recently active entries are dropped |
 | `PLANNER_ADMIN_LOGIN_ATTEMPTS_PER_MINUTE` | Per-IP admin login attempt limit; defaults to `10` |
 | `PLANNER_SECURE_COOKIES` | Require HTTPS-only session and visitor cookies; enable behind an HTTPS reverse proxy |
 | `PLANNER_BEHIND_PROXY` | Trust `X-Forwarded-For` and `X-Forwarded-Proto` from exactly one reverse-proxy hop; defaults to `false`. Only enable when the proxy overwrites these headers, otherwise clients can spoof IPs to evade rate limits |
@@ -173,6 +174,22 @@ Set `PLANNER_CLOUD_POLICY` to a JSON file when procurement exposes only part of 
 ```
 
 The policy is validated and loaded once at startup. Unknown models, invalid prices, malformed sections, or custom presets outside the allowlist stop startup with a clear error. Restart the app after changing the file.
+
+## Response Compression and Security Headers
+
+HTML, JSON, and HTMX responses over 1 KB are gzipped when the client advertises
+`Accept-Encoding: gzip`. Static assets are compressed separately and cached in
+memory keyed by file mtime and size, because Flask serves them in passthrough
+mode that the response-level compressor cannot touch. Compressed static
+responses carry a `-gzip`-suffixed ETag so a shared cache keeps the encoded and
+identity variants apart; revalidation of either variant still returns `304`.
+
+Every response carries `Content-Security-Policy`, `X-Content-Type-Options`,
+`Referrer-Policy`, and `X-Frame-Options`. The policy resolves all fetchable
+content to `'self'` — no template references an external origin — while keeping
+`'unsafe-inline'` for scripts and styles, which the templates still rely on.
+Tighten those two directives if you remove the inline script block in
+`templates/base.html` and the inline `style` attributes.
 
 ## Scenario Data and Privacy
 
