@@ -139,23 +139,59 @@ class ModelCatalogTests(unittest.TestCase):
                 self.assertTrue(record["status"])
                 self.assertTrue(record["assumptions"])
 
-    def test_kimi_k3_launch_entry_uses_published_specs_and_labeled_config_proxy(self):
-        model = MODELS["kimi-k3-preview"]
+    def test_kimi_k3_open_release_uses_exact_reported_architecture(self):
+        self.assertNotIn("kimi-k3-preview", MODELS)
+        model = MODELS["kimi-k3"]
 
-        self.assertEqual(model.name, "Kimi K3 2.8T-A60B (Config Proxy)")
+        self.assertEqual(model.name, "Kimi K3 2.78T-A104.2B")
         self.assertEqual(model.cat, "Kimi")
-        self.assertEqual(model.total_params, 2.8e12)
-        self.assertEqual(model.active_params, 60e9)
+        self.assertEqual(model.total_params, 2.78e12)
+        self.assertEqual(model.active_params, 104.2e9)
         self.assertTrue(model.is_moe)
+        self.assertEqual(model.layers, 93)
+        self.assertEqual(model.hidden_size, 7168)
+        self.assertEqual(model.num_heads, 96)
+        self.assertEqual(model.kv_heads, 96)
         self.assertEqual(model.max_context_tokens, 1_048_576)
-        self.assertEqual(model.linear_attention_layer_count, 60)
-        self.assertEqual(model.attention_layer_count, 20)
-        self.assertIn("Stable LatentMoE 16/896", model.attention_label)
-        self.assertIn("MXFP4/MXFP8", model.attention_label)
-        self.assertIn("≥64 accelerators", model.attention_label)
+        self.assertEqual(model.linear_attention_layer_count, 69)
+        self.assertEqual(model.attention_layer_count, 24)
+        self.assertEqual(model.kv_layer_count, 24)
+        self.assertEqual(model.mla_kv_dim, 512)
+        self.assertEqual(model.mla_rope_dim, 64)
+        self.assertEqual(model.attention_residual_block_size, 12)
+        self.assertEqual(model.attention_residual_block_count, 8)
+        self.assertEqual(model.attention_residual_source_count, 9)
+        self.assertEqual(model.moe_latent_dim, 3584)
+        self.assertEqual(model.moe_intermediate_dim, 3072)
+        self.assertEqual(model.moe_routed_experts, 896)
+        self.assertEqual(model.moe_active_experts, 16)
+        self.assertEqual(model.moe_shared_experts, 2)
+        self.assertEqual(model.activation_label, "SiTU-GLU β1=4 β2=25")
+        self.assertIn("lower-bounded/full-rank KDA", model.attention_label)
+        self.assertIn("NoPE Gated MLA", model.attention_label)
+        self.assertIn("Block AttnRes 12-layer/8 blocks", model.attention_label)
+        self.assertIn("Stable LatentMoE 16/896 + 2 shared", model.attention_label)
+        self.assertNotIn("proxy", model.attention_label.lower())
         self.assertTrue({"tools", "ctx_128k", "images", "reasoning"} <= model.capabilities)
         self.assertNotIn("audio", model.capabilities)
-        self.assertAlmostEqual(model.quality_confidence, 0.30)
+        self.assertAlmostEqual(model.quality, aa_intelligence_to_quality(57.0))
+        self.assertAlmostEqual(model.token_efficiency, aa_output_tokens_to_efficiency(130.0))
+        self.assertAlmostEqual(model.quality_confidence, 1.0)
+
+    def test_kimi_k3_native_mxfp4_profile_uses_exact_release_artifact(self):
+        model = MODELS["kimi-k3"]
+        profile = get_quantization_profile("kimi-k3", "mxfp4")
+
+        self.assertIsNotNone(profile)
+        self.assertEqual(profile.source_repo, "moonshotai/Kimi-K3")
+        self.assertEqual(profile.source_revision, "9f62e4e9fffbd0a83ddd60e1c209d828994b3569")
+        self.assertEqual(profile.captured_at, "2026-07-27")
+        self.assertEqual(profile.source_kind, "exact")
+        self.assertEqual(profile.total_weight_bytes, 1_560_860_324_864)
+        self.assertAlmostEqual(model.weight_bytes_per_param("mxfp4"), 0.5614605485122303)
+        self.assertAlmostEqual(model.active_weight_bytes("mxfp4") / model.active_params, 1.313609348872837)
+        self.assertAlmostEqual(profile.compute_precision_shares["mxfp4"], 0.466606256890595)
+        self.assertIn("latent MoE projections, shared experts, and routers BF16", profile.retained)
 
     def test_kimi_k3_cloud_api_pricing_and_procurement_preset(self):
         cloud = CLOUD_MODELS["kimi-k3"]
@@ -167,6 +203,8 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(cloud["out_per_m"], 15.00)
         self.assertEqual(cloud["max_context_tokens"], 1_048_576)
         self.assertTrue({"tools", "ctx_128k", "images", "reasoning"} <= set(cloud["capabilities"]))
+        self.assertAlmostEqual(cloud["quality"], aa_intelligence_to_quality(57.0))
+        self.assertAlmostEqual(cloud["token_efficiency"], aa_output_tokens_to_efficiency(130.0))
         self.assertIn("kimi-k3", preset["models"])
 
     def test_inkling_family_captures_release_and_preview_boundaries(self):

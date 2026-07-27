@@ -75,6 +75,15 @@ class DomainQualityCatalogTests(unittest.TestCase):
         self.assertNotEqual(effective_quality(model, "coding"), effective_quality(model))
         self.assertEqual(effective_quality(model, "general"), effective_quality(model))
 
+    def test_kimi_k3_release_anchors_cover_reported_core_domains(self):
+        model = MODELS["kimi-k3"]
+
+        self.assertAlmostEqual(model_domain_anchor(model, "coding").raw_score, 67.5)
+        self.assertAlmostEqual(model_domain_anchor(model, "reasoning").raw_score, 93.5)
+        self.assertAlmostEqual(model_domain_anchor(model, "long_context").raw_score, 74.7)
+        self.assertAlmostEqual(model_domain_anchor(model, "vision").raw_score, 81.6)
+        self.assertIsNone(model_domain_anchor(model, "multilingual"))
+
     def test_weighted_profile_uses_each_axis_and_sparse_global_fallback(self):
         model = MODELS["laguna-s-2-1"]
         weights = {"coding": 0.70, "reasoning": 0.20, "long_context": 0.10}

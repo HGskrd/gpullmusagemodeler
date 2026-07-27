@@ -75,10 +75,10 @@
   <div class="T" style="margin-bottom:3px;" title="{{ info.quant_profile.notes }}{% if info.quant_profile.storage_summary %} Storage: {{ info.quant_profile.storage_summary }}.{% endif %}">
     {{ info.quant_profile.label }} LUT · {{ info.quant_profile.source_repo }}{% if info.quant_profile.source_kind != 'exact' %} · {{ info.quant_profile.source_kind }}{% endif %} · {{ info.quant_profile.compute_summary }} · KV {{ info.quant_profile.kv_cache_format }}
   </div>
-  {% elif info.quant_profiles_by_precision.get('nvfp4') %}
-  {% set nvfp4_profile = info.quant_profiles_by_precision.get('nvfp4') %}
-  <div class="T" style="margin-bottom:3px;" title="Select NVFP4 to use this offline artifact LUT. {{ nvfp4_profile.notes }}{% if nvfp4_profile.storage_summary %} Storage: {{ nvfp4_profile.storage_summary }}.{% endif %}">
-    NVFP4 LUT available · {{ nvfp4_profile.source_repo }}{% if nvfp4_profile.source_kind != 'exact' %} · {{ nvfp4_profile.source_kind }}{% endif %}
+  {% elif info.quant_profiles_by_precision %}
+  {% set available_profile = info.quant_profiles_by_precision.values()|first %}
+  <div class="T" style="margin-bottom:3px;" title="Select {{ available_profile.label }} to use this offline artifact LUT. {{ available_profile.notes }}{% if available_profile.storage_summary %} Storage: {{ available_profile.storage_summary }}.{% endif %}">
+    {{ available_profile.label }} LUT available · {{ available_profile.source_repo }}{% if available_profile.source_kind != 'exact' %} · {{ available_profile.source_kind }}{% endif %}
   </div>
   {% endif %}
   {% for alert in info.precision_alerts %}

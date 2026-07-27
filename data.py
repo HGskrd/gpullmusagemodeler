@@ -446,6 +446,15 @@ class Model:
     sparse_indexer_head_dim: int = 0
     sparse_indexer_layers: int = 0
     attention_label: str = ""
+    # Optional architecture metadata for models whose depth mixing and sparse
+    # channel mixing cannot be inferred from the ordinary transformer fields.
+    attention_residual_block_size: int = 0
+    moe_latent_dim: int = 0
+    moe_intermediate_dim: int = 0
+    moe_routed_experts: int = 0
+    moe_active_experts: int = 0
+    moe_shared_experts: int = 0
+    activation_label: str = ""
     capabilities_override: frozenset[str] | None = None
     realtime_profile: RealtimeProfile | None = None
     embedding_profile: EmbeddingProfile | None = None
@@ -549,6 +558,19 @@ class Model:
     @property
     def linear_attention_kernel_size(self) -> int:
         return max(self.linear_attention_conv_kernel, 1)
+
+    @property
+    def attention_residual_block_count(self) -> int:
+        block_size = max(int(self.attention_residual_block_size), 0)
+        if block_size <= 0:
+            return 0
+        return math.ceil(max(int(self.layers), 0) / block_size)
+
+    @property
+    def attention_residual_source_count(self) -> int:
+        # Block AttnRes also keeps the embedding representation as a source.
+        blocks = self.attention_residual_block_count
+        return blocks + 1 if blocks else 0
 
     def weight_bytes_per_param(self, prec: str) -> float:
         prec = normalize_precision(prec)
@@ -1029,9 +1051,8 @@ for _key, _tco in GPU_TCO_DEFAULTS.items():
     GPUS[_key].default_tco_per_gpu_hour = _tco
 
 
-# Announced/preview catalog entries must keep their uncertainty reviewable.  Kimi
-# launch debt is intentionally outside this registry: it has its own explicit
-# config-proxy tests and should not block unrelated catalog refreshes.
+# Announced/preview catalog entries must keep their uncertainty reviewable.
+# Kimi K3 is now an open-weight release with a pinned config and technical report.
 PREVIEW_ASSUMPTIONS_CAPTURED_AT = "2026-07-21"
 PREVIEW_ASSUMPTIONS: dict[str, dict[str, object]] = {
     "gpu:RUBIN_NVL72": {
@@ -3035,37 +3056,46 @@ MODELS: dict[str, Model] = {
         # AA K2.5 page: 256k context window, text/image/video input.
         max_context_tokens=262144,
     ),
-    # K3 is live in Kimi products/API; full weights and the technical report are due
-    # by 2026-07-27. Moonshot now publishes Stable LatentMoE routing (16/896 experts),
-    # MXFP4-weight/MXFP8-activation QAT, KDA + Gated MLA, native vision, and 1M context,
-    # but not the layer config or active parameter count. The 60B-active estimate adds
-    # a conservative non-expert allowance to the ~50B routed share (2.8T * 16/896).
-    "kimi-k3-preview": Model(
-        "kimi-k3-preview",
-        "Kimi K3 2.8T-A60B (Config Proxy)",
+    # Exact to the 2026-07-27 open-weight config/report.
+    # K3 differs from Kimi Linear beyond scale: lower-bounded KDA and NoPE Gated MLA
+    # handle sequence mixing, 12-layer Block AttnRes mixes depth, and Stable
+    # LatentMoE adds normalized latent routing, SiTU-GLU, and Quantile Balancing.
+    "kimi-k3": Model(
+        "kimi-k3",
+        "Kimi K3 2.78T-A104.2B",
         "Kimi",
         "#6D45E8",
-        2.8e12,
-        60e9,
+        2.78e12,
+        104.2e9,
         True,
-        80,
-        128,
-        1,
+        93,
+        96,
+        96,
         128,
         True,
         512,
         64,
         mla_tp_supported=True,
-        kv_layers=20,
-        hidden_dim=8192,
-        attention_layers=20,
-        linear_attention_layers=60,
-        linear_attention_heads=128,
+        kv_layers=24,
+        hidden_dim=7168,
+        attention_layers=24,
+        linear_attention_layers=69,
+        linear_attention_heads=96,
         linear_attention_head_dim=128,
-        linear_attention_k_heads=128,
+        linear_attention_k_heads=96,
         linear_attention_k_head_dim=128,
         linear_attention_conv_kernel=4,
-        attention_label="KDA + Gated MLA proxy · Stable LatentMoE 16/896 · MXFP4/MXFP8 · serve ≥64 accelerators",
+        attention_label=(
+            "69 lower-bounded/full-rank KDA + 24 NoPE Gated MLA · "
+            "Block AttnRes 12-layer/8 blocks · Stable LatentMoE 16/896 + 2 shared"
+        ),
+        attention_residual_block_size=12,
+        moe_latent_dim=3584,
+        moe_intermediate_dim=3072,
+        moe_routed_experts=896,
+        moe_active_experts=16,
+        moe_shared_experts=2,
+        activation_label="SiTU-GLU β1=4 β2=25",
         max_context_tokens=1_048_576,
     ),
     "kimi-linear-48b": Model(
@@ -4008,6 +4038,46 @@ MODEL_QUANTIZATION_PROFILES: dict[tuple[str, str], QuantizationProfile] = dict([
         retained=("linear attention BF16", "router gates BF16", "visual modules BF16", "lm_head BF16"),
         notes="Family proxy until the larger Qwen3.5-397B safetensors headers are captured locally.",
     ),
+    (
+        ("kimi-k3", "mxfp4"),
+        QuantizationProfile(
+            precision_key="mxfp4",
+            label="MXFP4",
+            source_repo="moonshotai/Kimi-K3",
+            source_revision="9f62e4e9fffbd0a83ddd60e1c209d828994b3569",
+            source_downloads=2_850,
+            captured_at="2026-07-27",
+            source_kind="exact",
+            quant_algo="native MXFP4 QAT",
+            kv_cache_format="FP8",
+            kv_cache_bytes_per_elem=1.0,
+            group_size=32,
+            storage_format_counts={},
+            # The report's 104.2B active count includes 48.62B active routed-
+            # expert parameters; the remaining attention, latent projections,
+            # shared experts, routers, and dense layer stay in BF16.
+            compute_precision_shares={
+                "mxfp4": 0.466606256890595,
+                "bf16": 0.533393743109405,
+            },
+            quantized=("92 layers of routed MoE expert weights in MXFP4 with MXFP8 activations",),
+            retained=(
+                "attention and Block AttnRes projections BF16",
+                "latent MoE projections, shared experts, and routers BF16",
+                "dense layer, embeddings, MoonViT-V2, projector, and lm_head BF16",
+            ),
+            # Exact aggregate from the release's 96-shard safetensors index.
+            total_weight_bytes_override=1_560_860_324_864,
+            # Derived from the exact routed-expert geometry and the release
+            # artifact: active experts use 0.53125 B/param; all other active
+            # weights average 1.998 B/param.
+            active_weight_bytes_per_param_override=1.313609348872837,
+            notes=(
+                "Exact 96-shard release footprint. Only routed expert weights are MXFP4; "
+                "all non-expert components remain in higher precision per the technical report."
+            ),
+        ),
+    ),
     _nvfp4_profile(
         model_key="k25",
         source_repo="nvidia/Kimi-K2.5-NVFP4",
@@ -4170,7 +4240,7 @@ def get_quantization_profile(model_key: str, prec: str) -> QuantizationProfile |
 # (tools + ctx_128k). Kept conservative — annotate models with well-documented support.
 _VISION_MODELS = (
     "ge2", "ge4", "g12", "g26", "g31",
-    "k25", "kimi-k3-preview", "inkling", "inkling-small-preview",
+    "k25", "kimi-k3", "inkling", "inkling-small-preview",
     "command-a-plus-05-2026",
     "ms24", "ms32", "mistral-medium-3.5-preview",
     "minimax25", "minimax27", "nem3no", "mimo-v2.5",
@@ -4182,7 +4252,7 @@ _AUDIO_INPUT_MODELS = (
 _REASONING_MODELS = (
     "g12", "q35", "q122", "q397",
     "glm45", "glm45a", "glm46", "glm47", "glm47f", "glm5", "glm51", "glm52",
-    "k25", "kimi-k3-preview", "inkling", "inkling-small-preview",
+    "k25", "kimi-k3", "inkling", "inkling-small-preview",
     "ds3", "deepseek-v4-pro", "deepseek-v4-flash",
     "lfm2.5-1.2b-thinking",
     "command-a-plus-05-2026",
@@ -4245,7 +4315,7 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "glm51": (51.0, 110.0),
     "glm52": (55.0, 120.0),  # Provisional AA-scale/verbosity proxy pending a direct AA row.
     "k25": (35.0, 87.0),
-    "kimi-k3-preview": (51.0, 110.0),  # Frontier-quality proxy; no AA row or public K3 benchmarks at API launch.
+    "kimi-k3": (57.0, 130.0),  # Direct Artificial Analysis K3 reasoning row.
     "kimi-linear-48b": (37.0, 100.0),  # Proxy from Qwen 3.5 35B-A3B until AA publishes Kimi Linear.
     "inkling": (45.0, 70.0),           # Official broad benchmark suite; AA-scale/verbosity proxy pending a direct row.
     "inkling-small-preview": (44.0, 70.0),  # Preview benchmarks track Inkling closely; weights/config remain pending.
@@ -4312,7 +4382,6 @@ AA_MODEL_QUALITY_CONFIDENCE: dict[str, float] = {
     "rwkv7-g1f-29b": 0.35,
     "rwkv7-g1g-72b": 0.35,
     "rwkv7-g1g-133b": 0.35,
-    "kimi-k3-preview": 0.30,
     "kimi-linear-48b": 0.55,
     "inkling": 0.65,
     "inkling-small-preview": 0.50,
@@ -4347,6 +4416,7 @@ for _k, _confidence in AA_MODEL_QUALITY_CONFIDENCE.items():
 _QWEN35_DOMAIN_SOURCE = "https://huggingface.co/Qwen/Qwen3.5-27B/blob/main/README.md"
 _QWEN35_397_DOMAIN_SOURCE = "https://huggingface.co/Qwen/Qwen3.5-397B-A17B-FP8"
 _KIMI_K25_DOMAIN_SOURCE = "https://huggingface.co/moonshotai/Kimi-K2.5"
+_KIMI_K3_DOMAIN_SOURCE = "https://github.com/MoonshotAI/Kimi-K3/blob/main/k3_tech_report.pdf"
 _DEEPSEEK_V3_DOMAIN_SOURCE = "https://huggingface.co/deepseek-ai/DeepSeek-V3"
 _GEMMA4_DOMAIN_SOURCE = "https://ai.google.dev/gemma/docs/core/model_card_4"
 _GLM5_DOMAIN_SOURCE = "https://huggingface.co/zai-org/GLM-5"
@@ -4429,6 +4499,21 @@ MODEL_DOMAIN_QUALITY_ANCHORS: dict[str, dict[str, DomainQualityAnchor]] = {
         ),
         "multilingual": _domain_anchor(73.0, "SWE-bench Multilingual", _KIMI_K25_DOMAIN_SOURCE),
         "vision": _domain_anchor(78.5, "MMMU-Pro", _KIMI_K25_DOMAIN_SOURCE),
+    },
+    "kimi-k3": {
+        "coding": _domain_anchor(
+            67.5, "DeepSWE", _KIMI_K3_DOMAIN_SOURCE,
+            note="Kimi Code harness; the report also discloses 67.3 with mini-SWE-agent.",
+        ),
+        "reasoning": _domain_anchor(93.5, "GPQA Diamond", _KIMI_K3_DOMAIN_SOURCE),
+        "long_context": _domain_anchor(
+            74.7, "AA-LCR", _KIMI_K3_DOMAIN_SOURCE,
+            note="Artificial Analysis long-context reasoning score cited in the release report.",
+        ),
+        "vision": _domain_anchor(
+            81.6, "MMMU-Pro", _KIMI_K3_DOMAIN_SOURCE,
+            note="Without Python tool augmentation; the tool-augmented score is 83.4.",
+        ),
     },
     "ds3": {
         "coding": _domain_anchor(42.0, "SWE-bench Verified", _DEEPSEEK_V3_DOMAIN_SOURCE),
@@ -4851,7 +4936,7 @@ AA_CLOUD_METRICS: dict[str, tuple[float, float]] = {
     "grok-4.1-fast": (41.0, 30.0),       # Grok 4.1-class proxy pending a direct Fast row.
     "deepseek-v4-flash": (42.0, 30.0),   # V4 launch-benchmark proxy pending a direct AA row.
     "deepseek-v4-pro": (49.0, 60.0),     # V4 launch-benchmark proxy pending a direct AA row.
-    "kimi-k3": (51.0, 110.0),          # Launch-benchmark proxy pending a direct AA Intelligence Index row.
+    "kimi-k3": (57.0, 130.0),          # Direct Artificial Analysis K3 reasoning row.
     "command-a-03-2025": (32.0, 70.0),   # Conservative proxy until AA publishes a directly comparable Command A row.
     "command-r7b-12-2024": (12.0, 8.3),  # Size-class proxy from compact open instruction models; no AA row found.
 }

@@ -4,6 +4,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2026-07-27
+
+### Changed
+
+- Replaced the Kimi K3 launch proxy with the exact open-weight architecture from Moonshot AI's config and technical report: 2.78T total / 104.2B active parameters, 93 layers, 69 lower-bounded/full-rank KDA + 24 NoPE Gated MLA layers, 96 heads, 7,168 hidden width, 12-layer Block Attention Residuals, and Stable LatentMoE with 16-of-896 routed experts, two shared experts, a 3,584-wide latent path, normalized aggregation, SiTU-GLU, and Quantile Balancing.
+- Added an exact native-MXFP4 artifact profile from K3's 96-shard safetensors index (1.561 TB), retaining the report's BF16 non-expert path in active-weight bandwidth and mixed-compute estimates. Updated K3 to its direct Artificial Analysis 57-point / 130M-token row and added official coding, reasoning, long-context, and vision quality anchors.
+- Promoted the local catalog identifier from the launch-only `kimi-k3-preview` key to the final `kimi-k3` key.
+
 ## 2026-07-24
 
 ### Changed
