@@ -708,7 +708,38 @@ def _normalize_use_case_def(raw: dict[str, Any], fallback_key: str | None = None
     }
 
 
+# Normalization is idempotent but not cheap: templates resolve use-case defs
+# hundreds of times per render, and re-normalizing the whole library per lookup
+# dominated request time. _UCD_CACHE_ATTR holds (normalized_list, key_index) and
+# is only trusted while it still points at the exact list on the state, so
+# replacing state.use_case_defs invalidates it implicitly. Mutating a def in
+# place does not, so those call sites invalidate explicitly.
+# The attribute is deliberately not a dataclass field: asdict() must not carry
+# it into snapshots or exported scenarios.
+_UCD_CACHE_ATTR = "_use_case_defs_cache"
+
+
+def invalidate_use_case_defs(state: PlannerState) -> None:
+    """Force the next use-case def read to re-normalize."""
+    try:
+        delattr(state, _UCD_CACHE_ATTR)
+    except AttributeError:
+        pass
+
+
+def _use_case_def_index(state: PlannerState) -> dict[str, dict[str, Any]]:
+    cached = getattr(state, _UCD_CACHE_ATTR, None)
+    if cached is not None and cached[0] is state.use_case_defs:
+        return cached[1]
+    normalize_use_case_defs(state)
+    return getattr(state, _UCD_CACHE_ATTR)[1]
+
+
 def normalize_use_case_defs(state: PlannerState):
+    cached = getattr(state, _UCD_CACHE_ATTR, None)
+    if cached is not None and cached[0] is state.use_case_defs:
+        return
+
     raw_defs = getattr(state, "use_case_defs", None)
     if not isinstance(raw_defs, list) or not raw_defs:
         raw_defs = copy.deepcopy(PROJECT_PRESETS)
@@ -729,6 +760,11 @@ def normalize_use_case_defs(state: PlannerState):
         normalized.append(item)
 
     state.use_case_defs = normalized or copy.deepcopy(PROJECT_PRESETS)
+    setattr(
+        state,
+        _UCD_CACHE_ATTR,
+        (state.use_case_defs, {d["key"]: d for d in state.use_case_defs}),
+    )
 
 
 def get_use_case_defs(state: PlannerState) -> list[dict[str, Any]]:
@@ -737,7 +773,7 @@ def get_use_case_defs(state: PlannerState) -> list[dict[str, Any]]:
 
 
 def _find_use_case_def(state: PlannerState, key: str) -> Optional[dict[str, Any]]:
-    return next((d for d in get_use_case_defs(state) if d["key"] == key), None)
+    return _use_case_def_index(state).get(key)
 
 
 def _default_project_name(name: str) -> bool:
@@ -1015,7 +1051,10 @@ def add_use_case_def(state: PlannerState) -> dict[str, Any]:
         "out_pre": "Chat",
         "scale_hint": "Set this from the organization's real usage driver.",
     })
+    # Appending mutates the list in place, so the cached index would miss the
+    # new key without an explicit invalidation.
     state.use_case_defs.append(item)
+    invalidate_use_case_defs(state)
     return item
 
 
@@ -1102,6 +1141,9 @@ def set_use_case_def_field(state: PlannerState, key: str, field_name: str, value
         item["out_pre"] = str(value)
     else:
         return
+    # The def was edited in place, so re-normalize before syncing projects: a
+    # raised scale_value has to widen scale_kind["max"] first.
+    invalidate_use_case_defs(state)
     _sync_projects_from_use_case_defs(state)
 
 
@@ -1115,6 +1157,7 @@ def set_use_case_def_capability(state: PlannerState, key: str, capability: str, 
     else:
         caps.discard(capability)
     item["requires"] = tuple(c for c in MODEL_CAPABILITIES if c in caps)
+    invalidate_use_case_defs(state)
     _sync_projects_from_use_case_defs(state)
 
 

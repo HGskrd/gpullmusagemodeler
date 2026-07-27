@@ -3,8 +3,10 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import uuid
+from collections import deque
 from pathlib import Path
 from unittest.mock import patch
 
@@ -179,6 +181,77 @@ class EngineeringHardeningTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("127.0.0.1", result.stdout)
         self.assertNotIn("203.0.113.7", result.stdout)
+
+    def test_expired_rate_windows_are_swept(self):
+        original = dict(app_module._rate_windows)
+        original_sweep = app_module._rate_last_sweep
+        try:
+            now = time.monotonic()
+            app_module._rate_windows.clear()
+            for i in range(50):
+                # Last seen well outside the 60s window.
+                app_module._rate_windows[("mutation", f"198.51.100.{i}")] = deque(
+                    [now - app_module.RATE_WINDOW_SECONDS - 5.0]
+                )
+            app_module._rate_windows[("mutation", "203.0.113.1")] = deque([now])
+
+            app_module._sweep_rate_windows(now)
+
+            self.assertEqual(
+                list(app_module._rate_windows), [("mutation", "203.0.113.1")]
+            )
+        finally:
+            app_module._rate_windows.clear()
+            app_module._rate_windows.update(original)
+            app_module._rate_last_sweep = original_sweep
+
+    def test_active_rate_windows_are_capped(self):
+        original = dict(app_module._rate_windows)
+        original_cap = app_module.RATE_LIMIT_MAX_IDENTITIES
+        original_sweep = app_module._rate_last_sweep
+        try:
+            now = time.monotonic()
+            app_module._rate_windows.clear()
+            app_module.RATE_LIMIT_MAX_IDENTITIES = 10
+            # All still active, so expiry alone cannot get under the cap.
+            for i in range(40):
+                app_module._rate_windows[("mutation", f"198.51.100.{i}")] = deque(
+                    [now - (40 - i) * 0.1]
+                )
+
+            app_module._sweep_rate_windows(now)
+
+            self.assertEqual(len(app_module._rate_windows), 10)
+            # The survivors are the most recently active.
+            self.assertIn(("mutation", "198.51.100.39"), app_module._rate_windows)
+            self.assertNotIn(("mutation", "198.51.100.0"), app_module._rate_windows)
+        finally:
+            app_module.RATE_LIMIT_MAX_IDENTITIES = original_cap
+            app_module._rate_windows.clear()
+            app_module._rate_windows.update(original)
+            app_module._rate_last_sweep = original_sweep
+
+    def test_security_headers_are_set_on_every_response(self):
+        for path in ("/", "/static/app.js", "/healthz"):
+            with self.subTest(path=path):
+                response = self.client.get(path, headers={"X-Tab-ID": str(uuid.uuid4())})
+                self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
+                self.assertEqual(response.headers["X-Frame-Options"], "DENY")
+                self.assertEqual(response.headers["Referrer-Policy"], "same-origin")
+                csp = response.headers["Content-Security-Policy"]
+                self.assertIn("default-src 'self'", csp)
+                self.assertIn("frame-ancestors 'none'", csp)
+                self.assertIn("object-src 'none'", csp)
+                self.assertIn("base-uri 'self'", csp)
+                self.assertIn("form-action 'self'", csp)
+
+    def test_default_port_matches_the_deployment_config(self):
+        # app.py's __main__ default drifted from .env.example/compose/Dockerfile
+        # once already; pin them together.
+        repo_root = Path(app_module.__file__).resolve().parent
+        source = (repo_root / "app.py").read_text(encoding="utf-8")
+        self.assertIn('or "5014"', source)
+        self.assertIn("PORT=5014", (repo_root / ".env.example").read_text(encoding="utf-8"))
 
     def test_visitor_cookie_is_samesite_lax_and_httponly(self):
         self.assertEqual(app_module.app.config["SESSION_COOKIE_SAMESITE"], "Lax")

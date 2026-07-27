@@ -359,6 +359,23 @@ def _kv_projection_count(m: Model) -> int:
     return 1 if m.shared_key_value else 2
 
 
+# Model geometry is fixed at import time: every Model lives in data.MODELS under
+# a unique key and is never mutated or rebuilt at runtime (the one derived entry,
+# gemma-4-e2b-asr, is created with replace(..., key=...) and so gets its own key).
+# That makes m.key a sound cache key for the pure geometry helpers below, which
+# the projection search calls tens of thousands of times per request.
+# Model itself is an unfrozen dataclass and therefore unhashable, so these cannot
+# be functools.lru_cache'd on the instance directly.
+_KV_ELEMS_CACHE: dict[tuple[str, bool], int] = {}
+_KV_BYTES_CACHE: dict[tuple[str, str, bool], float] = {}
+_PP_PEAK_CACHE: dict[tuple[str, int], float] = {}
+_LINEAR_STATE_CACHE: dict[tuple[str, str, int], float] = {}
+_REPLICA_KV_CACHE: dict[tuple[str, float, str, int, int], float] = {}
+# seq_len is a continuous key, so this one needs a ceiling; the others are bounded
+# by catalog size (~115 models x a handful of precisions and ranks).
+_REPLICA_KV_CACHE_MAX = 100_000
+
+
 def _kv_heads_for_layer(m: Model, global_layer: bool = False) -> int:
     if global_layer and m.global_kv_heads > 0:
         return m.global_kv_heads
@@ -368,6 +385,15 @@ def _kv_heads_for_layer(m: Model, global_layer: bool = False) -> int:
 
 
 def _kv_elems_per_layer(m: Model, global_layer: bool = False) -> int:
+    cache_key = (m.key, global_layer)
+    cached = _KV_ELEMS_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    _KV_ELEMS_CACHE[cache_key] = value = _kv_elems_per_layer_uncached(m, global_layer)
+    return value
+
+
+def _kv_elems_per_layer_uncached(m: Model, global_layer: bool = False) -> int:
     if m.is_mla:
         return m.mla_kv_dim + m.mla_rope_dim
     if global_layer and m.global_kv_heads > 0:
@@ -383,7 +409,13 @@ def _kv_elems_per_layer(m: Model, global_layer: bool = False) -> int:
 
 
 def _kv_bytes_per_layer(m: Model, prec: str, global_layer: bool = False) -> float:
-    return _kv_elems_per_layer(m, global_layer=global_layer) * m.kv_cache_bytes_per_elem(prec)
+    cache_key = (m.key, prec, global_layer)
+    cached = _KV_BYTES_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    value = _kv_elems_per_layer(m, global_layer=global_layer) * m.kv_cache_bytes_per_elem(prec)
+    _KV_BYTES_CACHE[cache_key] = value
+    return value
 
 
 def linear_attention_state_bytes(m: Model, prec: str) -> float:
@@ -416,6 +448,15 @@ def per_tp_linear_attention_state_bytes(m: Model, prec: str, tp: int) -> float:
     Using head-aligned shard counts avoids over-sharding state when TP exceeds or is
     not divisible into either schema dimension.
     """
+    cache_key = (m.key, prec, int(tp))
+    cached = _LINEAR_STATE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    _LINEAR_STATE_CACHE[cache_key] = value = _per_tp_linear_attention_state_bytes_uncached(m, prec, tp)
+    return value
+
+
+def _per_tp_linear_attention_state_bytes_uncached(m: Model, prec: str, tp: int) -> float:
     layers = m.linear_attention_layer_count
     if layers <= 0:
         return 0.0
@@ -447,6 +488,18 @@ def kv_cache_bytes_for_sequence(m: Model, seq_len: float, prec: str) -> float:
 
 
 def per_replica_kv_cache_bytes(m: Model, seq_len: float, prec: str, pp: int, tp: int) -> float:
+    cache_key = (m.key, float(seq_len), prec, int(pp), int(tp))
+    cached = _REPLICA_KV_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    value = _per_replica_kv_cache_bytes_uncached(m, seq_len, prec, pp, tp)
+    if len(_REPLICA_KV_CACHE) >= _REPLICA_KV_CACHE_MAX:
+        _REPLICA_KV_CACHE.clear()
+    _REPLICA_KV_CACHE[cache_key] = value
+    return value
+
+
+def _per_replica_kv_cache_bytes_uncached(m: Model, seq_len: float, prec: str, pp: int, tp: int) -> float:
     pp = max(pp, 1)
     pp_fraction = _pp_peak_fraction(m, pp)
     if m.is_mla:
@@ -468,9 +521,14 @@ def per_replica_kv_cache_bytes(m: Model, seq_len: float, prec: str, pp: int, tp:
 
 def _pp_peak_fraction(m: Model, pp: int) -> float:
     """Conservative fraction of layer-distributed work/memory on the busiest PP stage."""
+    cache_key = (m.key, int(pp))
+    cached = _PP_PEAK_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     layers = max(int(m.layers), 1)
     stages = min(max(int(pp), 1), layers)
-    return math.ceil(layers / stages) / layers
+    _PP_PEAK_CACHE[cache_key] = value = math.ceil(layers / stages) / layers
+    return value
 
 
 def _pp_bubble_multiplier(pp: int, microbatches: int) -> float:

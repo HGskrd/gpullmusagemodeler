@@ -15,6 +15,7 @@ from pathlib import Path
 
 from flask import Flask, g, jsonify, make_response, redirect, render_template, request, session, url_for
 from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.security import safe_join
 
 from data import (
     GPUS,
@@ -219,6 +220,13 @@ if _env_bool("PLANNER_BEHIND_PROXY", False):
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 _configured_secret = os.environ.get("PLANNER_SECRET_KEY", "").strip()
 app.secret_key = _configured_secret or secrets.token_urlsafe(48)
+if not _configured_secret:
+    # A per-process key silently invalidates every session on restart, which
+    # mostly shows up as admin logins that will not stick. Say so at boot.
+    app.logger.warning(
+        "PLANNER_SECRET_KEY is unset; generated an ephemeral key for this process. "
+        "Sessions and admin logins will not survive a restart. Set it before deploying."
+    )
 # SameSite=Lax reduces cross-site request risk. Deploy this app on a dedicated
 # site/origin; sibling subdomains remain same-site and are outside that defense.
 app.config.update(
@@ -239,8 +247,12 @@ ADMIN_PAGE_SIZE = min(_env_positive_int("PLANNER_ADMIN_PAGE_SIZE", 100), 500)
 REQUEST_RATE_LIMIT = _env_positive_int("PLANNER_RATE_LIMIT_PER_MINUTE", 600)
 ADMIN_LOGIN_RATE_LIMIT = _env_positive_int("PLANNER_ADMIN_LOGIN_ATTEMPTS_PER_MINUTE", 10)
 _TAB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
+RATE_WINDOW_SECONDS = 60.0
+RATE_SWEEP_INTERVAL_SECONDS = 60.0
+RATE_LIMIT_MAX_IDENTITIES = _env_positive_int("PLANNER_RATE_LIMIT_MAX_IDENTITIES", 20000)
 _rate_lock = threading.Lock()
-_rate_windows: dict[tuple[str, str], deque[float]] = defaultdict(deque)
+_rate_windows: dict[tuple[str, str], deque[float]] = {}
+_rate_last_sweep = 0.0
 EFFICIENCY_SETTING_BOUNDS = {
     "prefill_bw_eff": (0.50, 1.00),
     "prefill_comp_eff": (0.50, 1.00),
@@ -277,6 +289,39 @@ def _bounded_int(raw, *, name: str, lo: int, hi: int) -> int:
         raise ValueError(f"{name} must be an integer.") from None
     if not lo <= value <= hi:
         raise ValueError(f"{name} must be between {lo} and {hi}.")
+    return value
+
+
+def _form_int(field: str, default: int | None = None) -> int:
+    """Read an integer form field.
+
+    Raises ValueError (rendered as 400) rather than letting a bare int(None)
+    surface as a 500 with the interpreter's message in the response body.
+    """
+    raw = request.form.get(field)
+    if raw is None or raw == "":
+        if default is not None:
+            return default
+        raise ValueError(f"{field} is required.")
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"{field} must be an integer.") from None
+
+
+def _form_float(field: str, default: float | None = None) -> float:
+    """Read a finite float form field, raising ValueError (400) when malformed."""
+    raw = request.form.get(field)
+    if raw is None or raw == "":
+        if default is not None:
+            return default
+        raise ValueError(f"{field} is required.")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"{field} must be a number.") from None
+    if not math.isfinite(value):
+        raise ValueError(f"{field} must be a finite number.")
     return value
 
 
@@ -504,13 +549,45 @@ def _scope_id() -> str:
     return scope_id
 
 
+def _sweep_rate_windows(now: float) -> None:
+    """Drop windows with nothing left inside them. Caller must hold _rate_lock.
+
+    Without this the map keeps one deque per source address forever, which is
+    unbounded growth on a public deployment. Every other per-visitor structure
+    here is capped (PLANNER_STATE_MAX_SCOPES, PLANNER_MAX_TABS_PER_VISITOR,
+    snapshot retention), so this one is capped too.
+    """
+    global _rate_last_sweep
+    _rate_last_sweep = now
+    stale = [
+        key
+        for key, window in _rate_windows.items()
+        if not window or now - window[-1] >= RATE_WINDOW_SECONDS
+    ]
+    for key in stale:
+        del _rate_windows[key]
+
+    excess = len(_rate_windows) - RATE_LIMIT_MAX_IDENTITIES
+    if excess > 0:
+        # Still over the cap after expiry: evict the least recently active.
+        # This hands back rate budget to whoever is evicted, which is the right
+        # trade against unbounded memory when under a spoofed-source flood.
+        oldest = sorted(_rate_windows, key=lambda key: _rate_windows[key][-1])[:excess]
+        for key in oldest:
+            del _rate_windows[key]
+
+
 def _rate_limit(bucket: str, limit: int) -> bool:
     identity = request.remote_addr or "unknown"
     now = time.monotonic()
     key = (bucket, identity)
     with _rate_lock:
-        window = _rate_windows[key]
-        while window and now - window[0] >= 60.0:
+        if now - _rate_last_sweep >= RATE_SWEEP_INTERVAL_SECONDS:
+            _sweep_rate_windows(now)
+        window = _rate_windows.get(key)
+        if window is None:
+            window = _rate_windows[key] = deque()
+        while window and now - window[0] >= RATE_WINDOW_SECONDS:
             window.popleft()
         if len(window) >= limit:
             return False
@@ -567,6 +644,34 @@ def _set_identity_cookie(response):
     return response
 
 
+# No template references an external origin, so 'self' is enough for every
+# fetchable type. 'unsafe-inline' stays for scripts (one inline block in
+# base.html) and styles (~250 inline style attributes across the templates);
+# the rest of the policy still blocks external script origins, plugin content,
+# framing, <base> hijacking, and cross-origin form posts.
+CONTENT_SECURITY_POLICY = "; ".join((
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "font-src 'self'",
+    "connect-src 'self'",
+    "form-action 'self'",
+    "base-uri 'self'",
+    "frame-ancestors 'none'",
+    "object-src 'none'",
+))
+
+
+@app.after_request
+def _set_security_headers(response):
+    response.headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    return response
+
+
 @app.after_request
 def _compress_large_text_responses(response):
     """Compress large HTMX/JSON responses when the client supports gzip."""
@@ -599,6 +704,94 @@ def _compress_large_text_responses(response):
     response.set_data(gzip.compress(body, compresslevel=4))
     response.headers["Content-Encoding"] = "gzip"
     return response
+
+
+# The after_request compressor deliberately skips direct_passthrough responses,
+# which is every file served by Flask's static handler — so the vendor bundles
+# (~1.1 MB of JS/CSS) went out uncompressed. Compress those once and keep the
+# result keyed by (mtime, size) so a redeploy or edit invalidates it.
+_STATIC_COMPRESSIBLE_SUFFIXES = {".css", ".js", ".json", ".map", ".svg", ".txt"}
+_GZIP_ETAG_MARKER = '-gzip"'
+_STATIC_GZIP_MIN_BYTES = 1024
+_static_gzip_cache: dict[str, tuple[float, int, bytes]] = {}
+_static_gzip_lock = threading.Lock()
+
+
+def _static_gzip_payload(path: Path) -> bytes | None:
+    """Return the gzip bytes for a static file, compressing at most once per version."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    if stat.st_size < _STATIC_GZIP_MIN_BYTES:
+        return None
+
+    key = str(path)
+    cached = _static_gzip_cache.get(key)
+    if cached is not None and cached[0] == stat.st_mtime and cached[1] == stat.st_size:
+        return cached[2]
+
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    # Static assets are compressed once and served many times, so pay for level 9
+    # here rather than the level 4 used on per-request dynamic responses.
+    payload = gzip.compress(raw, compresslevel=9)
+    if len(payload) >= len(raw):
+        return None
+    with _static_gzip_lock:
+        _static_gzip_cache[key] = (stat.st_mtime, stat.st_size, payload)
+    return payload
+
+
+def _mark_gzip_etag(response) -> None:
+    """Make the ETag encoding-specific so caches keep the variants apart."""
+    etag = response.headers.get("ETag")
+    if etag and etag.endswith('"') and not etag.endswith(_GZIP_ETAG_MARKER):
+        response.headers["ETag"] = f'{etag[:-1]}-gzip"'
+
+
+def _serve_static(filename: str):
+    # A client revalidating the compressed variant sends back the "-gzip" ETag we
+    # issued. send_static_file compares If-None-Match against the file's own ETag,
+    # so strip the marker first or every revalidation misses and refetches.
+    if_none_match = request.environ.get("HTTP_IF_NONE_MATCH")
+    if if_none_match and _GZIP_ETAG_MARKER in if_none_match:
+        request.environ["HTTP_IF_NONE_MATCH"] = if_none_match.replace(_GZIP_ETAG_MARKER, '"')
+
+    response = app.send_static_file(filename)
+    if (
+        request.method == "HEAD"
+        or Path(filename).suffix.lower() not in _STATIC_COMPRESSIBLE_SUFFIXES
+    ):
+        return response
+
+    response.vary.add("Accept-Encoding")
+    if request.accept_encodings["gzip"] <= 0:
+        return response
+
+    if response.status_code == 304:
+        _mark_gzip_etag(response)
+        return response
+    if response.status_code != 200:
+        return response
+
+    full_path = safe_join(app.static_folder or "", filename)
+    payload = _static_gzip_payload(Path(full_path)) if full_path else None
+    if payload is None:
+        return response
+
+    # send_static_file hands back a file wrapper, so drop passthrough before
+    # replacing the body.
+    response.direct_passthrough = False
+    response.set_data(payload)
+    response.headers["Content-Encoding"] = "gzip"
+    _mark_gzip_etag(response)
+    return response
+
+
+app.view_functions["static"] = _serve_static
 
 
 def _admin_password() -> str | None:
@@ -994,8 +1187,11 @@ def use_case_definition_add():
         s = get_state(_scope_id())
         add_use_case_def(s)
         return _use_case_library_response("use_case_def_add")
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/use-cases/definition/remove", methods=["POST"])
@@ -1004,8 +1200,11 @@ def use_case_definition_remove():
         s = get_state(_scope_id())
         remove_use_case_def(s, request.form.get("key", ""))
         return _use_case_library_response("use_case_def_remove")
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/use-cases/definition/set", methods=["POST"])
@@ -1053,8 +1252,9 @@ def use_case_definition_set():
         return _use_case_library_response("use_case_def_set")
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/use-cases/export")
@@ -1066,8 +1266,11 @@ def use_case_definition_export():
         resp.headers["Content-Type"] = "application/json; charset=utf-8"
         resp.headers["Content-Disposition"] = 'attachment; filename="use-case-library.json"'
         return resp
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/use-cases/import", methods=["POST"])
@@ -1084,8 +1287,9 @@ def use_case_definition_import():
         return jsonify({"error": f"Invalid JSON: {e.msg}"}), 400
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/session/sync")
@@ -1106,14 +1310,17 @@ def gpu_add():
         if gpu_type not in GPUS:
             return jsonify({"error": "Invalid GPU type"}), 400
         
-        count = int(request.form.get("count", 8))
+        count = _form_int("count", 8)
         if count <= 0:
             return jsonify({"error": "Count must be positive"}), 400
             
         add_gpu(s, gpu_type, count)
         return _tracked_htmx_response("gpu_add", s)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/gpu/qty", methods=["POST"])
@@ -1122,22 +1329,25 @@ def gpu_qty():
         s = _request_state()
         if s is None:
             return _htmx_response()
-        uid = int(request.form.get("uid"))
+        uid = _form_int("uid")
         if "count" in request.form:
             gp = s.find_gpu(uid)
             if gp is None:
                 return jsonify({"error": "GPU pool not found"}), 404
-            count = max(0, int(float(request.form.get("count") or 0)))
+            count = max(0, int(_form_float("count", 0.0)))
             change_gpu_qty(s, uid, count - gp.count)
         else:
-            delta = int(request.form.get("delta"))
+            delta = _form_int("delta")
             change_gpu_qty(s, uid, delta)
         # GPU count edits can fire repeatedly while a user types or steps the
         # control. Keep this hot path untracked to avoid a snapshot row for every
         # transient keystroke; stable changes are captured by subsequent actions.
         return _htmx_response(s)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/gpu/remove", methods=["POST"])
@@ -1146,11 +1356,14 @@ def gpu_remove():
         s = _request_state()
         if s is None:
             return _htmx_response()
-        uid = int(request.form.get("uid"))
+        uid = _form_int("uid")
         remove_gpu(s, uid)
         return _tracked_htmx_response("gpu_remove", s)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/gpu/cost", methods=["POST"])
@@ -1159,13 +1372,16 @@ def gpu_cost():
         s = _request_state()
         if s is None:
             return _htmx_response()
-        uid = int(request.form.get("uid"))
-        cost = float(request.form.get("value", 0))
+        uid = _form_int("uid")
+        cost = _form_float("value", 0.0)
         set_gpu_cost(s, uid, cost)
         # Like GPU quantity, cost edits are high-frequency numeric updates.
         return _htmx_response(s)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/model/add", methods=["POST"])
@@ -1182,8 +1398,9 @@ def model_add():
         return _htmx_response(s)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/model/add-many", methods=["POST"])
@@ -1205,8 +1422,9 @@ def model_add_many():
         return _htmx_response(s)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/model/auto", methods=["POST"])
@@ -1222,8 +1440,9 @@ def model_auto():
         return _tracked_htmx_response("model_auto", s)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/model/auto-exclude", methods=["POST"])
@@ -1232,11 +1451,14 @@ def model_auto_exclude():
         s = _request_state()
         if s is None:
             return _htmx_response()
-        uid = int(request.form.get("uid"))
+        uid = _form_int("uid")
         auto_exclude_model(s, uid)
         return _htmx_response(s)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/model/auto-reallow", methods=["POST"])
@@ -1248,8 +1470,11 @@ def model_auto_reallow():
         model_key = request.form.get("key", "")
         auto_reallow_model(s, model_key)
         return _htmx_response(s)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/model/remove", methods=["POST"])
@@ -1258,11 +1483,14 @@ def model_remove():
         s = _request_state()
         if s is None:
             return _htmx_response()
-        uid = int(request.form.get("uid"))
+        uid = _form_int("uid")
         remove_model(s, uid)
         return _htmx_response(s)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/model/prec", methods=["POST"])
@@ -1271,15 +1499,18 @@ def model_prec():
         s = _request_state()
         if s is None:
             return _htmx_response()
-        uid = int(request.form.get("uid"))
+        uid = _form_int("uid")
         prec = request.form.get("prec")
         if prec not in PRECISIONS:
             return jsonify({"error": "Invalid precision"}), 400
             
         set_model_prec(s, uid, prec)
         return _htmx_response(s)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/model/spec", methods=["POST"])
@@ -1288,10 +1519,10 @@ def model_spec():
         s = _request_state()
         if s is None:
             return _htmx_response()
-        uid = int(request.form.get("uid"))
+        uid = _form_int("uid")
         method = request.form.get("method", "off")
         try:
-            spec_k = int(request.form.get("spec_k", 0))
+            spec_k = _form_int("spec_k", 0)
         except (TypeError, ValueError):
             spec_k = 0
         am = s.find_model(uid)
@@ -1314,8 +1545,11 @@ def model_spec():
                     }), 400
         set_model_spec(s, uid, method, spec_k)
         return _htmx_response(s)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/model/count", methods=["POST"])
@@ -1324,15 +1558,18 @@ def model_count():
         s = _request_state()
         if s is None:
             return _htmx_response()
-        uid = int(request.form.get("uid"))
-        count = int(request.form.get("count"))
+        uid = _form_int("uid")
+        count = _form_int("count")
         if count < 0:
             return jsonify({"error": "Count cannot be negative"}), 400
             
         set_model_gpu_count(s, uid, count)
         return _htmx_response(s)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/model/strat", methods=["POST"])
@@ -1341,11 +1578,11 @@ def model_strat():
         s = _request_state()
         if s is None:
             return _htmx_response()
-        uid = int(request.form.get("uid"))
+        uid = _form_int("uid")
         phase = request.form.get("phase", "decode")
-        tp = int(request.form.get("tp"))
-        pp = int(request.form.get("pp", 1))
-        dp = int(request.form.get("dp"))
+        tp = _form_int("tp")
+        pp = _form_int("pp", 1)
+        dp = _form_int("dp")
         
         # Validate the strategy before setting
         am = s.find_model(uid)
@@ -1365,8 +1602,11 @@ def model_strat():
             
         set_model_strat(s, uid, tp, pp, dp, phase)
         return _htmx_response(s)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/model/gpu_pool", methods=["POST"])
@@ -1375,12 +1615,15 @@ def model_gpu_pool():
         s = _request_state()
         if s is None:
             return _htmx_response()
-        uid = int(request.form.get("uid"))
-        gpu_uid = int(request.form.get("gpu_uid"))
+        uid = _form_int("uid")
+        gpu_uid = _form_int("gpu_uid")
         set_model_gpu_pool(s, uid, gpu_uid)
         return _htmx_response(s)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/dist/preset", methods=["POST"])
@@ -1394,8 +1637,11 @@ def dist_preset():
         set_dist_preset(s, kind, preset)
         retune_models(s, preserve_existing=False)
         return _tracked_htmx_response("dist_preset", s)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/dist/slide", methods=["POST"])
@@ -1414,8 +1660,9 @@ def dist_slide():
         return _tracked_htmx_response("dist_slide", s)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/settings/mu", methods=["POST"])
@@ -1430,8 +1677,9 @@ def settings_mu():
         return _tracked_htmx_response("settings_mu", s)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/settings/non-kv", methods=["POST"])
@@ -1446,8 +1694,9 @@ def settings_non_kv():
         return _tracked_htmx_response("settings_non_kv", s)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/settings/eff", methods=["POST"])
@@ -1467,8 +1716,9 @@ def settings_eff():
         return _tracked_htmx_response("settings_eff", s)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/settings/int", methods=["POST"])
@@ -1487,8 +1737,9 @@ def settings_int():
         return _tracked_htmx_response("settings_int", s)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/projection/pct", methods=["POST"])
@@ -1498,11 +1749,14 @@ def projection_pct():
         if s is None:
             return _htmx_response()
         key = request.form.get("key", "")
-        value = int(request.form.get("value")) / 100
+        value = _form_int("value") / 100
         set_projection_pct(s, key, value)
         return _tracked_htmx_response("projection_pct", s)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/projection/choice", methods=["POST"])
@@ -1515,8 +1769,11 @@ def projection_choice():
         value = request.form.get("value", "")
         set_projection_choice(s, key, value)
         return _tracked_htmx_response("projection_choice", s)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/projection/toggle", methods=["POST"])
@@ -1530,8 +1787,11 @@ def projection_toggle():
         value = request.form.get("value") in ("on", "true", "1")
         set_projection_toggle(s, key, value)
         return _tracked_htmx_response("projection_toggle", s)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/project/add", methods=["POST"])
@@ -1544,8 +1804,11 @@ def project_add():
         add_project(s, preset_key)
         retune_models(s, preserve_existing=False)
         return _tracked_htmx_response("project_add", s)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/project/add-all", methods=["POST"])
@@ -1558,8 +1821,11 @@ def project_add_all():
             add_project(s, str(preset["key"]))
         retune_models(s, preserve_existing=False)
         return _tracked_htmx_response("project_add_all", s)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/project/remove", methods=["POST"])
@@ -1568,12 +1834,15 @@ def project_remove():
         s = _request_state()
         if s is None:
             return _htmx_response()
-        uid = int(request.form.get("uid", "0"))
+        uid = _form_int("uid", 0)
         remove_project(s, uid)
         retune_models(s, preserve_existing=False)
         return _tracked_htmx_response("project_remove", s)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/project/set", methods=["POST"])
@@ -1582,7 +1851,7 @@ def project_set():
         s = _request_state()
         if s is None:
             return _htmx_response()
-        uid = int(request.form.get("uid", "0"))
+        uid = _form_int("uid", 0)
         field_name = request.form.get("field", "")
         raw_value = request.form.get("value", "")
         if field_name == "kind":
@@ -1639,8 +1908,9 @@ def project_set():
         return _tracked_htmx_response("project_set", s)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/project/export")
@@ -1655,8 +1925,11 @@ def project_export():
         resp.headers["Content-Type"] = "application/json; charset=utf-8"
         resp.headers["Content-Disposition"] = 'attachment; filename="use-cases.json"'
         return resp
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/project/import", methods=["POST"])
@@ -1676,8 +1949,9 @@ def project_import():
         return jsonify({"error": f"Invalid JSON: {e.msg}"}), 400
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/mode", methods=["POST"])
@@ -1691,8 +1965,11 @@ def set_mode():
         if sb:
             sb.mode = mode
         return _tracked_htmx_response("mode", sa)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/compare/duplicate", methods=["POST"])
@@ -1700,8 +1977,11 @@ def compare_duplicate():
     try:
         duplicate_compare_state(_scope_id())
         return _tracked_htmx_response("compare_duplicate")
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/compare/close", methods=["POST"])
@@ -1709,8 +1989,11 @@ def compare_close():
     try:
         clear_compare_state(_scope_id())
         return _tracked_htmx_response("compare_close")
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/task/preset", methods=["POST"])
@@ -1736,8 +2019,11 @@ def task_preset():
             s.task_ol = tp["o"]
             retune_models(s, preserve_existing=False)
         return _tracked_htmx_response("task_preset", s)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/task/length", methods=["POST"])
@@ -1746,7 +2032,7 @@ def task_length():
         s = _request_state()
         if s is None:
             return _htmx_response()
-        length = 2 ** int(request.form.get("value"))
+        length = 2 ** _form_int("value")
         kind = request.form.get("kind")
         if kind == "in":
             s.task_il = length
@@ -1754,8 +2040,11 @@ def task_length():
             s.task_ol = length
         retune_models(s, preserve_existing=False)
         return _tracked_htmx_response("task_length", s)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 def _annotate_chart_spec(state: PlannerState, datasets: list[dict]) -> list[dict]:
@@ -1827,8 +2116,11 @@ def chart_data():
         if sb:
             datasets += _annotate_chart_spec(sb, chart_user_pareto(sb, batch_sizes, " (B)"))
         return jsonify({"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/api/projection-report")
@@ -1837,8 +2129,11 @@ def projection_report():
         sa = get_state(_scope_id())
         sb = get_compare_state(_scope_id())
         return jsonify({"text": _format_projection_report(sa, sb)})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+        return jsonify({"error": "Unexpected server error."}), 500
 
 
 @app.route("/picker/gpu")
@@ -2015,6 +2310,7 @@ def log2int(n):
 
 if __name__ == "__main__":
     host = os.environ.get("HOST") or os.environ.get("FLASK_RUN_HOST") or "0.0.0.0"
-    port = int(os.environ.get("PORT") or os.environ.get("FLASK_RUN_PORT") or "5018")
+    # Keep this aligned with .env.example, compose.yaml, the Dockerfile, and README.
+    port = int(os.environ.get("PORT") or os.environ.get("FLASK_RUN_PORT") or "5014")
     debug = _env_bool("FLASK_DEBUG", _env_bool("DEBUG", False))
     app.run(host=host, port=port, debug=debug)
