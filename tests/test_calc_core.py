@@ -188,7 +188,7 @@ class CoreCapacityMathTests(unittest.TestCase):
         self.assertAlmostEqual(result.lat, 1000.0 / (result.tps / 64), delta=0.02)
 
     def test_pipeline_decode_does_not_accelerate_each_user_with_concurrency(self):
-        model = MODELS["kimi-k3-preview"]
+        model = MODELS["kimi-k3"]
         gpu = GPUS["B300"]
         per_user_tps = []
 
