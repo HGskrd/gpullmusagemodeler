@@ -4,6 +4,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2026-08-09
+
+### Added
+
+- Added the released MiniMax M3 sparse-MoE catalog entry, NVIDIA Nemotron 3 Embed 8B/1B encoder entries, exact official MiniMax M3 and Nemotron 1B NVFP4 artifact footprints, and published seven-token DSpark profiles for Kimi K3 and DeepSeek V4 Flash 0731.
+- Added explicit long-context API price tiers for GPT-5.6 and Gemini 3.1 Pro, applied only when input length exceeds each vendor threshold.
+- Added conservative Kimi K3 Block AttnRes prefill activation capacity accounting and an explicit warning that expert-parallel MoE dispatch/combine traffic is not yet included.
+
+### Changed
+
+- Renamed the user-facing product from “vLLM multi-model planner” to “GPU/LLM Usage Modeler.” The estimator is runtime-neutral and now describes vLLM as a calibration/runtime example rather than a requirement, which better reflects Tenstorrent, Furiosa, Intel, AMD, NVIDIA, and Apple accelerator profiles.
+- Replaced the DeepSeek V4 Flash preview proxy with the official 0731 configuration and 1M context; kept V4 Pro explicitly labeled Preview with dated assumptions.
+- Updated Gemini 3.6 Flash, Claude Opus 5, GPT-5.6 Terra/Luna prices, and Gemini Flash-Lite context from current first-party API documentation.
+- Corrected MI455X, Helios, and the MI400 compatibility profile to AMD's launched 432 GB / 23.3 TB/s / 5.0 PF dense BF16 / 20.1 PF FP8 / 40.3 PF MXFP4 / 3.6 TB/s scale-up specifications. The unpublished 1.5 kW power input remains labeled as a planner proxy.
+- Split token-growing attention KV traffic from fixed recurrent-state traffic so speculative verification no longer multiplies recurrent-state reads by the draft depth.
+
+### Fixed
+
+- GPU vendor names in the hardware picker now scroll with their cards instead of sticking inside the dropdown and visually detaching from the values below.
+
 ## 2026-07-27
 
 ### Changed

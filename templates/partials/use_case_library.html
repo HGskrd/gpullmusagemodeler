@@ -237,7 +237,7 @@
       <span class="val T">mu {{ avg_dist(out_preset['out'], OUTPUT_BUCKETS)|fmt_num }}</span>
     </div>
 
-    <div class="pc-row" title="Catalog-owned empirical prior for the share of prompt tokens expected to hit Automatic Prefix Caching. Calibrate the catalog from vLLM query-token hit telemetry.">
+    <div class="pc-row" title="Catalog-owned empirical prior for the share of prompt tokens expected to hit a serving runtime's prefix cache. Calibrate from prefix-cache telemetry; vLLM query-token hits are one supported source.">
       <span class="T">Prefix reuse</span>
       <span class="val M">{{ (preset.prefix_hit_rate * 100)|round|int }}% empirical</span>
     </div>

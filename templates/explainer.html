@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>vLLM planner · user guide</title>
+<title>GPU/LLM Usage Modeler · user guide</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 <style>
   body.docs-body { max-width: 1400px; padding: 12px; }
@@ -66,7 +66,7 @@
 
 <div class="topbar">
   <div>
-    <h1>vLLM multi-model planner</h1>
+    <h1>GPU/LLM Usage Modeler</h1>
     <p class="T">User guide · what the calculator does and how to drive it</p>
   </div>
   <div class="flex" style="gap:6px;">
@@ -95,17 +95,17 @@
 <section class="docs-section panel" id="tldr">
   <h2>TL;DR — what this is</h2>
   <p>
-    A roofline-style planner for vLLM deployments. You describe the hardware you have (GPUs, memory caps),
+    A roofline-style planner for LLM serving deployments. You describe the hardware you have (GPUs, AI accelerators, and memory caps),
     the models you want to serve (with precision and parallelism), and the demand —
     a portfolio of <em>use cases</em>, each with a token demand, difficulty / quality SLO, WTP
     ceiling, capability requirements, and an input/output length preset. The planner estimates
-    peak throughput and per-user latency under vLLM's continuous batching, and projects how that
+    peak throughput and per-user latency under a closed-form continuous-batching approximation, and projects how that
     demand routes across your cluster versus a corporate cloud fallback.
   </p>
   <p class="note">
     It's a closed-form estimator, not a simulator. Numbers are for sizing conversations
-    (GPU count, precision, TP/PP/DP), not SLA guarantees. Calibrate against vLLM's
-    runtime metrics on representative workloads before trusting fine detail.
+    (accelerator count, precision, TP/PP/DP), not SLA guarantees. Calibrate against the selected
+    runtime on representative workloads; for vLLM, its scheduler, cache, and request metrics are useful inputs.
   </p>
 </section>
 
@@ -322,11 +322,11 @@
 
   <h3>Prefix reuse</h3>
   <p>
-    Each use case carries an <em>empirical prefix-token reuse prior</em> for vLLM Automatic Prefix
-    Caching: the fraction of prompt tokens expected to be served from cache instead of re-prefilled.
+    Each use case carries an <em>empirical prefix-token reuse prior</em>: the fraction of prompt
+    tokens expected to be served from cache instead of re-prefilled.
     This is catalog-owned rather than a user tuning knob. Shared capacity views use a portfolio
     average weighted by prompt-token volume, while routing and cloud pricing use each use case's
-    own rate. Replace these priors with observed vLLM query-token hit telemetry when available.
+    own rate. Replace these priors with observed prefix-cache telemetry; vLLM query-token hits are one supported calibration source.
     Prefix reuse affects prefill-sensitive metrics only; pure decode is unchanged. Effective
     prefill length = input_len × (1 − hit_rate).
   </p>
@@ -336,8 +336,8 @@
   <h2>Efficiency parameters</h2>
   <p>
     Under <kbd>⚙ Efficiency parameters</kbd> in the cluster panel. These are the knobs that make
-    the roofline match reality; the defaults are sane for current vLLM builds, but you'll want to
-    calibrate per-workload.
+    the roofline match reality. The defaults are vLLM-informed starting points, not portable runtime
+    guarantees; calibrate them for the selected runtime and workload.
   </p>
 
   <h3>Prefill-only</h3>
@@ -477,8 +477,8 @@
     <dd>A closed-form bound on throughput from either bandwidth (KV/weight fetches) or compute
       (FLOPs), whichever binds first.</dd>
     <dt>Continuous batching</dt>
-    <dd>vLLM's scheduler: decode slots are refilled request-by-request rather than in fixed
-      micro-batches, keeping the GPU busy across uneven request lengths.</dd>
+    <dd>A scheduler refills decode slots request-by-request rather than in fixed micro-batches,
+      keeping an accelerator busy across uneven request lengths. vLLM is one implementation.</dd>
     <dt>KV cache</dt>
     <dd>Attention state that must live in accelerator memory for the duration of a request. Full attention
       stores per-token KV; linear-attention layers store fixed recurrent state per live sequence.</dd>

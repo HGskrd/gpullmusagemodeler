@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from calc import (
     EfficiencyParams,
+    SpecRuntime,
     _active_weight_bytes,
     _cloud_price_per_m_in_preset,
     _compute_decode_core,
@@ -15,6 +16,7 @@ from calc import (
     _pp_peak_fraction,
     _prefill_attention_work,
     communication_breakdown,
+    attention_residual_scratch_bytes,
     chart_user_pareto,
     compute_data,
     compute_data_capacity,
@@ -29,12 +31,14 @@ from calc import (
     optimize_spec_k,
     per_tp_linear_attention_state_bytes,
     per_replica_kv_cache_bytes,
+    per_replica_recurrent_state_bytes,
+    per_replica_token_kv_cache_bytes,
     resolve_spec_runtime,
     spec_acceptance_len,
     spec_finite_output_tau,
     valid_strategies,
 )
-from data import DIST_PRESETS, GPUS, MODELS, EmbeddingProfile, GPU, Model, success_rate
+from data import DIST_PRESETS, GPUS, MODELS, EmbeddingProfile, GPU, Model, SpeculativeProfile, success_rate
 from placement import get_deployed, retune_models
 from state import GpuPool, ModelAssignment, PlannerState, Project
 
@@ -73,6 +77,75 @@ class CoreCapacityMathTests(unittest.TestCase):
         convolution = 2 * ((4 * 8) / 4 + (2 * 2 * 4) / 2)
         expected = 2 * (recurrent + convolution) * 2
         self.assertEqual(per_tp_linear_attention_state_bytes(model, "bf16", 4), expected)
+
+    def test_recurrent_state_is_split_from_token_growing_kv(self):
+        model = Model(
+            "hybrid", "Hybrid", "Test", "#000", 1, 1, False, 2, 4, 1, 8, False,
+            attention_layers=1,
+            linear_attention_layers=1,
+            linear_attention_heads=4,
+            linear_attention_head_dim=8,
+            linear_attention_k_heads=2,
+            linear_attention_k_head_dim=4,
+            linear_attention_conv_kernel=3,
+        )
+        token_kv = per_replica_token_kv_cache_bytes(model, 100, "bf16", 1, 1)
+        recurrent = per_replica_recurrent_state_bytes(model, "bf16", 1, 1)
+
+        self.assertGreater(token_kv, 0)
+        self.assertGreater(recurrent, 0)
+        self.assertEqual(per_replica_kv_cache_bytes(model, 100, "bf16", 1, 1), token_kv + recurrent)
+
+    def test_spec_verification_does_not_multiply_fixed_recurrent_state_by_k(self):
+        model = Model(
+            "recurrent", "Recurrent", "Test", "#000", 1, 1, False, 1, 1, 1, 4, False,
+            attention_layers=0, linear_attention_layers=1,
+            linear_attention_heads=1, linear_attention_head_dim=4,
+        )
+        gpu = GPU("fast", "Fast", "nv", 1e12, 1e12, 1e30, 1e30, 1e12, 8)
+        eff = EfficiencyParams(bw_eff=1.0, comp_eff=1.0, overhead=0.0, paged_oh=0.0, moe_imbalance=1.0)
+        profile = SpeculativeProfile(
+            "parallel", "dflash", 0.0, 0, True, 4, 0.8, 0.0, "https://example.com", "test",
+        )
+        spec = SpecRuntime(profile, 4, 0.8, 1.0, 1, 0.0, 0.0)
+        recurrent = per_replica_recurrent_state_bytes(model, "bf16", 1, 1)
+
+        with (
+            patch("calc.SPEC_DRAFT_LAUNCH_OVERHEAD_S", 0.0),
+            patch("calc.SPEC_SCHEDULER_OVERHEAD_S", 0.0),
+            patch("calc.SPEC_REJECTION_SYNC_OVERHEAD_S", 0.0),
+        ):
+            cycle = _decode_step_time(model, 1, 1, 1, gpu, "bf16", 100, eff, spec=spec)
+
+        # No attention KV exists, so k=4 still incurs exactly one recurrent load
+        # and one final store, plus one target-weight read.
+        expected = (model.active_weight_bytes("bf16") + 2 * recurrent) / gpu.effective_bw
+        self.assertAlmostEqual(cycle, expected)
+
+    def test_attention_residual_scratch_is_tp_and_pp_sharded(self):
+        model = Model(
+            "attnres", "AttnRes", "Test", "#000", 1, 1, False, 4, 4, 4, 8, False,
+            hidden_dim=8, attention_residual_block_size=2,
+        )
+        # Four layers in two blocks retain three residual sources. PP2 owns half
+        # the layer sources and TP2 sequence-shards the token activations.
+        expected = 3 * 100 * 8 * 2 * 0.5 / 2
+        self.assertEqual(attention_residual_scratch_bytes(model, 100, "bf16", 2, 2), expected)
+
+    def test_attention_residual_scratch_reduces_prefill_batch_fit(self):
+        base = Model(
+            "plain", "Plain", "Test", "#000", 1, 1, False, 4, 4, 4, 8, False,
+            hidden_dim=8192,
+        )
+        attnres = replace(base, key="attnres-fit", attention_residual_block_size=1)
+        gpu = GPU("small", "Small", "nv", 2e8, 1e12, 1e30, 1e30, 1e12, 8)
+        eff = EfficiencyParams(overhead=0.0, paged_oh=0.0)
+        plain = compute_prefill(base, 1, 1, 1, 1, 1024, gpu, 1.0, 0.0, "bf16", eff)
+        guarded = compute_prefill(attnres, 1, 1, 1, 1, 1024, gpu, 1.0, 0.0, "bf16", eff)
+
+        self.assertIsNotNone(plain)
+        self.assertIsNotNone(guarded)
+        self.assertLess(guarded.max_batch, plain.max_batch)
 
     def test_sparse_attention_bounds_selected_tokens_and_models_indexer_work(self):
         model = Model(
@@ -145,6 +218,13 @@ class CoreCapacityMathTests(unittest.TestCase):
         expected = model.layers * 2 * (per_collective + 3e-6) * (1 - self.eff.ar_overlap)
 
         self.assertAlmostEqual(_dense_tp_oh(tp, 1, batch_tokens, model, gpu, self.eff.bw_eff, self.eff.ar_overlap), expected)
+
+    def test_moe_communication_discloses_unmodeled_expert_parallelism(self):
+        model = Model("moe", "MoE", "Test", "#000", 8, 2, True, 2, 2, 2, 8, False)
+        comm = communication_breakdown(model, 1, 1, 1, 128, GPUS["H100"], self.eff)
+
+        self.assertTrue(comm.expert_parallel_unmodeled)
+        self.assertFalse(comm.ep_advisory)
 
     def test_attention_counts_qk_and_av_matmuls(self):
         model = Model("tiny", "Tiny", "Test", "#000", 1, 1, False, 1, 1, 1, 8, False)
@@ -313,6 +393,29 @@ class ProjectionMathTests(unittest.TestCase):
         expected_success = success_rate(info["quality"], 0.10)
         self.assertAlmostEqual(info["success_rate"], expected_success)
         self.assertAlmostEqual(effective_pm, raw_pm / expected_success)
+
+    def test_cloud_long_context_tier_uses_input_threshold_and_absolute_prices(self):
+        cloud = {
+            "vendor": "Test", "quality": 1.0, "token_efficiency": 1.0,
+            "capabilities": (), "in_per_m": 1.0, "cached_in_per_m": 0.5, "out_per_m": 2.0,
+            "long_context_threshold_tokens": 1000,
+            "long_context_in_per_m": 3.0,
+            "long_context_cached_in_per_m": 1.5,
+            "long_context_out_per_m": 4.0,
+        }
+        at_threshold = {"in_len": 1000, "out_len": 10000, "tokens_per_request": 11000}
+        above_threshold = {"in_len": 1001, "out_len": 9999, "tokens_per_request": 11000}
+
+        with patch("calc.cloud_policy.effective_corpo_models", return_value=[("tiered", cloud)]):
+            normal, normal_pm = _cloud_price_per_m_in_preset(0.0, 0.0, 0.0, at_threshold, 0.5, "test")
+            tiered, tiered_pm = _cloud_price_per_m_in_preset(0.0, 0.0, 0.0, above_threshold, 0.5, "test")
+
+        self.assertFalse(normal["long_context_pricing_applied"])
+        self.assertTrue(tiered["long_context_pricing_applied"])
+        self.assertEqual(tiered["effective_in_per_m"], 3.0)
+        self.assertEqual(tiered["effective_cached_in_per_m"], 1.5)
+        self.assertEqual(tiered["effective_out_per_m"], 4.0)
+        self.assertGreater(tiered_pm, normal_pm)
 
     def test_completed_retry_adjusted_work_is_not_value_discounted_twice(self):
         state = PlannerState(

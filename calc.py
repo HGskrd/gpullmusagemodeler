@@ -1,4 +1,4 @@
-"""Roofline throughput estimation engine for vLLM multi-model planning."""
+"""Roofline throughput estimation engine for the GPU/LLM Usage Modeler."""
 
 from __future__ import annotations
 
@@ -48,9 +48,9 @@ from data import (
 )
 import cloud_policy
 
-# Wall-clock GPU draw as a fraction of published board TDP during vLLM inference.
-# vLLM-at-saturation is typically compute- or bandwidth-bound; measured draw on
-# H100/MI300 commonly lands in the 0.6–0.8 range. Held central for transparency.
+# Wall-clock accelerator draw as a fraction of published board TDP during saturated
+# inference. The 0.6–0.8 anchor comes primarily from vLLM measurements on H100/MI300
+# and is a transparent starting point, not a portable runtime/hardware guarantee.
 GPU_POWER_UTILIZATION = 0.70
 LATENT_UNLOCK_STEEPNESS = 4.0
 MARGINAL_RECOMMENDATION_LIMIT = 5
@@ -311,6 +311,9 @@ class CommBreakdown:
     tp_cross_node: bool = False
     pp_cross_node_boundaries: int = 0
     ep_advisory: bool = False
+    # Expert parallelism is not a planner topology dimension.  Keep this explicit
+    # instead of silently charging TP as if it were EP; callers can disclose it.
+    expert_parallel_unmodeled: bool = False
     dcp_advisory: bool = False
 
     @property
@@ -499,7 +502,14 @@ def per_replica_kv_cache_bytes(m: Model, seq_len: float, prec: str, pp: int, tp:
     return value
 
 
-def _per_replica_kv_cache_bytes_uncached(m: Model, seq_len: float, prec: str, pp: int, tp: int) -> float:
+def per_replica_token_kv_cache_bytes(m: Model, seq_len: float, prec: str, pp: int, tp: int) -> float:
+    """Per-rank, token-growing attention KV for one sequence.
+
+    Recurrent/linear-attention state is deliberately excluded.  The two kinds of
+    state have the same residency lifetime but different decode traffic: attention
+    reads the existing KV once per verified query position, while a fused recurrent
+    block loads one initial state and stores one final state for the whole block.
+    """
     pp = max(pp, 1)
     pp_fraction = _pp_peak_fraction(m, pp)
     if m.is_mla:
@@ -514,9 +524,43 @@ def _per_replica_kv_cache_bytes_uncached(m: Model, seq_len: float, prec: str, pp
             full_cache / kv_shards_for_heads(_kv_heads_for_layer(m, global_layer=True), tp)
             + local_cache / kv_shards_for_heads(_kv_heads_for_layer(m, global_layer=False), tp)
         )
-    token_cache *= pp_fraction
-    linear_state = per_tp_linear_attention_state_bytes(m, prec, tp) * pp_fraction
-    return token_cache + linear_state
+    return token_cache * pp_fraction
+
+
+def per_replica_recurrent_state_bytes(m: Model, prec: str, pp: int, tp: int) -> float:
+    """Per-rank fixed recurrent/conv state resident for one sequence."""
+    return per_tp_linear_attention_state_bytes(m, prec, tp) * _pp_peak_fraction(m, max(pp, 1))
+
+
+def _per_replica_kv_cache_bytes_uncached(m: Model, seq_len: float, prec: str, pp: int, tp: int) -> float:
+    return (
+        per_replica_token_kv_cache_bytes(m, seq_len, prec, pp, tp)
+        + per_replica_recurrent_state_bytes(m, prec, pp, tp)
+    )
+
+
+def attention_residual_scratch_bytes(m: Model, seq_len: float, prec: str, pp: int, tp: int) -> float:
+    """Conservative per-rank prefill scratch for block attention residuals.
+
+    AttnRes retains several full-width activation sources across layer blocks.  The
+    catalog records their count but not kernel liveness/checkpointing details, so the
+    closed-form guard assumes every source is live in BF16.  Tokens are sequence-
+    sharded across TP ranks and source-producing layers are sharded across PP stages.
+    This is intentionally a capacity guard, not a claim about a specific runtime's
+    allocator peak; users can calibrate remaining non-KV memory from measurements.
+    """
+    sources = max(int(getattr(m, "attention_residual_source_count", 0)), 0)
+    if sources <= 0 or seq_len <= 0:
+        return 0.0
+    activation_bpe = max(2.0, float(m.kv_cache_bytes_per_elem(prec)))
+    return (
+        sources
+        * max(float(seq_len), 0.0)
+        * max(int(m.hidden_size), 1)
+        * activation_bpe
+        * _pp_peak_fraction(m, max(pp, 1))
+        / max(int(tp), 1)
+    )
 
 
 def _pp_peak_fraction(m: Model, pp: int) -> float:
@@ -961,6 +1005,7 @@ def communication_breakdown(
         tp_cross_node=tp > g.node_size,
         pp_cross_node_boundaries=pp_cross,
         ep_advisory=m.is_moe and (tp * pp > g.node_size),
+        expert_parallel_unmodeled=m.is_moe,
         dcp_advisory=(
             getattr(m, "embedding_profile", None) is None
             and avg_seq >= LONG_CTX_DCP_SEQ
@@ -993,15 +1038,21 @@ def _decode_step_time(
     aw = _active_weight_bytes(m, prec)
     pp_fraction = _pp_peak_fraction(m, pp)
     wt = (aw * pp_fraction / tp) / (g.effective_bw * eff.bw_eff)
-    base_kv_read_bytes = pr * per_replica_kv_cache_bytes(m, avg_seq, prec, pp, tp)
+    base_token_kv_read_bytes = pr * per_replica_token_kv_cache_bytes(m, avg_seq, prec, pp, tp)
+    recurrent_state_bytes = pr * per_replica_recurrent_state_bytes(m, prec, pp, tp)
     # A speculative verification pass forwards the k drafted positions. The
     # already-available target logit verifies the first draft and the final
     # forwarded position supplies the bonus token, so this is k (not k+1)
     # target positions in steady state. Target weights are reused once, while
     # KV reads, activation FLOPs, and collective payloads scale with k.
     verify_positions = max(spec.k, 1) if spec is not None else 1
-    kv_read_bytes = base_kv_read_bytes * verify_positions
-    kv_time = kv_read_bytes / (g.effective_bw * eff.bw_eff)
+    # A fused recurrent kernel advances all verified positions from one initial
+    # state, then persists one final state.  Charge one read + one write per block.
+    # This is conservative for ReplaySSM-style buffered stores and, unlike the old
+    # combined-KV path, does not multiply fixed recurrent state by speculative k.
+    state_traffic_bytes = 2.0 * recurrent_state_bytes
+    kv_traffic_bytes = base_token_kv_read_bytes * verify_positions + state_traffic_bytes
+    kv_time = kv_traffic_bytes / (g.effective_bw * eff.bw_eff)
     bt = wt + kv_time
 
     wf = 2 * m.active_params * pr * pp_fraction
@@ -1040,7 +1091,9 @@ def _decode_step_time(
         draft_positions = spec.k if spec.profile.parallel_draft else 1
         draft_bt = (
             spec.draft_weight_bytes * pp_fraction / tp
-            + base_kv_read_bytes * spec.profile.kv_overhead * draft_positions
+            + (
+                base_token_kv_read_bytes + recurrent_state_bytes
+            ) * spec.profile.kv_overhead * draft_positions
         ) / (
             g.effective_bw * eff.bw_eff
         )
@@ -1327,7 +1380,10 @@ def compute_prefill(
         # decode capacity. Some attached drafters reuse target hidden states;
         # the profile overhead is the catalog's measured/estimated aggregate.
         seq_kv *= 1.0 + spec.profile.kv_overhead
-    max_per_replica = int(mem.kv_budget / seq_kv) if seq_kv > 0 else 0
+    # AttnRes activations are temporary rather than KV, but they scale with
+    # batch×sequence and therefore must participate in the prefill fit check.
+    per_sequence_memory = seq_kv + attention_residual_scratch_bytes(m, seq_len, prec, pp, tp)
+    max_per_replica = int(mem.kv_budget / per_sequence_memory) if per_sequence_memory > 0 else 0
     if pr > max_per_replica:
         return None
 
@@ -3323,17 +3379,33 @@ def _cloud_price_per_m_in_preset(
         cloud_success = success_rate(cloud_quality, difficulty)
         if cloud_success + 1e-9 < min_success:
             continue
+        threshold = max(float(cloud.get("long_context_threshold_tokens", 0.0) or 0.0), 0.0)
+        long_context_pricing = threshold > 0.0 and in_len > threshold
+        def tier_price(field: str, base_field: str) -> float:
+            value = cloud.get(field) if long_context_pricing else None
+            return max(float(cloud[base_field] if value is None else value), 0.0)
+
+        input_price = tier_price("long_context_in_per_m", "in_per_m")
+        cached_input_price = tier_price("long_context_cached_in_per_m", "cached_in_per_m")
+        output_price = tier_price("long_context_out_per_m", "out_per_m")
         sticker = (
-            (uncached / 1e6) * cloud["in_per_m"]
-            + (cached / 1e6) * cloud["cached_in_per_m"]
-            + ((out_len / cloud_eff) / 1e6) * cloud["out_per_m"]
+            (uncached / 1e6) * input_price
+            + (cached / 1e6) * cached_input_price
+            + ((out_len / cloud_eff) / 1e6) * output_price
         )
         # Token efficiency affects generated tokens, not the fixed prompt payload.
         # Retry-adjust cloud and on-prem routes symmetrically. A route with
         # success probability p consumes 1/p attempts per completed useful task.
         price_pm = sticker / (tokens_per_req / 1e6) / max(cloud_success, 1e-6)
         if best is None or price_pm < best[0]:
-            best = (price_pm, cloud | {"key": key, "success_rate": cloud_success})
+            best = (price_pm, cloud | {
+                "key": key,
+                "success_rate": cloud_success,
+                "long_context_pricing_applied": long_context_pricing,
+                "effective_in_per_m": input_price,
+                "effective_cached_in_per_m": cached_input_price,
+                "effective_out_per_m": output_price,
+            })
 
     if best is None:
         return None, math.inf

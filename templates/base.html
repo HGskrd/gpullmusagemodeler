@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>vLLM Multi-Model Planner</title>
+<title>GPU/LLM Usage Modeler</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='econ.css') }}">
 <script src="{{ url_for('static', filename='vendor/echarts.min.js') }}"></script>
@@ -15,8 +15,8 @@
 
 <div class="topbar">
   <div>
-    <h1>vLLM multi-model planner</h1>
-    <p class="T">Roofline throughput estimates · continuous batching · profiled non-KV anchored KV capacity</p>
+    <h1>GPU/LLM Usage Modeler</h1>
+    <p class="T">Accelerator roofline and capacity planner · continuous batching · profiled non-KV anchored KV capacity</p>
   </div>
   <div class="flex" style="gap:6px;">
     <div class="flex" id="compareControls" style="gap:6px;">
@@ -61,12 +61,12 @@
 
 {% include "partials/revenue_projection.html" %}
 
-<p class="T" style="margin-top:6px;">Roofline estimates · vLLM continuous batching · separate prefill, decode, and embedding encoder views · KV capacity anchored to requested per-GPU memory minus weights minus profiled non-KV runtime memory · MoE uses activated params for core compute plus an adjustable expert-imbalance penalty · empirical per-use-case APC/prefix reuse for prefill-sensitive views · explicit prefill/decode interference blend · paged-KV runtime overhead and residual KV slack modeled · cross-node TP warning.</p>
+<p class="T" style="margin-top:6px;">Roofline estimates · continuous-batching approximation · separate prefill, decode, and embedding encoder views · KV capacity anchored to requested per-accelerator memory minus weights minus profiled non-KV runtime memory · MoE uses activated params for core compute plus an adjustable expert-imbalance penalty · empirical per-use-case prefix reuse for prefill-sensitive views · explicit prefill/decode interference blend · paged-KV runtime overhead and residual KV slack modeled · cross-node TP warning.</p>
 
 <details class="method-note">
   <summary class="T">Calibration note</summary>
   <p class="T" style="max-width:96ch;">
-    Some of the planner's missing realism is already visible in vLLM runtime metrics: running requests, KV-cache usage, prefix-cache hits, prompt tokens, and generation tokens. vLLM's async scheduling and CUDA-graph capture sizing also move real latency and throughput. In practice, the best calibration loop is empirical: fit the planner's knobs against those metrics for a few representative workloads instead of refining the closed-form model in isolation.
+    For vLLM deployments, missing realism is visible in runtime metrics such as running requests, KV-cache usage, prefix-cache hits, prompt tokens, and generation tokens; async scheduling and CUDA-graph capture sizing also move real latency and throughput. For other runtimes, use the analogous scheduler and cache metrics. In practice, fit the planner's knobs against representative measurements instead of refining the closed-form model in isolation.
   </p>
 </details>
 

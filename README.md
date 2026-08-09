@@ -1,10 +1,10 @@
 # GPU/LLM Usage Modeler
 
-A Flask web application for planning and modeling GPU capacity for multi-model vLLM deployments. It lets you configure GPU pools, LLM workloads, and traffic distributions to project infrastructure costs and throughput.
+A Flask web application for planning and modeling multi-model LLM deployments across GPUs and AI accelerators. It lets you configure accelerator pools, LLM workloads, and traffic distributions to project infrastructure costs and throughput.
 
 ## Accuracy and Scope
 
-This project is a closed-form capacity estimator, not a request-level simulator. It combines published hardware rooflines and model architecture metadata with explicit efficiency, runtime-memory, batching, topology, prefix-cache, and workload-shape assumptions. Results are most useful for comparing scenarios and identifying capacity constraints; they are not a substitute for benchmarking the exact model, quantization, vLLM version, hardware topology, and service-level objective you intend to deploy.
+This project is a closed-form capacity estimator, not a request-level simulator. It combines published hardware rooflines and model architecture metadata with explicit efficiency, runtime-memory, batching, topology, prefix-cache, and workload-shape assumptions. Results are most useful for comparing scenarios and identifying capacity constraints; they are not a substitute for benchmarking the exact model, quantization, serving runtime/version (for example vLLM), hardware topology, and service-level objective you intend to deploy.
 
 Model-fit routing and same-hardware swap recommendations use weighted task-quality profiles across coding, reasoning, long-context, multilingual, vision, and general capability. Domain evidence is blended with a weighted geometric mean so one strong axis cannot fully hide a weak required axis. Every missing model/domain pair falls back to the confidence-adjusted global quality score; benchmark names, raw scores, crosswalks, and sources remain explicit because vendor harnesses are not interchangeable.
 
@@ -12,11 +12,15 @@ Before using a result for procurement or financial planning:
 
 1. Review the pre-filled amortized GPU-hour TCO and replace it with your actual quote or internal chargeback rate when available.
 2. Match the input/output distributions and interactive-versus-batch mix to the real workload.
-3. Calibrate bandwidth efficiency, compute efficiency, non-KV runtime memory, and prefix-cache hit rate against representative vLLM measurements.
+3. Calibrate bandwidth efficiency, compute efficiency, non-KV runtime memory, and prefix-cache hit rate against representative serving-runtime measurements.
 4. Review model and hardware provenance, confidence, preview status, and context-window limits in the UI.
 5. Treat maximum-throughput points separately from latency-constrained interactive capacity.
 
-Useful vLLM calibration signals include request counts, prompt and generation tokens, KV-cache usage, prefix-cache hits, time to first token, inter-token latency, and request throughput. Keep a before/after planner report with the benchmark fixture whenever changing a catalog entry or formula.
+For vLLM deployments, useful calibration signals include request counts, prompt and generation tokens, KV-cache usage, prefix-cache hits, time to first token, inter-token latency, and request throughput. Use analogous scheduler and cache metrics for other runtimes. Keep a before/after planner report with the benchmark fixture whenever changing a catalog entry or formula.
+
+Hybrid/recurrent architectures are modeled with separate token-growing attention KV and fixed recurrent-state traffic. The default decode path conservatively reads and writes recurrent state once per target block; runtime-specific buffering such as ReplaySSM still requires calibration. Kimi K3 prefill capacity also includes a conservative Block AttnRes activation bound. MoE estimates do not yet charge expert-parallel dispatch/combine collectives, and the planner surfaces that omission wherever a MoE model is selected.
+
+Cloud entries may define an input-length threshold and a second set of long-context input, cached-input, and output rates. The calculator switches tiers only when the request input is strictly above the published threshold.
 
 ## Requirements
 

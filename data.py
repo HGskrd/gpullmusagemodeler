@@ -288,7 +288,7 @@ class EmbeddingProfile:
 # drafters verify trees or blocks rather than chains, so alpha is fitted to
 # reproduce the measured acceptance length at default_k — extrapolating to other k
 # with the chain formula is a documented conservative approximation.
-SPEC_METHODS: tuple[str, ...] = ("mtp", "eagle3", "dflash", "draft_model", "ngram")
+SPEC_METHODS: tuple[str, ...] = ("mtp", "eagle3", "dflash", "dspark", "draft_model", "ngram")
 
 
 @dataclass(frozen=True)
@@ -358,6 +358,29 @@ def _dflash_profile(
     return SpeculativeProfile(
         "DFlash block-diffusion speculator", "dflash", draft_params, draft_layers, True, default_k, alpha, 0.08, source, note,
         exact_weight_bytes or draft_params * 2.0, draft_params, supported_ks, acceptance_alpha_by_k,
+    )
+
+
+def _dspark_profile(
+    draft_params: float,
+    alpha: float,
+    source: str,
+    note: str,
+    *,
+    exact_weight_bytes: float = 0.0,
+    draft_layers: int = 5,
+    kv_overhead: float = 0.0,
+) -> SpeculativeProfile:
+    """Published seven-token parallel DSpark profile.
+
+    DSpark attached checkpoints execute their draft layers in one block pass.
+    ``kv_overhead`` remains explicit because hybrid/recurrent draft state is not
+    equivalent to an ordinary full-attention KV cache.
+    """
+    return SpeculativeProfile(
+        "DSpark parallel speculator", "dspark", draft_params, draft_layers, True,
+        7, alpha, kv_overhead, source, note, exact_weight_bytes,
+        draft_params, (7,), ((7, alpha),),
     )
 
 
@@ -830,9 +853,9 @@ GPUS: dict[str, GPU] = {
     "MI355X": GPU("MI355X", "MI355X 288GB", "amd", 288e9, 8e12, 2512e12, 5037e12, 1075.2e9, 8),
     # AMD now identifies the Helios accelerator as MI455X.  Keep MI400 below as
     # a hidden compatibility key so previously saved planner states still load.
-    "MI455X": GPU("MI455X", "Instinct MI455X Preview 432GB", "amd", 432e9, 19.6e12, 10e15, 20e15, 260e12 / 72.0, 72),
-    "HELIOS_MI455X": GPU("HELIOS_MI455X", "AMD Helios Preview (72× MI455X) 432GB/GPU", "amd", 432e9, 19.6e12, 10e15, 20e15, 260e12 / 72.0, 72, min_count=72, count_multiple=72),
-    "MI400": GPU("MI400", "MI400 Series compatibility profile (MI455X) 432GB", "amd", 432e9, 19.6e12, 10e15, 20e15, 260e12 / 72.0, 72),
+    "MI455X": GPU("MI455X", "Instinct MI455X 432GB", "amd", 432e9, 23.3e12, 5e15, 20.1e15, 3.6e12, 72),
+    "HELIOS_MI455X": GPU("HELIOS_MI455X", "AMD Helios Preview (72× MI455X) 432GB/GPU", "amd", 432e9, 23.3e12, 5e15, 20.1e15, 3.6e12, 72, min_count=72, count_multiple=72),
+    "MI400": GPU("MI400", "MI400 Series compatibility profile (MI455X) 432GB", "amd", 432e9, 23.3e12, 5e15, 20.1e15, 3.6e12, 72),
     "RadeonProW7900": GPU("RadeonProW7900", "Radeon PRO W7900 48GB", "amd", 48e9, 864e9, 123e12, 123e12, 64e9, 1),
     "RadeonAIProR9700": GPU("RadeonAIProR9700", "Radeon AI PRO R9700 32GB", "amd", 32e9, 640e9, 96e12, 96e12, 128e9, 1),
     # Tenstorrent publishes BLOCKFP8, rather than IEEE FP8, peak performance.
@@ -874,9 +897,9 @@ GPU_FP4_FLOPS = {
     "JETSON_AGX_THOR": 1035e12,
     "MI350X": 9.2e15,
     "MI355X": 10.1e15,
-    "MI455X": 40e15,
-    "HELIOS_MI455X": 40e15,
-    "MI400": 40e15,
+    "MI455X": 40.3e15,
+    "HELIOS_MI455X": 40.3e15,
+    "MI400": 40.3e15,
 }
 for _k, _fp4 in GPU_FP4_FLOPS.items():
     if _k in GPUS:
@@ -1053,7 +1076,7 @@ for _key, _tco in GPU_TCO_DEFAULTS.items():
 
 # Announced/preview catalog entries must keep their uncertainty reviewable.
 # Kimi K3 is now an open-weight release with a pinned config and technical report.
-PREVIEW_ASSUMPTIONS_CAPTURED_AT = "2026-07-21"
+PREVIEW_ASSUMPTIONS_CAPTURED_AT = "2026-08-09"
 PREVIEW_ASSUMPTIONS: dict[str, dict[str, object]] = {
     "gpu:RUBIN_NVL72": {
         "status": "full-production ramp; production shipments announced for fall 2026",
@@ -1065,12 +1088,12 @@ PREVIEW_ASSUMPTIONS: dict[str, dict[str, object]] = {
         ),
     },
     "gpu:MI455X": {
-        "status": "MI455X Helios volume deployments expected in 2H 2026",
-        "source": "https://www.amd.com/en/products/rackscale-solutions/helios.html",
+        "status": "launched 2026-07-23; Helios volume deployments expected in 2H 2026",
+        "source": "https://www.amd.com/en/products/accelerators/instinct/mi400/mi455x.html",
         "assumptions": (
-            "MI455X is the named accelerator in AMD's 72-GPU Helios rack",
-            "10 PF BF16, 20 PF FP8, 40 PF FP4, interconnect, and 1.5 kW are planner projections",
-            "432 GB HBM4 and 19.6 TB/s are public AMD specifications",
+            "AMD publishes 432 GB HBM4, 23.3 TB/s, 5.0 PF dense BF16, 20.1 PF FP8, 40.3 PF MXFP4, and 3.6 TB/s bidirectional scale-up per GPU",
+            "MI455X is the named accelerator in AMD's 72-GPU Helios reference design",
+            "1.5 kW remains a planner power proxy because AMD does not publish accelerator TBP",
         ),
     },
     "gpu:HELIOS_MI455X": {
@@ -1078,8 +1101,8 @@ PREVIEW_ASSUMPTIONS: dict[str, dict[str, object]] = {
         "source": "https://www.amd.com/en/products/rackscale-solutions/helios.html",
         "assumptions": (
             "the selectable system represents the complete 72-GPU Helios rack with Venice CPUs and Vulcano networking",
-            "10 PF BF16, 20 PF FP8, 40 PF FP4 per GPU and 1.5 kW per GPU are planner projections",
-            "AMD publishes 31 TB HBM4, 2.9 EF FP4, 1.4 EF FP8, 260 TB/s scale-up, and 43 TB/s scale-out at rack level",
+            "AMD publishes 432 GB HBM4, 23.3 TB/s, 5.0 PF dense BF16, 20.1 PF FP8, 40.3 PF MXFP4, and 3.6 TB/s bidirectional scale-up per GPU",
+            "AMD publishes 31 TB HBM4, 2.9 EF FP4, 1.4 EF FP8, 260 TB/s scale-up, and 43 TB/s scale-out at rack level; 1.5 kW/GPU remains a planner proxy",
         ),
     },
     "gpu:TT_GALAXY_BLACKHOLE": {
@@ -1096,8 +1119,8 @@ PREVIEW_ASSUMPTIONS: dict[str, dict[str, object]] = {
         "source": "https://www.amd.com/en/products/rackscale-solutions/helios.html",
         "assumptions": (
             "existing saved plans using MI400 retain the MI455X hardware assumptions",
-            "10 PF BF16, 20 PF FP8, 40 PF FP4, interconnect, and 1.5 kW are planner projections",
-            "432 GB HBM4 and 19.6 TB/s are public AMD specifications",
+            "AMD publishes 432 GB HBM4, 23.3 TB/s, 5.0 PF dense BF16, 20.1 PF FP8, 40.3 PF MXFP4, and 3.6 TB/s bidirectional scale-up per GPU",
+            "1.5 kW remains a planner power proxy rather than a published MI455X TBP",
         ),
     },
     "gpu:CrescentIsland": {
@@ -1122,12 +1145,28 @@ PREVIEW_ASSUMPTIONS: dict[str, dict[str, object]] = {
             "128B dense architecture fields remain a capacity proxy",
         ),
     },
+    "model:deepseek-v4-pro": {
+        "status": "preview; final open checkpoint and architecture configuration not published",
+        "source": "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731",
+        "assumptions": (
+            "1.6T total, 49B active, layer, attention, and MTP fields remain planning proxies",
+            "the preview comparison advertises a 1M context window but does not publish the Pro config",
+        ),
+    },
+    "cloud:deepseek-v4-pro": {
+        "status": "preview API entry; lifecycle and final API identity may change",
+        "source": "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731",
+        "assumptions": (
+            "the final Flash card still identifies V4 Pro as Preview",
+            "catalog pricing is retained until DeepSeek publishes a dated hosted-API mapping",
+        ),
+    },
     "cloud:gemini-pro": {
         "status": "Gemini 3.1 Pro preview; production lifecycle may change with short notice",
         "source": "https://ai.google.dev/gemini-api/docs/models",
         "assumptions": (
             "planner uses standard pricing for prompts at or below 200k tokens",
-            "requests above 200k use higher input, cached-input, and output rates not modeled here",
+            "requests above 200k use the explicit long-context input, cached-input, and output rates",
         ),
     },
 }
@@ -1421,11 +1460,11 @@ GPU_CARDS: list[GPUCard] = [
     GPUCard(
         "Instinct MI455X",
         "AMD",
-        "CDNA next generation (preliminary)",
-        "432 GB HBM4, 19.6 TB/s",
+        "CDNA 5",
+        "432 GB HBM4, 23.3 TB/s",
         "Helios volume deployments expected in 2H 2026",
-        (GPUPlannerOption("Add Preview", "MI455X"),),
-        "AMD names MI455X as the Helios accelerator. Memory and bandwidth are public; planner compute, interconnect, and power remain preliminary assumptions. The MI400 key is retained only for saved-plan compatibility.",
+        (GPUPlannerOption("Add", "MI455X"),),
+        "AMD publishes dense BF16, FP8, MXFP4, memory, bandwidth, and scale-up specifications. Power remains a planner proxy; the MI400 key is retained only for saved-plan compatibility.",
     ),
     GPUCard(
         "MI355X",
@@ -2065,6 +2104,8 @@ EMBEDDING_QUALITY_SOURCES: dict[str, str] = {
     "pplx-embed-v1-4b": "Perplexity pplx-embed technical report, MTEB Multilingual v2 retrieval average nDCG@10, INT8.",
     "pplx-embed-v1-late-0.6b": "Perplexity late-interaction HF model card, BEIR (15 tasks) average nDCG@10.",
     "cohere-embed-v4-0": "Placeholder: Cohere Embed v4.0 docs publish multimodal and 128k-context product limits, but no comparable public retrieval aggregate was found.",
+    "nvidia-nemotron-3-embed-8b": "NVIDIA Nemotron 3 Embed release card/blog, RTEB retrieval average; this is not cross-walked to decontaminated BEIR.",
+    "nvidia-nemotron-3-embed-1b": "Placeholder: official 1B config and serving limit are published, but no catalog-comparable retrieval aggregate was isolated.",
 }
 PUBLISHED_EMBEDDING_QUALITY: dict[str, float] = {
     "denseon":                 0.5620,
@@ -2082,9 +2123,12 @@ PUBLISHED_EMBEDDING_QUALITY: dict[str, float] = {
     "pplx-embed-v1-4b":        0.6966,
     "pplx-embed-v1-late-0.6b": 0.5661,
     "cohere-embed-v4-0":       0.6000,
+    "nvidia-nemotron-3-embed-8b": 0.7846,
+    "nvidia-nemotron-3-embed-1b": 0.5000,
 }
 EMBEDDING_QUALITY_PLACEHOLDER: frozenset[str] = frozenset({
     "cohere-embed-v4-0",
+    "nvidia-nemotron-3-embed-1b",
 })
 
 # Optional hover-detail metric. Keep separate from PUBLISHED_EMBEDDING_QUALITY
@@ -2297,6 +2341,60 @@ def _lfm_text_model(
 
 
 MODELS: dict[str, Model] = {
+    "nvidia-nemotron-3-embed-8b": Model(
+        "nvidia-nemotron-3-embed-8b",
+        "NVIDIA Nemotron 3 Embed 8B",
+        "Embeddings",
+        "#76B900",
+        8.36e9,
+        8.36e9,
+        False,
+        34,
+        32,
+        8,
+        128,
+        False,
+        hidden_dim=4096,
+        max_context_tokens=32768,
+        capabilities_override=frozenset(),
+        attention_label="Bidirectional encoder · dynamic 4096-d embeddings · 32k served cap",
+        embedding_profile=EmbeddingProfile(
+            label="Nemotron 3 Embed 8B",
+            kind="single",
+            output_dim=4096,
+            max_sequence_length=32768,
+            source="nvidia/Nemotron-3-Embed-8B",
+            note="Official config supports longer positions, while the released serving/evaluation profile caps sequences at 32,768 tokens; dynamic embedding dimensions are supported.",
+            pooling="mean",
+        ),
+    ),
+    "nvidia-nemotron-3-embed-1b": Model(
+        "nvidia-nemotron-3-embed-1b",
+        "NVIDIA Nemotron 3 Embed 1B",
+        "Embeddings",
+        "#A4D65E",
+        1.14e9,
+        1.14e9,
+        False,
+        16,
+        24,
+        8,
+        128,
+        False,
+        hidden_dim=2048,
+        max_context_tokens=32768,
+        capabilities_override=frozenset(),
+        attention_label="Bidirectional encoder · dynamic 2048-d embeddings · 32k served cap",
+        embedding_profile=EmbeddingProfile(
+            label="Nemotron 3 Embed 1B",
+            kind="single",
+            output_dim=2048,
+            max_sequence_length=32768,
+            source="nvidia/Nemotron-3-Embed-1B",
+            note="Official config supports longer positions, while the released serving/evaluation profile caps sequences at 32,768 tokens; dynamic embedding dimensions are supported.",
+            pooling="mean",
+        ),
+    ),
     "denseon": _modernbert_embed_model(
         "denseon",
         "DenseOn",
@@ -3097,6 +3195,17 @@ MODELS: dict[str, Model] = {
         moe_shared_experts=2,
         activation_label="SiTU-GLU β1=4 β2=25",
         max_context_tokens=1_048_576,
+        speculative_profiles=(
+            _dspark_profile(
+                4e9,
+                0.773565,
+                "https://huggingface.co/Inferact/Kimi-K3-DSpark",
+                "Official seven-token parallel DSpark checkpoint; vLLM reports 4.73 accepted tokens on coding, 2.61 on writing, and 118→370 tok/s on 16×GB300. The 3.85-token cross-benchmark mean fits alpha; absolute speed remains topology-dependent.",
+                exact_weight_bytes=8e9,
+                draft_layers=5,
+                kv_overhead=5 / 24,
+            ),
+        ),
     ),
     "kimi-linear-48b": Model(
         "kimi-linear-48b",
@@ -3288,6 +3397,34 @@ MODELS: dict[str, Model] = {
                      "resident bytes use that artifact exactly; alpha is an unmeasured planning prior.",
                      exact_weight_bytes=10.5e9, resident_params=5e9),
     )),
+    "minimax3": Model(
+        "minimax3", "MiniMax M3 428B-A23B", "MiniMax", "#163E5C",
+        428e9, 23e9, True, 60, 64, 4, 128, False,
+        hidden_dim=6144,
+        sparse_attention_top_k=2048,
+        sparse_indexer_heads=4,
+        sparse_indexer_head_dim=128,
+        sparse_indexer_layers=60,
+        attention_label="Top-16 × 128-token sparse blocks · 7 native MTP modules · 1M context",
+        moe_intermediate_dim=3072,
+        moe_routed_experts=128,
+        moe_active_experts=4,
+        moe_shared_experts=1,
+        max_context_tokens=1_048_576,
+        extra_capabilities=frozenset({"images", "reasoning"}),
+        speculative_profiles=(
+            _mtp_profile(
+                0.65,
+                0.5e9,
+                7,
+                "https://huggingface.co/MiniMaxAI/MiniMax-M3",
+                "Seven native MTP modules are published in the config; active draft size and acceptance are explicit planning priors pending runtime traces.",
+                resident_params=3.5e9,
+                draft_layers=7,
+                supported_ks=(7,),
+            ),
+        ),
+    ),
 
     "nem3s": Model("nem3s", "Nemotron 3 Super 120B-A12B", "Nemotron", "#6FA7C9", 120e9, 12e9, True, 88, 32, 2, 128, False,
         kv_layers=8, hidden_dim=4096, max_context_tokens=1_048_576),
@@ -3329,7 +3466,7 @@ MODELS: dict[str, Model] = {
     ),
     "deepseek-v4-pro": Model(
         "deepseek-v4-pro",
-        "DeepSeek V4 Pro 1.6T-A49B",
+        "DeepSeek V4 Pro Preview 1.6T-A49B",
         "DeepSeek",
         "#7F1D1D",
         1.6e12,
@@ -3344,6 +3481,7 @@ MODELS: dict[str, Model] = {
         64,
         bf16_weight_bytes_per_param=MIXED_NATIVE_BF16_WEIGHT_BPP,
         fp8_weight_bytes_per_param=FP4_FP8_MOE_WEIGHT_BPP,
+        max_context_tokens=1_048_576,
         speculative_profiles=(
             _mtp_profile(
                 0.85,
@@ -3357,29 +3495,40 @@ MODELS: dict[str, Model] = {
     ),
     "deepseek-v4-flash": Model(
         "deepseek-v4-flash",
-        "DeepSeek V4 Flash 284B-A13B",
+        "DeepSeek V4 Flash 0731 284B-A13B",
         "DeepSeek",
         "#C24132",
         284e9,
         13e9,
         True,
-        48,
-        96,
+        43,
+        64,
         1,
-        256,
+        512,
         True,
         512,
         64,
+        hidden_dim=4096,
+        sparse_attention_top_k=512,
+        sparse_indexer_heads=64,
+        sparse_indexer_head_dim=128,
+        sparse_indexer_layers=3,
+        attention_label="HCA/CSA compressed sparse attention · top-k 512 indexer · 1M context",
+        moe_intermediate_dim=2048,
+        moe_routed_experts=256,
+        moe_active_experts=6,
+        moe_shared_experts=1,
+        max_context_tokens=1_048_576,
         bf16_weight_bytes_per_param=MIXED_NATIVE_BF16_WEIGHT_BPP,
         fp8_weight_bytes_per_param=FP4_FP8_MOE_WEIGHT_BPP,
         speculative_profiles=(
-            _mtp_profile(
-                0.85,
-                0.3e9,
-                1,
-                "https://www.lmsys.org/blog/2026-04-25-deepseek-v4/",
-                "Native MTP confirmed; no published acceptance rate yet — V3-family assumption.",
-                resident_params=5.9e9,
+            _dspark_profile(
+                20e9,
+                0.773565,
+                "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731",
+                "The official 0731 release includes an attached seven-token DSpark checkpoint. Acceptance alpha is a provisional Kimi-DSpark transfer prior pending DeepSeek acceptance traces; draft size is the reported artifact-versus-backbone delta.",
+                exact_weight_bytes=40e9,
+                draft_layers=1,
             ),
         ),
     ),
@@ -3937,6 +4086,7 @@ def _nvfp4_profile(
     retained: tuple[str, ...] = (),
     total_weight_bytes_override: float | None = None,
     notes: str = "",
+    captured_at: str = QUANTIZATION_CAPTURED_AT,
 ) -> tuple[tuple[str, str], QuantizationProfile]:
     return (
         (model_key, "nvfp4"),
@@ -3946,7 +4096,7 @@ def _nvfp4_profile(
             source_repo=source_repo,
             source_revision=source_revision,
             source_downloads=source_downloads,
-            captured_at=QUANTIZATION_CAPTURED_AT,
+            captured_at=captured_at,
             source_kind=source_kind,
             quant_algo="NVFP4",
             kv_cache_format="FP8",
@@ -4137,6 +4287,30 @@ MODEL_QUANTIZATION_PROFILES: dict[tuple[str, str], QuantizationProfile] = dict([
         retained=("self-attention BF16", "MoE gates BF16", "lm_head BF16"),
     ),
     _nvfp4_profile(
+        model_key="minimax3",
+        source_repo="nvidia/MiniMax-M3-NVFP4",
+        source_revision="901464083161bf8612a29ff7ad29914cd4ab4a85",
+        source_downloads=0,
+        total_weight_bytes_override=250_103_762_320,
+        compute_precision_shares={"nvfp4": 0.86, "bf16": 0.14},
+        quantized=("MoE/feed-forward weights: packed FP4 payload + FP8 scales",),
+        retained=("attention, routing-sensitive tensors, embeddings, multimodal modules, and lm_head in higher precision",),
+        notes="Exact 88-shard official artifact footprint. The 86/14 compute split is a MiniMax-family planning proxy pending tensor-header classification.",
+        captured_at="2026-06-26",
+    ),
+    _nvfp4_profile(
+        model_key="nvidia-nemotron-3-embed-1b",
+        source_repo="nvidia/Nemotron-3-Embed-1B-NVFP4",
+        source_revision="c01600056187dba44bd712346cedb1e57fa50220",
+        source_downloads=0,
+        total_weight_bytes_override=1_027_789_672,
+        compute_precision_shares={"nvfp4": 1.0},
+        quantized=("encoder linear weights: packed NVFP4 payload + FP8 scales",),
+        retained=("normalization, embedding, and pooling-sensitive tensors in higher precision",),
+        notes="Exact official artifact footprint captured from the safetensors index; download count was not used as provenance.",
+        captured_at="2026-07-16",
+    ),
+    _nvfp4_profile(
         model_key="nem3s",
         source_repo="nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4",
         source_revision="4f0cf9daaeb7a4d5e23f80a00e7ed15f0e03caf6",
@@ -4324,6 +4498,7 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "command-r7b-12-2024": (12.0, 8.3),      # Size-class proxy from compact open instruction models; no AA row found.
     "north-mini-code-1-0": (37.0, 100.0),    # Coding-agent proxy from Qwen 3.5 35B-A3B until public benchmark rows exist.
     "minimax25": (42.0, 56.0),
+    "minimax3": (48.0, 70.0),  # Low-confidence launch-benchmark proxy; no direct AA row yet.
     "minimax27": (50.0, 87.0),
     "nem3s": (36.0, 110.0),
     "nem3n": (24.0, 140.0),
@@ -4673,7 +4848,7 @@ TASK_PRESETS = {
 # Cloud model registry with representative standard public API pricing in $/M tokens.
 # `quality` and `token_efficiency` are calibrated below from Artificial Analysis'
 # Intelligence Index and Intelligence Index output-token usage (verbosity).
-CLOUD_PRICING_CAPTURED_AT = "2026-07-21"
+CLOUD_PRICING_CAPTURED_AT = "2026-08-09"
 CLOUD_PRICING_SOURCES = {
     "OpenAI": "https://developers.openai.com/api/docs/models/compare",
     "Anthropic": "https://platform.claude.com/docs/en/about-claude/models/overview",
@@ -4691,6 +4866,10 @@ CLOUD_MODELS = {
         "in_per_m": 5.00,
         "cached_in_per_m": 0.50,
         "out_per_m": 30.00,
+        "long_context_threshold_tokens": 272_000,
+        "long_context_in_per_m": 10.00,
+        "long_context_cached_in_per_m": 1.00,
+        "long_context_out_per_m": 45.00,
         "max_context_tokens": 1_050_000,
         "quality": 0.5,
         "token_efficiency": 1.0,
@@ -4699,9 +4878,13 @@ CLOUD_MODELS = {
         "label": "GPT-5.6 Terra",
         "vendor": "OpenAI",
         "api_model": "gpt-5.6-terra",
-        "in_per_m": 2.50,
-        "cached_in_per_m": 0.25,
-        "out_per_m": 15.00,
+        "in_per_m": 2.00,
+        "cached_in_per_m": 0.20,
+        "out_per_m": 12.00,
+        "long_context_threshold_tokens": 272_000,
+        "long_context_in_per_m": 4.00,
+        "long_context_cached_in_per_m": 0.40,
+        "long_context_out_per_m": 18.00,
         "max_context_tokens": 1_050_000,
         "quality": 0.5,
         "token_efficiency": 1.0,
@@ -4710,9 +4893,13 @@ CLOUD_MODELS = {
         "label": "GPT-5.6 Luna",
         "vendor": "OpenAI",
         "api_model": "gpt-5.6-luna",
-        "in_per_m": 1.00,
-        "cached_in_per_m": 0.10,
-        "out_per_m": 6.00,
+        "in_per_m": 0.20,
+        "cached_in_per_m": 0.02,
+        "out_per_m": 1.20,
+        "long_context_threshold_tokens": 272_000,
+        "long_context_in_per_m": 0.40,
+        "long_context_cached_in_per_m": 0.04,
+        "long_context_out_per_m": 1.80,
         "max_context_tokens": 1_050_000,
         "quality": 0.5,
         "token_efficiency": 1.0,
@@ -4729,9 +4916,9 @@ CLOUD_MODELS = {
         "token_efficiency": 1.0,
     },
     "claude-opus": {
-        "label": "Claude Opus 4.8",
+        "label": "Claude Opus 5",
         "vendor": "Anthropic",
-        "api_model": "claude-opus-4-8",
+        "api_model": "claude-opus-5",
         "in_per_m": 5.00,
         "cached_in_per_m": 0.50,
         "out_per_m": 25.00,
@@ -4769,18 +4956,22 @@ CLOUD_MODELS = {
         "in_per_m": 2.00,
         "cached_in_per_m": 0.20,
         "out_per_m": 12.00,
+        "long_context_threshold_tokens": 200_000,
+        "long_context_in_per_m": 4.00,
+        "long_context_cached_in_per_m": 0.40,
+        "long_context_out_per_m": 18.00,
         "price_note": "Standard <=200k-token request; long-context requests use $4/$0.40/$18.",
         "max_context_tokens": 1_048_576,
         "quality": 0.5,
         "token_efficiency": 1.0,
     },
     "gemini-flash": {
-        "label": "Gemini 3.5 Flash",
+        "label": "Gemini 3.6 Flash",
         "vendor": "Google",
-        "api_model": "gemini-3.5-flash",
+        "api_model": "gemini-3.6-flash",
         "in_per_m": 1.50,
         "cached_in_per_m": 0.15,
-        "out_per_m": 9.00,
+        "out_per_m": 7.50,
         "max_context_tokens": 1_048_576,
         "quality": 0.5,
         "token_efficiency": 1.0,
@@ -4792,6 +4983,7 @@ CLOUD_MODELS = {
         "in_per_m": 0.30,
         "cached_in_per_m": 0.03,
         "out_per_m": 2.50,
+        "max_context_tokens": 1_048_576,
         "quality": 0.5,
         "token_efficiency": 1.0,
     },
@@ -4859,18 +5051,19 @@ CLOUD_MODELS = {
         "token_efficiency": 1.0,
     },
     "deepseek-v4-flash": {
-        "label": "DeepSeek V4 Flash",
+        "label": "DeepSeek V4 Flash 0731",
         "vendor": "DeepSeek",
         "api_model": "deepseek-v4-flash",
         "in_per_m": 0.14,
         "cached_in_per_m": 0.0028,
         "out_per_m": 0.28,
         "max_context_tokens": 1_000_000,
+        "price_note": "0731 is the released local-reference checkpoint; DeepSeek has not published a dated statement mapping this hosted API alias to that checkpoint.",
         "quality": 0.5,
         "token_efficiency": 1.0,
     },
     "deepseek-v4-pro": {
-        "label": "DeepSeek V4 Pro",
+        "label": "DeepSeek V4 Pro Preview",
         "vendor": "DeepSeek",
         "api_model": "deepseek-v4-pro",
         "in_per_m": 0.435,

@@ -68,8 +68,11 @@ def _comm_alerts(model: Model, tp: int, pp: int, dp: int, gpu: Optional[GPU], av
         alerts.append(
             f"{strategy_label(tp, pp, dp)} uses cross-node TP (node size {gpu.node_size}). Prefer TP within a node and scale with PP/DP."
         )
-    if comm.ep_advisory:
-        alerts.append("MoE multi-node expert traffic is not modeled, so throughput may be optimistic.")
+    if comm.expert_parallel_unmodeled:
+        scope = "Multi-node " if comm.ep_advisory else ""
+        alerts.append(
+            f"{scope}MoE expert dispatch/combine traffic is excluded, so throughput may be optimistic."
+        )
     if comm.dcp_advisory:
         alerts.append("Long-context KV sharding can shift real capacity versus this simplified estimate.")
     return alerts

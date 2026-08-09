@@ -1,4 +1,4 @@
-"""Placement, retune, and auto-select engines for the vLLM planner."""
+"""Placement, retune, and auto-select engines for the GPU/LLM Usage Modeler."""
 
 from __future__ import annotations
 

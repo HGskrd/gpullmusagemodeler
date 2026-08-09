@@ -1,4 +1,4 @@
-"""Flask application for vLLM Multi-Model Planner."""
+"""Flask application for the GPU/LLM Usage Modeler."""
 
 import gzip
 import json
@@ -1120,7 +1120,7 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
 
 
 def _format_projection_report(state_a: PlannerState, state_b: PlannerState | None) -> str:
-    title = "vLLM multi-model planner report"
+    title = "GPU/LLM Usage Modeler report"
     parts = [title, "=" * len(title), ""]
     parts.append(_format_projection_report_for_state(state_a, "Config A" if state_b else "Current Config"))
     if state_b:
@@ -1128,7 +1128,7 @@ def _format_projection_report(state_a: PlannerState, state_b: PlannerState | Non
     parts.extend([
         "",
         "Notes",
-        "Roofline estimates; vLLM continuous batching; separate prefill/decode efficiency knobs; KV capacity anchored to requested GPU memory minus weights and profiled non-KV runtime memory.",
+        "Roofline estimates; continuous-batching approximation; separate prefill/decode efficiency knobs; KV capacity anchored to requested accelerator memory minus weights and profiled non-KV runtime memory.",
     ])
     return "\n".join(parts).strip() + "\n"
 

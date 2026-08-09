@@ -1,4 +1,4 @@
-"""Server-side state management for the vLLM planner."""
+"""Server-side state management for the GPU/LLM Usage Modeler."""
 
 from __future__ import annotations
 

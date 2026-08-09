@@ -61,25 +61,25 @@ class ModelCatalogTests(unittest.TestCase):
     def test_cloud_pricing_snapshot_uses_current_july_2026_families(self):
         expected = {
             "gpt-5.6-sol": ("GPT-5.6 Sol", 5.00, 0.50, 30.00),
-            "gpt-5.6-terra": ("GPT-5.6 Terra", 2.50, 0.25, 15.00),
-            "gpt-5.6-luna": ("GPT-5.6 Luna", 1.00, 0.10, 6.00),
+            "gpt-5.6-terra": ("GPT-5.6 Terra", 2.00, 0.20, 12.00),
+            "gpt-5.6-luna": ("GPT-5.6 Luna", 0.20, 0.02, 1.20),
             "claude-fable": ("Claude Fable 5", 10.00, 1.00, 50.00),
-            "claude-opus": ("Claude Opus 4.8", 5.00, 0.50, 25.00),
+            "claude-opus": ("Claude Opus 5", 5.00, 0.50, 25.00),
             "claude-sonnet": ("Claude Sonnet 5", 2.00, 0.20, 10.00),
             "claude-haiku": ("Claude Haiku 4.5", 1.00, 0.10, 5.00),
             "gemini-pro": ("Gemini 3.1 Pro Preview", 2.00, 0.20, 12.00),
-            "gemini-flash": ("Gemini 3.5 Flash", 1.50, 0.15, 9.00),
+            "gemini-flash": ("Gemini 3.6 Flash", 1.50, 0.15, 7.50),
             "gemini-flash-lite": ("Gemini 3.5 Flash-Lite", 0.30, 0.03, 2.50),
             "mistral-medium": ("Mistral Medium 3.5", 1.50, 0.15, 7.50),
             "mistral-large": ("Mistral Large 3", 0.50, 0.05, 1.50),
             "mistral-small": ("Mistral Small 4", 0.15, 0.015, 0.60),
             "codestral-2501": ("Codestral", 0.30, 0.03, 0.90),
             "grok-4.1-fast": ("Grok 4.1 Fast", 0.20, 0.05, 0.50),
-            "deepseek-v4-flash": ("DeepSeek V4 Flash", 0.14, 0.0028, 0.28),
-            "deepseek-v4-pro": ("DeepSeek V4 Pro", 0.435, 0.003625, 0.87),
+            "deepseek-v4-flash": ("DeepSeek V4 Flash 0731", 0.14, 0.0028, 0.28),
+            "deepseek-v4-pro": ("DeepSeek V4 Pro Preview", 0.435, 0.003625, 0.87),
         }
 
-        self.assertEqual(CLOUD_PRICING_CAPTURED_AT, "2026-07-21")
+        self.assertEqual(CLOUD_PRICING_CAPTURED_AT, "2026-08-09")
         for key, (label, price_in, cached_in, price_out) in expected.items():
             with self.subTest(key=key):
                 cloud = CLOUD_MODELS[key]
@@ -101,6 +101,32 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertTrue(CLOUD_MODELS["mistral-large-2"]["legacy"])
         self.assertIn("2026-08-31", CLOUD_MODELS["claude-sonnet"]["price_note"])
         self.assertIn("<=200k", CLOUD_MODELS["gemini-pro"]["price_note"])
+
+    def test_cloud_context_tiers_and_current_api_ids_are_explicit(self):
+        expected_openai_long_context = {
+            "gpt-5.6-sol": (10.00, 1.00, 45.00),
+            "gpt-5.6-terra": (4.00, 0.40, 18.00),
+            "gpt-5.6-luna": (0.40, 0.04, 1.80),
+        }
+        for key, (price_in, cached_in, price_out) in expected_openai_long_context.items():
+            with self.subTest(key=key):
+                cloud = CLOUD_MODELS[key]
+                self.assertEqual(cloud["long_context_threshold_tokens"], 272_000)
+                self.assertEqual(cloud["long_context_in_per_m"], price_in)
+                self.assertEqual(cloud["long_context_cached_in_per_m"], cached_in)
+                self.assertEqual(cloud["long_context_out_per_m"], price_out)
+
+        gemini_pro = CLOUD_MODELS["gemini-pro"]
+        self.assertEqual(gemini_pro["long_context_threshold_tokens"], 200_000)
+        self.assertEqual(gemini_pro["long_context_in_per_m"], 4.00)
+        self.assertEqual(gemini_pro["long_context_cached_in_per_m"], 0.40)
+        self.assertEqual(gemini_pro["long_context_out_per_m"], 18.00)
+
+        gemini_flash = CLOUD_MODELS["gemini-flash"]
+        self.assertEqual(gemini_flash["api_model"], "gemini-3.6-flash")
+        self.assertEqual(gemini_flash["max_context_tokens"], 1_048_576)
+        self.assertEqual(CLOUD_MODELS["gemini-flash-lite"]["max_context_tokens"], 1_048_576)
+        self.assertEqual(CLOUD_MODELS["claude-opus"]["api_model"], "claude-opus-5")
 
     def test_cloud_procurement_presets_have_no_dangling_or_legacy_keys(self):
         for name, preset in CORPO_CLOUD_PRESETS.items():
@@ -130,7 +156,7 @@ class ModelCatalogTests(unittest.TestCase):
 
         self.assertTrue(visible_preview_models <= set(PREVIEW_ASSUMPTIONS))
         self.assertTrue(preview_cloud_models <= set(PREVIEW_ASSUMPTIONS))
-        self.assertEqual(PREVIEW_ASSUMPTIONS_CAPTURED_AT, "2026-07-21")
+        self.assertEqual(PREVIEW_ASSUMPTIONS_CAPTURED_AT, "2026-08-09")
         for key, record in PREVIEW_ASSUMPTIONS.items():
             with self.subTest(key=key):
                 self.assertNotIn("kimi", key)
@@ -192,6 +218,15 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertAlmostEqual(model.active_weight_bytes("mxfp4") / model.active_params, 1.313609348872837)
         self.assertAlmostEqual(profile.compute_precision_shares["mxfp4"], 0.466606256890595)
         self.assertIn("latent MoE projections, shared experts, and routers BF16", profile.retained)
+
+    def test_kimi_k3_exposes_published_dspark_speculator(self):
+        dspark = next(p for p in MODELS["kimi-k3"].speculative_profiles if p.method == "dspark")
+
+        self.assertTrue(dspark.parallel_draft)
+        self.assertEqual(dspark.default_k, 7)
+        self.assertIn(7, dspark.supported_ks)
+        self.assertIn("Kimi-K3-DSpark", dspark.source)
+        self.assertIn("4.73", dspark.note)
 
     def test_kimi_k3_cloud_api_pricing_and_procurement_preset(self):
         cloud = CLOUD_MODELS["kimi-k3"]
@@ -333,6 +368,46 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(command_r7b["out_per_m"], 0.15)
         self.assertIn("command-a-03-2025", cohere_preset)
         self.assertIn("command-r7b-12-2024", cohere_preset)
+
+    def test_deepseek_v4_flash_0731_uses_official_config_and_dspark(self):
+        model = MODELS["deepseek-v4-flash"]
+
+        self.assertIn("0731", model.name)
+        self.assertEqual(model.total_params, 284e9)
+        self.assertEqual(model.active_params, 13e9)
+        self.assertTrue(model.is_moe)
+        self.assertEqual(model.layers, 43)
+        self.assertEqual(model.hidden_size, 4096)
+        self.assertEqual(model.num_heads, 64)
+        self.assertEqual(model.kv_heads, 1)
+        self.assertEqual(model.head_dim, 512)
+        self.assertEqual(model.max_context_tokens, 1_048_576)
+        self.assertEqual(model.mla_kv_dim, 512)
+        self.assertEqual(model.mla_rope_dim, 64)
+        self.assertEqual(model.sparse_attention_top_k, 512)
+        self.assertEqual(model.sparse_indexer_heads, 64)
+        self.assertEqual(model.sparse_indexer_head_dim, 128)
+        self.assertEqual(model.moe_intermediate_dim, 2048)
+        self.assertEqual(model.moe_routed_experts, 256)
+        self.assertEqual(model.moe_active_experts, 6)
+        self.assertEqual(model.moe_shared_experts, 1)
+        self.assertNotIn("preview", model.name.lower())
+
+        dspark = next(p for p in model.speculative_profiles if p.method == "dspark")
+        self.assertTrue(dspark.parallel_draft)
+        self.assertEqual(dspark.default_k, 7)
+        self.assertIn(7, dspark.supported_ks)
+        self.assertIn("DeepSeek-V4-Flash-0731", dspark.source)
+
+    def test_deepseek_v4_pro_remains_a_dated_preview(self):
+        self.assertIn("preview", MODELS["deepseek-v4-pro"].name.lower())
+        self.assertIn("preview", CLOUD_MODELS["deepseek-v4-pro"]["label"].lower())
+        for key in ("model:deepseek-v4-pro", "cloud:deepseek-v4-pro"):
+            with self.subTest(key=key):
+                record = PREVIEW_ASSUMPTIONS[key]
+                self.assertEqual(record["captured_at"], PREVIEW_ASSUMPTIONS_CAPTURED_AT)
+                self.assertTrue(record["source"].startswith("https://"))
+                self.assertTrue(record["assumptions"])
 
     def test_laguna_m1_catalog_entry_uses_public_poolside_specs(self):
         model = MODELS["laguna-m1"]
@@ -825,6 +900,8 @@ class ModelCatalogTests(unittest.TestCase):
             "pplx-embed-v1-4b": ("single", 2560, 32768),
             "pplx-embed-v1-late-0.6b": ("late", 128, 32768),
             "cohere-embed-v4-0": ("single", 1536, 128000),
+            "nvidia-nemotron-3-embed-8b": ("single", 4096, 32768),
+            "nvidia-nemotron-3-embed-1b": ("single", 2048, 32768),
         }
 
         for key, (kind, dim, max_len) in expected.items():
@@ -845,6 +922,61 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(MODELS["mxbai-edge-colbert-v0-17m"].embedding_profile.late_interaction_dim, 48)
         self.assertEqual(MODELS["mxbai-edge-colbert-v0-32m"].embedding_profile.late_interaction_dim, 64)
 
+    def test_nemotron_3_embed_entries_use_official_encoder_configs(self):
+        expected = {
+            "nvidia-nemotron-3-embed-8b": (8.36e9, 34, 4096, 32, 8, 128, 4096),
+            "nvidia-nemotron-3-embed-1b": (1.14e9, 16, 2048, 24, 8, 128, 2048),
+        }
+        for key, (params, layers, hidden, heads, kv_heads, head_dim, output_dim) in expected.items():
+            with self.subTest(key=key):
+                model = MODELS[key]
+                profile = model.embedding_profile
+
+                self.assertEqual(model.total_params, params)
+                self.assertEqual(model.active_params, params)
+                self.assertFalse(model.is_moe)
+                self.assertEqual(model.layers, layers)
+                self.assertEqual(model.hidden_size, hidden)
+                self.assertEqual(model.num_heads, heads)
+                self.assertEqual(model.kv_heads, kv_heads)
+                self.assertEqual(model.head_dim, head_dim)
+                self.assertIsNotNone(profile)
+                self.assertEqual(profile.output_dim, output_dim)
+                self.assertEqual(profile.max_sequence_length, 32768)
+                self.assertEqual(profile.pooling, "mean")
+                self.assertIn("nvidia/Nemotron-3-Embed", profile.source)
+
+        nvfp4 = get_quantization_profile("nvidia-nemotron-3-embed-1b", "nvfp4")
+        self.assertIsNotNone(nvfp4)
+        self.assertEqual(nvfp4.source_repo, "nvidia/Nemotron-3-Embed-1B-NVFP4")
+        self.assertEqual(nvfp4.source_revision, "c01600056187dba44bd712346cedb1e57fa50220")
+        self.assertEqual(nvfp4.source_kind, "exact")
+        self.assertEqual(nvfp4.total_weight_bytes, 1_027_789_672)
+
+    def test_minimax_m3_uses_official_sparse_moe_config(self):
+        model = MODELS["minimax3"]
+
+        self.assertEqual(model.name, "MiniMax M3 428B-A23B")
+        self.assertEqual(model.total_params, 428e9)
+        self.assertEqual(model.active_params, 23e9)
+        self.assertTrue(model.is_moe)
+        self.assertEqual(model.layers, 60)
+        self.assertEqual(model.hidden_size, 6144)
+        self.assertEqual(model.num_heads, 64)
+        self.assertEqual(model.kv_heads, 4)
+        self.assertEqual(model.head_dim, 128)
+        self.assertEqual(model.max_context_tokens, 1_048_576)
+        self.assertEqual(model.moe_intermediate_dim, 3072)
+        self.assertEqual(model.moe_routed_experts, 128)
+        self.assertEqual(model.moe_active_experts, 4)
+        self.assertEqual(model.moe_shared_experts, 1)
+        self.assertEqual(model.sparse_attention_top_k, 2048)
+        self.assertEqual(model.sparse_indexer_heads, 4)
+        self.assertEqual(model.sparse_indexer_head_dim, 128)
+        self.assertIn("images", model.capabilities)
+        self.assertIn("reasoning", model.capabilities)
+        self.assertIn("mtp", {profile.method for profile in model.speculative_profiles})
+
     def test_embedding_quality_scores_are_sourced(self):
         expected_quality = {
             "denseon": 0.5620,
@@ -862,6 +994,8 @@ class ModelCatalogTests(unittest.TestCase):
             "pplx-embed-v1-4b": 0.6966,
             "pplx-embed-v1-late-0.6b": 0.5661,
             "cohere-embed-v4-0": 0.6000,
+            "nvidia-nemotron-3-embed-8b": 0.7846,
+            "nvidia-nemotron-3-embed-1b": 0.5000,
         }
         expected_decontaminated_beir = {
             "denseon": 0.5771,
@@ -870,7 +1004,10 @@ class ModelCatalogTests(unittest.TestCase):
             "pplx-embed-v1-0.6b": 0.5850,
         }
 
-        self.assertEqual(EMBEDDING_QUALITY_PLACEHOLDER, frozenset({"cohere-embed-v4-0"}))
+        self.assertEqual(
+            EMBEDDING_QUALITY_PLACEHOLDER,
+            frozenset({"cohere-embed-v4-0", "nvidia-nemotron-3-embed-1b"}),
+        )
         self.assertEqual(set(PUBLISHED_EMBEDDING_QUALITY), set(expected_quality))
         self.assertEqual(set(EMBEDDING_QUALITY_SOURCES), set(expected_quality))
         self.assertEqual(set(PUBLISHED_EMBEDDING_DECONTAMINATED_BEIR), set(expected_decontaminated_beir))
@@ -964,8 +1101,14 @@ class ModelCatalogTests(unittest.TestCase):
     def test_speculative_profiles_are_well_formed(self):
         from data import NGRAM_SPECULATIVE_PROFILE, SPEC_METHODS
 
-        kv_overhead_bounds = {"mtp": (0.0, 0.1), "eagle3": (0.0, 0.15), "dflash": (0.0, 0.2),
-                              "draft_model": (0.0, 1.0), "ngram": (0.0, 0.0)}
+        kv_overhead_bounds = {
+            "mtp": (0.0, 0.1),
+            "eagle3": (0.0, 0.15),
+            "dflash": (0.0, 0.2),
+            "dspark": (0.0, 0.25),
+            "draft_model": (0.0, 1.0),
+            "ngram": (0.0, 0.0),
+        }
         seen = 0
         for key, model in MODELS.items():
             for profile in model.speculative_profiles:
@@ -1009,7 +1152,7 @@ class ModelCatalogTests(unittest.TestCase):
 
     def test_native_mtp_models_are_flagged(self):
         # Models with documented native MTP heads must expose an mtp profile.
-        for key in ("ds3", "deepseek-v4-pro", "deepseek-v4-flash", "glm45a", "g31", "q08", "q2", "q4", "q9", "q27", "q397", "mimo-v2.5-pro"):
+        for key in ("ds3", "deepseek-v4-pro", "glm45a", "g31", "q08", "q2", "q4", "q9", "q27", "q397", "mimo-v2.5-pro"):
             with self.subTest(model=key):
                 methods = {p.method for p in MODELS[key].speculative_profiles}
                 self.assertIn("mtp", methods)
@@ -1018,6 +1161,8 @@ class ModelCatalogTests(unittest.TestCase):
         q397_methods = {p.method for p in MODELS["q397"].speculative_profiles}
         self.assertIn("dflash", q397_methods)
         self.assertIn("dflash", {p.method for p in MODELS["q27"].speculative_profiles})
+        self.assertNotIn("mtp", {p.method for p in MODELS["deepseek-v4-flash"].speculative_profiles})
+        self.assertIn("dspark", {p.method for p in MODELS["deepseek-v4-flash"].speculative_profiles})
         self.assertNotIn("mtp", {p.method for p in MODELS["g12"].speculative_profiles})
 
 

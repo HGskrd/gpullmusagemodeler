@@ -289,6 +289,7 @@ input[type="range"]::-webkit-slider-thumb {
   text-transform: uppercase; letter-spacing: .05em; color: var(--fg2);
   background: var(--bg1); position: sticky; top: 34px; z-index: 1;
 }
+.picker .cat.gpu-picker-brand { position: static; }
 .picker .cat-action {
   display: flex;
   align-items: center;

@@ -27,7 +27,7 @@ class WebTransportTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["Content-Encoding"], "gzip")
         self.assertIn("Accept-Encoding", response.headers["Vary"])
-        self.assertIn(b"vLLM", gzip.decompress(response.data))
+        self.assertIn(b"GPU/LLM Usage Modeler", gzip.decompress(response.data))
 
     def test_identity_response_remains_uncompressed(self):
         response = self.client.get("/", headers=self.headers)

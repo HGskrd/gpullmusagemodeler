@@ -9,7 +9,7 @@
   </div>
 </div>
 {% for vendor, cards in gpu_cards_by_vendor.items() %}
-  <div class="cat">{{ vendor }}</div>
+  <div class="cat gpu-picker-brand">{{ vendor }}</div>
   {% for card in cards %}
     {% set opt = card.planner_options[0] if card.planner_options else none %}
     {% set gpu = GPUS[opt.gpu_key] if opt else none %}

@@ -89,18 +89,63 @@ class GPUCatalogTests(unittest.TestCase):
 
         self.assertIn("MI455X", gpu.name)
         self.assertEqual(gpu.mem, 432e9)
-        self.assertEqual(gpu.bw, 19.6e12)
+        self.assertEqual(gpu.bw, 23.3e12)
+        self.assertEqual(gpu.bf16, 5e15)
+        self.assertEqual(gpu.fp8, 20.1e15)
+        self.assertEqual(gpu.fp4, 40.3e15)
+        self.assertEqual(gpu.scale_up_p2p_bw_bidir, 3.6e12)
         self.assertIn("Helios", card.use_case)
         self.assertIn("2H 2026", assumptions["status"])
-        self.assertIn("planner projections", assumptions["assumptions"][1])
+        self.assertTrue(str(assumptions["source"]).startswith("https://www.amd.com/"))
+        assumption_text = " ".join(str(item) for item in assumptions["assumptions"])
+        self.assertIn("23.3 TB/s", assumption_text)
+        self.assertNotIn("19.6 TB/s", assumption_text)
+        self.assertNotIn("10 PF BF16", assumption_text)
+
+    def test_helios_profile_uses_official_per_gpu_mi455x_fields(self):
+        helios = GPUS["HELIOS_MI455X"]
+        assumptions = PREVIEW_ASSUMPTIONS["gpu:HELIOS_MI455X"]
+
+        self.assertEqual(helios.mem, 432e9)
+        self.assertEqual(helios.bw, 23.3e12)
+        self.assertEqual(helios.bf16, 5e15)
+        self.assertEqual(helios.fp8, 20.1e15)
+        self.assertEqual(helios.fp4, 40.3e15)
+        self.assertEqual(helios.scale_up_p2p_bw_bidir, 3.6e12)
+        self.assertEqual(helios.node_size, 72)
+        self.assertEqual((helios.min_count, helios.count_multiple), (72, 72))
+        self.assertIn("reference design", assumptions["status"].lower())
+        self.assertIn("2H 2026", assumptions["status"])
+        self.assertTrue(str(assumptions["source"]).startswith("https://www.amd.com/"))
+        assumption_text = " ".join(str(item) for item in assumptions["assumptions"])
+        self.assertIn("23.3 TB/s", assumption_text)
+        self.assertNotIn("19.6 TB/s", assumption_text)
+        self.assertNotIn("10 PF BF16", assumption_text)
 
     def test_mi400_legacy_key_remains_available_for_saved_plans(self):
         legacy = GPUS["MI400"]
         mi455x = GPUS["MI455X"]
+        assumptions = PREVIEW_ASSUMPTIONS["gpu:MI400"]
 
-        self.assertEqual(legacy.mem, mi455x.mem)
-        self.assertEqual(legacy.bw, mi455x.bw)
+        for field in (
+            "mem",
+            "bw",
+            "bf16",
+            "fp8",
+            "fp4",
+            "scale_up_p2p_bw_bidir",
+            "node_size",
+            "tdp_watts",
+        ):
+            with self.subTest(field=field):
+                self.assertEqual(getattr(legacy, field), getattr(mi455x, field))
         self.assertIn("compatibility", legacy.name)
+        self.assertIn("compatibility", assumptions["status"])
+        self.assertTrue(str(assumptions["source"]).startswith("https://www.amd.com/"))
+        assumption_text = " ".join(str(item) for item in assumptions["assumptions"])
+        self.assertIn("23.3 TB/s", assumption_text)
+        self.assertNotIn("19.6 TB/s", assumption_text)
+        self.assertNotIn("10 PF BF16", assumption_text)
 
     def test_new_system_and_specialist_accelerator_entries_are_exposed(self):
         picker_keys = {
