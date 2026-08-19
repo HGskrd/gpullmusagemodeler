@@ -1,0 +1,1621 @@
+{
+  "chart_aggregate": [
+    {
+      "_isAggregate": true,
+      "backgroundColor": "rgba(255,255,255,0.04)",
+      "borderColor": "#ddd",
+      "borderDash": [],
+      "borderWidth": 2.5,
+      "data": [
+        {
+          "x": 1,
+          "y": 2785
+        },
+        {
+          "x": 4,
+          "y": 9027
+        },
+        {
+          "x": 16,
+          "y": 20704
+        }
+      ],
+      "fill": true,
+      "label": "Node total",
+      "pointRadius": 2.5,
+      "spanGaps": false,
+      "tension": 0.3
+    },
+    {
+      "borderColor": "#0E8F6677",
+      "borderDash": [],
+      "borderWidth": 1,
+      "data": [
+        {
+          "x": 1,
+          "y": 2485
+        },
+        {
+          "x": 4,
+          "y": 8034
+        },
+        {
+          "x": 16,
+          "y": 18193
+        }
+      ],
+      "fill": false,
+      "label": "Qwen 3.5 0.8B",
+      "pointRadius": 1.5,
+      "spanGaps": false,
+      "tension": 0.3
+    },
+    {
+      "borderColor": "#3266ad77",
+      "borderDash": [],
+      "borderWidth": 1,
+      "data": [
+        {
+          "x": 1,
+          "y": 75
+        },
+        {
+          "x": 4,
+          "y": 287
+        },
+        {
+          "x": 16,
+          "y": 990
+        }
+      ],
+      "fill": false,
+      "label": "Qwen 3.5 27B",
+      "pointRadius": 1.5,
+      "spanGaps": false,
+      "tension": 0.3
+    },
+    {
+      "borderColor": "#DE7A2477",
+      "borderDash": [],
+      "borderWidth": 1,
+      "data": [
+        {
+          "x": 1,
+          "y": 225
+        },
+        {
+          "x": 4,
+          "y": 706
+        },
+        {
+          "x": 16,
+          "y": 1521
+        }
+      ],
+      "fill": false,
+      "label": "Voxtral Mini Realtime 4B",
+      "pointRadius": 1.5,
+      "spanGaps": false,
+      "tension": 0.3
+    }
+  ],
+  "chart_asr_quality": [
+    {
+      "_asrStreaming": true,
+      "_assignmentUid": 406,
+      "_isAsrQuality": true,
+      "_modelKey": "voxtral-realtime-mini-4b",
+      "_placeholder": false,
+      "_seriesId": "asrquality:a:406:voxtral-realtime-mini-4b",
+      "backgroundColor": "#DE7A24AA",
+      "borderColor": "#DE7A24",
+      "borderDash": [],
+      "borderWidth": 2,
+      "data": [
+        {
+          "asr_mode": "streaming",
+          "language": "English",
+          "max_users": 66,
+          "placeholder": false,
+          "source": "Mistral FLEURS benchmark, 480 ms streaming delay, English WER.",
+          "wer": 4.9,
+          "x": 4.9,
+          "y": 66
+        },
+        {
+          "asr_mode": "streaming",
+          "language": "French MLS",
+          "max_users": 66,
+          "placeholder": false,
+          "source": "Hugging Face Open ASR multilingual eval, French MLS row; closest current source-backed long-form French proxy.",
+          "wer": 5.64,
+          "x": 5.64,
+          "y": 66
+        },
+        {
+          "asr_mode": "streaming",
+          "language": "French FLEURS",
+          "max_users": 66,
+          "placeholder": false,
+          "source": "Hugging Face Open ASR multilingual eval, French FLEURS row; closest current source-backed French formal/read-speech proxy.",
+          "wer": 8.44,
+          "x": 8.44,
+          "y": 66
+        },
+        {
+          "asr_mode": "streaming",
+          "language": "French CoVoST",
+          "max_users": 66,
+          "placeholder": false,
+          "source": "Hugging Face Open ASR multilingual eval, French CoVoST row; closest current source-backed proxy for AA-AgentTalk-style short prompted speech.",
+          "wer": 9.68,
+          "x": 9.68,
+          "y": 66
+        }
+      ],
+      "fill": false,
+      "label": "Voxtral Mini Realtime 4B TP1xPP1xDP1 BF16",
+      "pointRadius": 5,
+      "showLine": true,
+      "spanGaps": false,
+      "tension": 0
+    }
+  ],
+  "chart_data_processing": [
+    {
+      "backgroundColor": "#0E8F6612",
+      "borderColor": "#0E8F66",
+      "borderDash": [],
+      "borderWidth": 2,
+      "data": [
+        {
+          "x": 1,
+          "y": 180556
+        },
+        {
+          "x": 4,
+          "y": 666667
+        },
+        {
+          "x": 16,
+          "y": 774299
+        }
+      ],
+      "fill": true,
+      "label": "Qwen 3.5 0.8B TP1xPP1xDP1 FP8",
+      "pointRadius": 2.5,
+      "spanGaps": false,
+      "tension": 0.3
+    },
+    {
+      "backgroundColor": "#3266ad12",
+      "borderColor": "#3266ad",
+      "borderDash": [],
+      "borderWidth": 2,
+      "data": [
+        {
+          "x": 1,
+          "y": 5155
+        },
+        {
+          "x": 4,
+          "y": 20297
+        },
+        {
+          "x": 16,
+          "y": 21957
+        }
+      ],
+      "fill": true,
+      "label": "Qwen 3.5 27B TP2xPP1xDP1 BF16",
+      "pointRadius": 2.5,
+      "spanGaps": false,
+      "tension": 0.3
+    },
+    {
+      "backgroundColor": "#DE7A2412",
+      "borderColor": "#DE7A24",
+      "borderDash": [],
+      "borderWidth": 2,
+      "data": [
+        {
+          "x": 1,
+          "y": 16497
+        },
+        {
+          "x": 4,
+          "y": 61466
+        },
+        {
+          "x": 16,
+          "y": 68841
+        }
+      ],
+      "fill": true,
+      "label": "Voxtral Mini Realtime 4B TP1xPP1xDP1 BF16",
+      "pointRadius": 2.5,
+      "spanGaps": false,
+      "tension": 0.3
+    },
+    {
+      "_isAggregate": true,
+      "borderColor": "#ddd",
+      "borderDash": [
+        5,
+        3
+      ],
+      "borderWidth": 2,
+      "data": [
+        {
+          "x": 1,
+          "y": 202208
+        },
+        {
+          "x": 4,
+          "y": 748430
+        },
+        {
+          "x": 16,
+          "y": 865097
+        }
+      ],
+      "fill": false,
+      "label": "Node total",
+      "pointRadius": 1.5,
+      "spanGaps": false,
+      "tension": 0.3
+    }
+  ],
+  "chart_decode": [
+    {
+      "backgroundColor": "#0E8F6612",
+      "borderColor": "#0E8F66",
+      "borderDash": [],
+      "borderWidth": 2,
+      "data": [
+        {
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "x": 1,
+          "y": 2485
+        },
+        {
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "x": 4,
+          "y": 8034
+        },
+        {
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "x": 16,
+          "y": 18193
+        }
+      ],
+      "fill": true,
+      "label": "Qwen 3.5 0.8B TP1xPP1xDP1 FP8 · Spec off",
+      "pointRadius": 2.5,
+      "spanGaps": false,
+      "spec_alpha": 0.0,
+      "spec_auto": false,
+      "spec_beneficial": false,
+      "spec_k": 0,
+      "spec_method": "off",
+      "spec_probe_concurrency": 0,
+      "spec_reason": "",
+      "spec_speedup": 1.0,
+      "tension": 0.3
+    },
+    {
+      "backgroundColor": "#3266ad12",
+      "borderColor": "#3266ad",
+      "borderDash": [],
+      "borderWidth": 2,
+      "data": [
+        {
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "x": 1,
+          "y": 75
+        },
+        {
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "x": 4,
+          "y": 287
+        },
+        {
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "x": 16,
+          "y": 990
+        }
+      ],
+      "fill": true,
+      "label": "Qwen 3.5 27B TP2xPP1xDP1 BF16 · Spec off",
+      "pointRadius": 2.5,
+      "spanGaps": false,
+      "spec_alpha": 0.0,
+      "spec_auto": false,
+      "spec_beneficial": false,
+      "spec_k": 0,
+      "spec_method": "off",
+      "spec_probe_concurrency": 0,
+      "spec_reason": "",
+      "spec_speedup": 1.0,
+      "tension": 0.3
+    }
+  ],
+  "chart_embedding_quality": [
+    {
+      "_isEmbeddingQuality": true,
+      "_placeholder": false,
+      "backgroundColor": "#4D7C0FAA",
+      "borderColor": "#4D7C0F",
+      "borderDash": [],
+      "borderWidth": 2,
+      "data": [
+        {
+          "bytes_per_doc": 1536.0,
+          "decontaminated_beir_quality": null,
+          "decontaminated_beir_source": "",
+          "docs_per_second": 6500.95,
+          "max_batch": 14657,
+          "mode": "single-vector",
+          "output_mb_s": 9.99,
+          "peak_batch": 1,
+          "placeholder": false,
+          "published_quality": 0.428,
+          "published_quality_source": "Mixedbread xsmall release blog, MTEB retrieval average nDCG@10.",
+          "quality": 0.428,
+          "quality_metric": "Published retrieval nDCG@10 fallback",
+          "seq_len": 1478,
+          "source": "Mixedbread xsmall release blog, MTEB retrieval average nDCG@10.",
+          "tokens_per_second": 9610997,
+          "uses_decontaminated_beir": false,
+          "vectors_per_input": 1.0000000000000002,
+          "vectors_per_second": 6501,
+          "x": 6500.95,
+          "y": 0.428
+        }
+      ],
+      "fill": false,
+      "label": "MXBAI Embed XSmall v1 TP1xPP1xDP1 BF16",
+      "pointRadius": 5,
+      "showLine": false,
+      "spanGaps": false,
+      "tension": 0
+    },
+    {
+      "_isEmbeddingQuality": true,
+      "_placeholder": false,
+      "backgroundColor": "#0F766EAA",
+      "borderColor": "#0F766E",
+      "borderDash": [],
+      "borderWidth": 2,
+      "data": [
+        {
+          "bytes_per_doc": 3072.0,
+          "decontaminated_beir_quality": 0.5771,
+          "decontaminated_beir_source": "LightOn DenseOn/LateOn blog, Full Decontaminated BEIR Results, DenseOn row, average nDCG@10 over 12 datasets.",
+          "docs_per_second": 9284.59,
+          "max_batch": 47476,
+          "mode": "single-vector",
+          "output_mb_s": 28.52,
+          "peak_batch": 2,
+          "placeholder": false,
+          "published_quality": 0.562,
+          "published_quality_source": "LightOn DenseOn HF model card, BEIR average nDCG@10 table.",
+          "quality": 0.5771,
+          "quality_metric": "Decontaminated BEIR nDCG@10",
+          "seq_len": 454,
+          "source": "LightOn DenseOn/LateOn blog, Full Decontaminated BEIR Results, DenseOn row, average nDCG@10 over 12 datasets.",
+          "tokens_per_second": 4218916,
+          "uses_decontaminated_beir": true,
+          "vectors_per_input": 1.0000000000000002,
+          "vectors_per_second": 9285,
+          "x": 9284.59,
+          "y": 0.5771
+        }
+      ],
+      "fill": false,
+      "label": "DenseOn TP1xPP1xDP2 BF16",
+      "pointRadius": 5,
+      "showLine": false,
+      "spanGaps": false,
+      "tension": 0
+    }
+  ],
+  "chart_embedding_throughput": [
+    {
+      "_isEmbedding": true,
+      "backgroundColor": "#4D7C0F12",
+      "borderColor": "#4D7C0F",
+      "borderDash": [],
+      "borderWidth": 2,
+      "data": [
+        {
+          "max_batch": 14657,
+          "mode": "single-vector",
+          "output_mb_s": 9.99,
+          "p50_seq_len": 1024,
+          "p90_seq_len": 2048,
+          "p99_seq_len": 4096,
+          "rps": 6500.95,
+          "seq_len": 1478,
+          "tps": 9610997,
+          "vectors_per_input": 1.0000000000000002,
+          "vectors_per_second": 6501,
+          "x": 1,
+          "y": 6500.95
+        },
+        {
+          "max_batch": 14657,
+          "mode": "single-vector",
+          "output_mb_s": 9.99,
+          "p50_seq_len": 1024,
+          "p90_seq_len": 2048,
+          "p99_seq_len": 4096,
+          "rps": 6500.95,
+          "seq_len": 1478,
+          "tps": 9610997,
+          "vectors_per_input": 1.0000000000000002,
+          "vectors_per_second": 6501,
+          "x": 4,
+          "y": 6500.95
+        },
+        {
+          "max_batch": 14657,
+          "mode": "single-vector",
+          "output_mb_s": 9.99,
+          "p50_seq_len": 1024,
+          "p90_seq_len": 2048,
+          "p99_seq_len": 4096,
+          "rps": 6500.95,
+          "seq_len": 1478,
+          "tps": 9610997,
+          "vectors_per_input": 1.0000000000000002,
+          "vectors_per_second": 6501,
+          "x": 16,
+          "y": 6500.95
+        }
+      ],
+      "fill": false,
+      "label": "MXBAI Embed XSmall v1 TP1xPP1xDP1 BF16",
+      "pointRadius": 2.5,
+      "spanGaps": false,
+      "tension": 0.3
+    },
+    {
+      "_isEmbedding": true,
+      "backgroundColor": "#0F766E12",
+      "borderColor": "#0F766E",
+      "borderDash": [],
+      "borderWidth": 2,
+      "data": [
+        {
+          "max_batch": 47476,
+          "mode": "single-vector",
+          "output_mb_s": 14.26,
+          "p50_seq_len": 512,
+          "p90_seq_len": 512,
+          "p99_seq_len": 512,
+          "rps": 4642.29,
+          "seq_len": 454,
+          "tps": 2109458,
+          "vectors_per_input": 1.0000000000000002,
+          "vectors_per_second": 4642,
+          "x": 1,
+          "y": 4642.29
+        },
+        {
+          "max_batch": 47476,
+          "mode": "single-vector",
+          "output_mb_s": 28.52,
+          "p50_seq_len": 512,
+          "p90_seq_len": 512,
+          "p99_seq_len": 512,
+          "rps": 9284.59,
+          "seq_len": 454,
+          "tps": 4218916,
+          "vectors_per_input": 1.0000000000000002,
+          "vectors_per_second": 9285,
+          "x": 4,
+          "y": 9284.59
+        },
+        {
+          "max_batch": 47476,
+          "mode": "single-vector",
+          "output_mb_s": 28.52,
+          "p50_seq_len": 512,
+          "p90_seq_len": 512,
+          "p99_seq_len": 512,
+          "rps": 9284.59,
+          "seq_len": 454,
+          "tps": 4218916,
+          "vectors_per_input": 1.0000000000000002,
+          "vectors_per_second": 9285,
+          "x": 16,
+          "y": 9284.59
+        }
+      ],
+      "fill": false,
+      "label": "DenseOn TP1xPP1xDP2 BF16",
+      "pointRadius": 2.5,
+      "spanGaps": false,
+      "tension": 0.3
+    }
+  ],
+  "chart_pareto": [
+    {
+      "backgroundColor": "#0E8F66AA",
+      "borderColor": "#0E8F66",
+      "borderDash": [],
+      "borderWidth": 2,
+      "data": [
+        {
+          "bs": 1,
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "x": 0.4,
+          "y": 2485
+        },
+        {
+          "bs": 2,
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "x": 0.43,
+          "y": 4606
+        },
+        {
+          "bs": 4,
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "x": 0.5,
+          "y": 8034
+        },
+        {
+          "bs": 8,
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "x": 0.63,
+          "y": 12799
+        },
+        {
+          "bs": 16,
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "x": 0.88,
+          "y": 18193
+        },
+        {
+          "bs": 32,
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "x": 1.39,
+          "y": 23051
+        },
+        {
+          "bs": 64,
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "x": 2.41,
+          "y": 26602
+        },
+        {
+          "bs": 128,
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "x": 4.44,
+          "y": 28823
+        },
+        {
+          "bs": 256,
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "x": 8.51,
+          "y": 30078
+        },
+        {
+          "bs": 512,
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "x": 16.65,
+          "y": 30748
+        },
+        {
+          "bs": 1024,
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "x": 32.93,
+          "y": 31094
+        }
+      ],
+      "label": "Qwen 3.5 0.8B TP1xPP1xDP1 FP8 · Spec off",
+      "pointRadius": 3.5,
+      "showLine": true,
+      "spec_alpha": 0.0,
+      "spec_auto": false,
+      "spec_beneficial": false,
+      "spec_k": 0,
+      "spec_method": "off",
+      "spec_probe_concurrency": 0,
+      "spec_reason": "",
+      "spec_speedup": 1.0,
+      "tension": 0.3
+    },
+    {
+      "backgroundColor": "#3266adAA",
+      "borderColor": "#3266ad",
+      "borderDash": [],
+      "borderWidth": 2,
+      "data": [
+        {
+          "bs": 1,
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "x": 13.4,
+          "y": 75
+        },
+        {
+          "bs": 2,
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "x": 13.58,
+          "y": 147
+        },
+        {
+          "bs": 4,
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "x": 13.95,
+          "y": 287
+        },
+        {
+          "bs": 8,
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "x": 14.69,
+          "y": 545
+        },
+        {
+          "bs": 16,
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "x": 16.16,
+          "y": 990
+        },
+        {
+          "bs": 32,
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "x": 19.11,
+          "y": 1675
+        },
+        {
+          "bs": 64,
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "x": 25.0,
+          "y": 2560
+        }
+      ],
+      "label": "Qwen 3.5 27B TP2xPP1xDP1 BF16 · Spec off",
+      "pointRadius": 3.5,
+      "showLine": true,
+      "spec_alpha": 0.0,
+      "spec_auto": false,
+      "spec_beneficial": false,
+      "spec_k": 0,
+      "spec_method": "off",
+      "spec_probe_concurrency": 0,
+      "spec_reason": "",
+      "spec_speedup": 1.0,
+      "tension": 0.3
+    }
+  ],
+  "chart_processing_pareto": [
+    {
+      "backgroundColor": "#3266ad12",
+      "borderColor": "#3266ad",
+      "borderDash": [],
+      "borderWidth": 2,
+      "data": [
+        {
+          "in_len": 9139,
+          "out_len": 775,
+          "rps": 3.8,
+          "tps": 37683,
+          "workload": "Chat",
+          "x": 1,
+          "y": 3.8
+        },
+        {
+          "in_len": 9139,
+          "out_len": 775,
+          "rps": 12.33,
+          "tps": 122196,
+          "workload": "Chat",
+          "x": 4,
+          "y": 12.33
+        },
+        {
+          "in_len": 9139,
+          "out_len": 775,
+          "rps": 27.98,
+          "tps": 277380,
+          "workload": "Chat",
+          "x": 16,
+          "y": 27.98
+        }
+      ],
+      "fill": false,
+      "label": "Chat",
+      "pointRadius": 2.5,
+      "spanGaps": false,
+      "tension": 0.3
+    },
+    {
+      "backgroundColor": "#1D9E7512",
+      "borderColor": "#1D9E75",
+      "borderDash": [],
+      "borderWidth": 2,
+      "data": [
+        {
+          "in_len": 21670,
+          "out_len": 977,
+          "rps": 2.76,
+          "tps": 62448,
+          "workload": "RAG",
+          "x": 1,
+          "y": 2.76
+        },
+        {
+          "in_len": 21670,
+          "out_len": 977,
+          "rps": 7.76,
+          "tps": 175784,
+          "workload": "RAG",
+          "x": 4,
+          "y": 7.76
+        },
+        {
+          "in_len": 21670,
+          "out_len": 977,
+          "rps": 14.3,
+          "tps": 323840,
+          "workload": "RAG",
+          "x": 16,
+          "y": 14.3
+        }
+      ],
+      "fill": false,
+      "label": "RAG",
+      "pointRadius": 2.5,
+      "spanGaps": false,
+      "tension": 0.3
+    },
+    {
+      "backgroundColor": "#BA751712",
+      "borderColor": "#BA7517",
+      "borderDash": [],
+      "borderWidth": 2,
+      "data": [
+        {
+          "in_len": 51092,
+          "out_len": 1813,
+          "rps": 1.27,
+          "tps": 67427,
+          "workload": "Long doc",
+          "x": 1,
+          "y": 1.27
+        },
+        {
+          "in_len": 51092,
+          "out_len": 1813,
+          "rps": 2.92,
+          "tps": 154585,
+          "workload": "Long doc",
+          "x": 4,
+          "y": 2.92
+        },
+        {
+          "in_len": 51092,
+          "out_len": 1813,
+          "rps": 4.49,
+          "tps": 237801,
+          "workload": "Long doc",
+          "x": 16,
+          "y": 4.49
+        }
+      ],
+      "fill": false,
+      "label": "Long doc",
+      "pointRadius": 2.5,
+      "spanGaps": false,
+      "tension": 0.3
+    },
+    {
+      "backgroundColor": "#7F77DD12",
+      "borderColor": "#7F77DD",
+      "borderDash": [],
+      "borderWidth": 2,
+      "data": [
+        {
+          "in_len": 12319,
+          "out_len": 1212,
+          "rps": 2.37,
+          "tps": 32123,
+          "workload": "Code",
+          "x": 1,
+          "y": 2.37
+        },
+        {
+          "in_len": 12319,
+          "out_len": 1212,
+          "rps": 7.33,
+          "tps": 99140,
+          "workload": "Code",
+          "x": 4,
+          "y": 7.33
+        },
+        {
+          "in_len": 12319,
+          "out_len": 1212,
+          "rps": 15.47,
+          "tps": 209266,
+          "workload": "Code",
+          "x": 16,
+          "y": 15.47
+        }
+      ],
+      "fill": false,
+      "label": "Code",
+      "pointRadius": 2.5,
+      "spanGaps": false,
+      "tension": 0.3
+    },
+    {
+      "backgroundColor": "#D85A3012",
+      "borderColor": "#D85A30",
+      "borderDash": [],
+      "borderWidth": 2,
+      "data": [
+        {
+          "in_len": 9884,
+          "out_len": 86,
+          "rps": 34.25,
+          "tps": 341493,
+          "workload": "Classify",
+          "x": 1,
+          "y": 34.25
+        },
+        {
+          "in_len": 9884,
+          "out_len": 86,
+          "rps": 70.32,
+          "tps": 701070,
+          "workload": "Classify",
+          "x": 4,
+          "y": 70.32
+        },
+        {
+          "in_len": 9884,
+          "out_len": 86,
+          "rps": 70.32,
+          "tps": 701073,
+          "workload": "Classify",
+          "x": 16,
+          "y": 70.32
+        }
+      ],
+      "fill": false,
+      "label": "Classify",
+      "pointRadius": 2.5,
+      "spanGaps": false,
+      "tension": 0.3
+    }
+  ],
+  "chart_realtime_capacity": [
+    {
+      "_isRealtime": true,
+      "backgroundColor": "#DE7A2412",
+      "borderColor": "#DE7A24",
+      "borderDash": [],
+      "borderWidth": 2,
+      "data": [
+        {
+          "max_slots": 66,
+          "max_users": 66,
+          "per_user_tps": 246.0,
+          "required_tps": 12.5,
+          "step_ms": 4.06,
+          "target_delay_ms": 480,
+          "total_tps": 246,
+          "users": 1,
+          "x": 1,
+          "y": 19.68
+        },
+        {
+          "max_slots": 66,
+          "max_users": 66,
+          "per_user_tps": 193.75,
+          "required_tps": 12.5,
+          "step_ms": 5.16,
+          "target_delay_ms": 480,
+          "total_tps": 775,
+          "users": 4,
+          "x": 4,
+          "y": 15.5
+        },
+        {
+          "max_slots": 66,
+          "max_users": 66,
+          "per_user_tps": 104.38,
+          "required_tps": 12.5,
+          "step_ms": 9.58,
+          "target_delay_ms": 480,
+          "total_tps": 1670,
+          "users": 16,
+          "x": 16,
+          "y": 8.35
+        }
+      ],
+      "fill": false,
+      "label": "Voxtral Mini Realtime 4B TP1xPP1xDP1 BF16",
+      "pointRadius": 2.5,
+      "spanGaps": false,
+      "tension": 0.3
+    }
+  ],
+  "chart_user_experience": [
+    {
+      "borderColor": "#0E8F66",
+      "borderDash": [],
+      "borderWidth": 2,
+      "data": [
+        {
+          "arrival_rps": 3.23,
+          "decode_step_ms": 0.4,
+          "inflight": 1.0,
+          "response_s": 0.32,
+          "ttft_ms": 14.5,
+          "x": 3.23,
+          "y": 0.32
+        },
+        {
+          "arrival_rps": 6.0,
+          "decode_step_ms": 0.43,
+          "inflight": 2.0,
+          "response_s": 0.36,
+          "ttft_ms": 28.9,
+          "x": 6.0,
+          "y": 0.36
+        },
+        {
+          "arrival_rps": 10.32,
+          "decode_step_ms": 0.5,
+          "inflight": 4.0,
+          "response_s": 0.45,
+          "ttft_ms": 57.8,
+          "x": 10.32,
+          "y": 0.45
+        },
+        {
+          "arrival_rps": 16.39,
+          "decode_step_ms": 0.63,
+          "inflight": 8.0,
+          "response_s": 0.6,
+          "ttft_ms": 115.6,
+          "x": 16.39,
+          "y": 0.6
+        },
+        {
+          "arrival_rps": 20.65,
+          "decode_step_ms": 0.75,
+          "inflight": 12.0,
+          "response_s": 0.75,
+          "ttft_ms": 173.4,
+          "x": 20.65,
+          "y": 0.75
+        },
+        {
+          "arrival_rps": 23.46,
+          "decode_step_ms": 0.88,
+          "inflight": 16.0,
+          "response_s": 0.91,
+          "ttft_ms": 231.2,
+          "x": 23.46,
+          "y": 0.91
+        },
+        {
+          "arrival_rps": 27.41,
+          "decode_step_ms": 1.13,
+          "inflight": 24.0,
+          "response_s": 1.22,
+          "ttft_ms": 346.8,
+          "x": 27.41,
+          "y": 1.22
+        },
+        {
+          "arrival_rps": 29.71,
+          "decode_step_ms": 1.39,
+          "inflight": 32.0,
+          "response_s": 1.54,
+          "ttft_ms": 462.4,
+          "x": 29.71,
+          "y": 1.54
+        },
+        {
+          "arrival_rps": 32.6,
+          "decode_step_ms": 1.9,
+          "inflight": 48.0,
+          "response_s": 2.17,
+          "ttft_ms": 693.6,
+          "x": 32.6,
+          "y": 2.17
+        },
+        {
+          "arrival_rps": 34.27,
+          "decode_step_ms": 2.41,
+          "inflight": 64.0,
+          "response_s": 2.79,
+          "ttft_ms": 924.9,
+          "x": 34.27,
+          "y": 2.79
+        },
+        {
+          "arrival_rps": 36.22,
+          "decode_step_ms": 3.42,
+          "inflight": 96.0,
+          "response_s": 4.04,
+          "ttft_ms": 1387.3,
+          "x": 36.22,
+          "y": 4.04
+        },
+        {
+          "arrival_rps": 37.2,
+          "decode_step_ms": 4.44,
+          "inflight": 128.0,
+          "response_s": 5.29,
+          "ttft_ms": 1849.7,
+          "x": 37.2,
+          "y": 5.29
+        },
+        {
+          "arrival_rps": 38.23,
+          "decode_step_ms": 6.48,
+          "inflight": 192.0,
+          "response_s": 7.8,
+          "ttft_ms": 2774.6,
+          "x": 38.23,
+          "y": 7.8
+        },
+        {
+          "arrival_rps": 38.82,
+          "decode_step_ms": 8.51,
+          "inflight": 256.0,
+          "response_s": 10.29,
+          "ttft_ms": 3699.4,
+          "x": 38.82,
+          "y": 10.29
+        },
+        {
+          "arrival_rps": 39.39,
+          "decode_step_ms": 12.58,
+          "inflight": 384.0,
+          "response_s": 15.3,
+          "ttft_ms": 5549.2,
+          "x": 39.39,
+          "y": 15.3
+        },
+        {
+          "arrival_rps": 39.68,
+          "decode_step_ms": 16.65,
+          "inflight": 512.0,
+          "response_s": 20.3,
+          "ttft_ms": 7398.9,
+          "x": 39.68,
+          "y": 20.3
+        },
+        {
+          "arrival_rps": 39.97,
+          "decode_step_ms": 24.79,
+          "inflight": 768.0,
+          "response_s": 30.31,
+          "ttft_ms": 11098.3,
+          "x": 39.97,
+          "y": 30.31
+        },
+        {
+          "arrival_rps": 40.12,
+          "decode_step_ms": 32.93,
+          "inflight": 1024.0,
+          "response_s": 40.32,
+          "ttft_ms": 14797.8,
+          "x": 40.12,
+          "y": 40.32
+        }
+      ],
+      "fill": false,
+      "label": "Qwen 3.5 0.8B TP1xPP1xDP1 FP8",
+      "pointRadius": 3,
+      "showLine": true,
+      "spanGaps": false,
+      "tension": 0.3
+    },
+    {
+      "borderColor": "#3266ad",
+      "borderDash": [],
+      "borderWidth": 2,
+      "data": [
+        {
+          "arrival_rps": 0.1,
+          "decode_step_ms": 13.4,
+          "inflight": 1.0,
+          "response_s": 10.83,
+          "ttft_ms": 443.1,
+          "x": 0.1,
+          "y": 10.83
+        },
+        {
+          "arrival_rps": 0.19,
+          "decode_step_ms": 13.58,
+          "inflight": 2.0,
+          "response_s": 11.41,
+          "ttft_ms": 885.9,
+          "x": 0.19,
+          "y": 11.41
+        },
+        {
+          "arrival_rps": 0.37,
+          "decode_step_ms": 13.95,
+          "inflight": 4.0,
+          "response_s": 12.58,
+          "ttft_ms": 1771.6,
+          "x": 0.37,
+          "y": 12.58
+        },
+        {
+          "arrival_rps": 0.7,
+          "decode_step_ms": 14.69,
+          "inflight": 8.0,
+          "response_s": 14.93,
+          "ttft_ms": 3542.8,
+          "x": 0.7,
+          "y": 14.93
+        },
+        {
+          "arrival_rps": 1.0,
+          "decode_step_ms": 15.42,
+          "inflight": 12.0,
+          "response_s": 17.26,
+          "ttft_ms": 5314.1,
+          "x": 1.0,
+          "y": 17.26
+        },
+        {
+          "arrival_rps": 1.28,
+          "decode_step_ms": 16.16,
+          "inflight": 16.0,
+          "response_s": 19.61,
+          "ttft_ms": 7085.3,
+          "x": 1.28,
+          "y": 19.61
+        },
+        {
+          "arrival_rps": 1.76,
+          "decode_step_ms": 17.63,
+          "inflight": 24.0,
+          "response_s": 24.29,
+          "ttft_ms": 10627.8,
+          "x": 1.76,
+          "y": 24.29
+        },
+        {
+          "arrival_rps": 2.16,
+          "decode_step_ms": 19.11,
+          "inflight": 32.0,
+          "response_s": 28.98,
+          "ttft_ms": 14170.4,
+          "x": 2.16,
+          "y": 28.98
+        },
+        {
+          "arrival_rps": 2.26,
+          "decode_step_ms": 22.05,
+          "inflight": 48.0,
+          "response_s": 38.34,
+          "ttft_ms": 21255.4,
+          "x": 2.26,
+          "y": 38.34
+        }
+      ],
+      "fill": false,
+      "label": "Qwen 3.5 27B TP2xPP1xDP1 BF16",
+      "pointRadius": 3,
+      "showLine": true,
+      "spanGaps": false,
+      "tension": 0.3
+    },
+    {
+      "borderColor": "#DE7A24",
+      "borderDash": [],
+      "borderWidth": 2,
+      "data": [
+        {
+          "arrival_rps": 0.29,
+          "decode_step_ms": 4.45,
+          "inflight": 1.0,
+          "response_s": 3.62,
+          "ttft_ms": 171.8,
+          "x": 0.29,
+          "y": 3.62
+        },
+        {
+          "arrival_rps": 0.53,
+          "decode_step_ms": 4.86,
+          "inflight": 2.0,
+          "response_s": 4.11,
+          "ttft_ms": 343.6,
+          "x": 0.53,
+          "y": 4.11
+        },
+        {
+          "arrival_rps": 0.91,
+          "decode_step_ms": 5.67,
+          "inflight": 4.0,
+          "response_s": 5.08,
+          "ttft_ms": 687.1,
+          "x": 0.91,
+          "y": 5.08
+        },
+        {
+          "arrival_rps": 1.42,
+          "decode_step_ms": 7.28,
+          "inflight": 8.0,
+          "response_s": 7.02,
+          "ttft_ms": 1374.3,
+          "x": 1.42,
+          "y": 7.02
+        },
+        {
+          "arrival_rps": 1.74,
+          "decode_step_ms": 8.9,
+          "inflight": 12.0,
+          "response_s": 8.96,
+          "ttft_ms": 2061.4,
+          "x": 1.74,
+          "y": 8.96
+        },
+        {
+          "arrival_rps": 1.96,
+          "decode_step_ms": 10.52,
+          "inflight": 16.0,
+          "response_s": 10.9,
+          "ttft_ms": 2748.5,
+          "x": 1.96,
+          "y": 10.9
+        },
+        {
+          "arrival_rps": 2.25,
+          "decode_step_ms": 13.75,
+          "inflight": 24.0,
+          "response_s": 14.78,
+          "ttft_ms": 4122.8,
+          "x": 2.25,
+          "y": 14.78
+        },
+        {
+          "arrival_rps": 2.43,
+          "decode_step_ms": 16.98,
+          "inflight": 32.0,
+          "response_s": 18.66,
+          "ttft_ms": 5497.1,
+          "x": 2.43,
+          "y": 18.66
+        },
+        {
+          "arrival_rps": 2.64,
+          "decode_step_ms": 23.45,
+          "inflight": 48.0,
+          "response_s": 26.42,
+          "ttft_ms": 8245.6,
+          "x": 2.64,
+          "y": 26.42
+        },
+        {
+          "arrival_rps": 2.76,
+          "decode_step_ms": 29.92,
+          "inflight": 64.0,
+          "response_s": 34.18,
+          "ttft_ms": 10994.1,
+          "x": 2.76,
+          "y": 34.18
+        }
+      ],
+      "fill": false,
+      "label": "Voxtral Mini Realtime 4B TP1xPP1xDP1 BF16",
+      "pointRadius": 3,
+      "showLine": true,
+      "spanGaps": false,
+      "tension": 0.3
+    }
+  ],
+  "chart_user_pareto": [
+    {
+      "backgroundColor": "#0E8F66AA",
+      "borderColor": "#0E8F66",
+      "borderDash": [],
+      "borderWidth": 2,
+      "data": [
+        {
+          "lat": 0.4,
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "total_tps": 2485,
+          "users": 1,
+          "x": 1,
+          "y": 2485.0
+        },
+        {
+          "lat": 0.5,
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "total_tps": 8034,
+          "users": 4,
+          "x": 4,
+          "y": 2008.5
+        },
+        {
+          "lat": 0.88,
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "total_tps": 18193,
+          "users": 16,
+          "x": 16,
+          "y": 1137.06
+        }
+      ],
+      "label": "Qwen 3.5 0.8B TP1xPP1xDP1 FP8 · Spec off",
+      "pointRadius": 3.5,
+      "showLine": true,
+      "spec_alpha": 0.0,
+      "spec_auto": false,
+      "spec_beneficial": false,
+      "spec_k": 0,
+      "spec_method": "off",
+      "spec_probe_concurrency": 0,
+      "spec_reason": "",
+      "spec_speedup": 1.0,
+      "tension": 0.3
+    },
+    {
+      "backgroundColor": "#3266adAA",
+      "borderColor": "#3266ad",
+      "borderDash": [],
+      "borderWidth": 2,
+      "data": [
+        {
+          "lat": 13.4,
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "total_tps": 75,
+          "users": 1,
+          "x": 1,
+          "y": 75.0
+        },
+        {
+          "lat": 13.95,
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "total_tps": 287,
+          "users": 4,
+          "x": 4,
+          "y": 71.75
+        },
+        {
+          "lat": 16.16,
+          "spec_alpha": 0.0,
+          "spec_auto": false,
+          "spec_beneficial": false,
+          "spec_k": 0,
+          "spec_method": "off",
+          "spec_probe_concurrency": 0,
+          "spec_reason": "",
+          "spec_speedup": 1.0,
+          "total_tps": 990,
+          "users": 16,
+          "x": 16,
+          "y": 61.88
+        }
+      ],
+      "label": "Qwen 3.5 27B TP2xPP1xDP1 BF16 · Spec off",
+      "pointRadius": 3.5,
+      "showLine": true,
+      "spec_alpha": 0.0,
+      "spec_auto": false,
+      "spec_beneficial": false,
+      "spec_k": 0,
+      "spec_method": "off",
+      "spec_probe_concurrency": 0,
+      "spec_reason": "",
+      "spec_speedup": 1.0,
+      "tension": 0.3
+    }
+  ]
+}
