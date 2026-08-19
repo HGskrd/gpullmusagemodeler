@@ -7,16 +7,13 @@ from calc import (
     EfficiencyParams,
     SpecRuntime,
     _active_weight_bytes,
-    _cloud_price_per_m_in_preset,
     _compute_decode_core,
     _decode_attention_work,
     _decode_step_time,
     _dense_tp_oh,
-    _deployment_capacity_for_profile,
     _pp_peak_fraction,
     _prefill_attention_work,
     attention_residual_scratch_bytes,
-    chart_user_pareto,
     communication_breakdown,
     compute_data,
     compute_data_capacity,
@@ -24,7 +21,6 @@ from calc import (
     compute_embedding,
     compute_memory,
     compute_prefill,
-    compute_revenue_projection,
     fixed_paged_oh,
     kv_cache_bytes_for_sequence,
     model_gpu_flops,
@@ -48,7 +44,13 @@ from data import (
     SpeculativeProfile,
     success_rate,
 )
+from engine.economics import (
+    _cloud_price_per_m_in_preset,
+    _deployment_capacity_for_profile,
+    compute_revenue_projection,
+)
 from placement import get_deployed, resolve_deployment, retune_models
+from presentation.charts import chart_user_pareto
 from state import GpuPool, ModelAssignment, PlannerState, Project
 
 
@@ -605,7 +607,10 @@ class ProjectionMathTests(unittest.TestCase):
         at_threshold = {"in_len": 1000, "out_len": 10000, "tokens_per_request": 11000}
         above_threshold = {"in_len": 1001, "out_len": 9999, "tokens_per_request": 11000}
 
-        with patch("calc.cloud_policy.effective_corpo_models", return_value=[("tiered", cloud)]):
+        with patch(
+            "engine.economics.cloud_policy.effective_corpo_models",
+            return_value=[("tiered", cloud)],
+        ):
             normal, normal_pm = _cloud_price_per_m_in_preset(
                 0.0, 0.0, 0.0, at_threshold, 0.5, "test"
             )

@@ -2,17 +2,19 @@ import copy
 import unittest
 
 from calc import (
+    compute_realtime_capacity,
+    get_decode_bs,
+)
+from data import ASR_WER_PLACEHOLDER, DIST_PRESETS, MODELS, PUBLISHED_ASR_WER
+from engine.economics import compute_revenue_projection
+from placement import resolve_deployment, retune_models
+from presentation.charts import (
     chart_asr_quality,
     chart_embedding_quality,
     chart_realtime_capacity,
     chart_user_pareto,
-    compute_realtime_capacity,
-    compute_revenue_projection,
     embedding_quality_axis_range,
-    get_decode_bs,
 )
-from data import ASR_WER_PLACEHOLDER, DIST_PRESETS, MODELS, PUBLISHED_ASR_WER
-from placement import resolve_deployment, retune_models
 from state import (
     VISIBLE_PLOT_MODES,
     GpuPool,

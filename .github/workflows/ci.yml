@@ -32,6 +32,6 @@ jobs:
       - name: Type-check planner modules
         run: python -m mypy
       - name: Compile sources
-        run: python -m compileall -q app.py calc.py data state.py tracking.py
+        run: python -m compileall -q app.py calc.py data engine presentation state.py tracking.py
       - name: Run tests
         run: python -m pytest -q --cov=. --cov-report=term

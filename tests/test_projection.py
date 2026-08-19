@@ -1,13 +1,50 @@
 import unittest
 from unittest.mock import patch
 
-from calc import avg_dist, compute_revenue_projection, latent_activation_share
+from calc import avg_dist
 from data import DIST_PRESETS, INPUT_BUCKETS, OUTPUT_BUCKETS
 from econ_variants import econ_payload
+from engine.economics import (
+    DemandFates,
+    ModelUtilization,
+    ProjectionResult,
+    ProjectOutcome,
+    allocate_capacity,
+    build_supply,
+    calculate_environmental_impact,
+    classify_demand,
+    compute_revenue_projection,
+    latent_activation_share,
+    price_outcomes,
+    summarize_projection,
+)
 from state import GpuPool, ModelAssignment, PlannerState, Project, _sync_aggregate_distribution
 
 
 class RevenueProjectionTests(unittest.TestCase):
+    def test_typed_projection_stages_round_trip_to_legacy_payload(self):
+        state = PlannerState(
+            gpus=[GpuPool(1, "H100", 2, cost_per_gpu_hour=1.0)],
+            models=[ModelAssignment(2, "q27", 1, 1, 1, 1, "bf16")],
+            projects=[Project(3, "Coding", 0.45, 20_000_000, 4.0)],
+        )
+
+        supplied = build_supply(state)
+        classified = classify_demand(supplied)
+        allocated = allocate_capacity(classified)
+        priced = price_outcomes(allocated)
+        impacted = calculate_environmental_impact(priced)
+        result = summarize_projection(impacted, include_recommendations=False)
+
+        self.assertIsInstance(result, ProjectionResult)
+        self.assertIsInstance(result.fates, DemandFates)
+        self.assertTrue(all(isinstance(row, ProjectOutcome) for row in result.projects))
+        self.assertTrue(all(isinstance(row, ModelUtilization) for row in result.models))
+        self.assertEqual(
+            result.to_dict(),
+            compute_revenue_projection(state, include_recommendations=False),
+        )
+
     def test_main_economics_payload_defers_expansion_recommendations(self):
         state = PlannerState()
 

@@ -2,11 +2,6 @@ import unittest
 import uuid
 
 import app as app_module
-from calc import (
-    _portfolio_domain_quality,
-    _swap_candidate_shortlist,
-    compute_revenue_projection,
-)
 from data import (
     MODEL_DOMAIN_QUALITY_ANCHORS,
     MODELS,
@@ -17,6 +12,11 @@ from data import (
     normalize_quality_domain,
     normalize_quality_weights,
     swebench_pro_to_coding_quality,
+)
+from engine.economics import (
+    _portfolio_domain_quality,
+    _swap_candidate_shortlist,
+    compute_revenue_projection,
 )
 from placement import _model_serves_project
 from planner_service import create_default_state, deserialize_scenario

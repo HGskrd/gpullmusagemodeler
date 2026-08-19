@@ -7,7 +7,10 @@ from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import Any
 
-from calc import (
+from engine.economics import compute_revenue_projection
+from placement import resolve_deployment, retune_models
+from planner_service import deserialize_scenario
+from presentation.charts import (
     chart_aggregate,
     chart_asr_quality,
     chart_data_processing,
@@ -19,10 +22,7 @@ from calc import (
     chart_realtime_capacity,
     chart_user_experience,
     chart_user_pareto,
-    compute_revenue_projection,
 )
-from placement import resolve_deployment, retune_models
-from planner_service import deserialize_scenario
 from state import GpuPool, ModelAssignment, PlannerState, Project
 
 ROOT = Path(__file__).resolve().parents[1]

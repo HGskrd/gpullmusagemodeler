@@ -11,11 +11,11 @@ import json
 from flask import Blueprint, abort, g, render_template, request
 
 import cloud_policy
-from calc import (
+from data import quality_to_aa_intelligence
+from engine.economics import (
     _marginal_model_swap_recommendations,
     compute_revenue_projection,
 )
-from data import quality_to_aa_intelligence
 from state import get_compare_state, get_state
 
 econ_bp = Blueprint("econ", __name__, url_prefix="/econ")

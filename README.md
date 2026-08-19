@@ -208,7 +208,7 @@ Complete scenarios can be exported and imported as versioned JSON from the calcu
 Run the full regression suite and source compilation checks before changing planner math or catalog data:
 
 ```bash
-python -m compileall -q app.py calc.py data state.py tracking.py
+python -m compileall -q app.py calc.py data engine presentation state.py tracking.py
 python -m pytest -q
 ```
 

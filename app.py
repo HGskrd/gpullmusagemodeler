@@ -30,15 +30,8 @@ from werkzeug.security import safe_join
 import cloud_policy
 from calc import (
     avg_dist,
-    chart_asr_quality,
-    chart_embedding_quality,
-    chart_processing_pareto,
-    chart_realtime_capacity,
-    chart_user_pareto,
-    compute_revenue_projection,
     dist_percentile,
     effective_prefill_length,
-    embedding_quality_axis_range,
     get_decode_bs,
     get_processing_pareto_bs,
     get_realtime_bs,
@@ -81,6 +74,7 @@ from data import (
     success_rate,
 )
 from econ_variants import econ_bp, econ_payload
+from engine.economics import compute_revenue_projection
 from placement import (
     auto_select_models,
     resolve_deployment,
@@ -96,6 +90,14 @@ from planner_service import (
     set_model_gpu_pool,
     set_model_prec,
     set_model_spec,
+)
+from presentation.charts import (
+    chart_asr_quality,
+    chart_embedding_quality,
+    chart_processing_pareto,
+    chart_realtime_capacity,
+    chart_user_pareto,
+    embedding_quality_axis_range,
 )
 from scenarios import (
     replace_project_set,

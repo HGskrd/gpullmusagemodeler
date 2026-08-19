@@ -328,7 +328,7 @@ class EngineeringHardeningTests(unittest.TestCase):
         html = response.get_data(as_text=True)
         self.assertIn("Cloud spend lost / day", html)
         # The KPI tile and the per-use-case table both surface the cloud outflow.
-        from calc import compute_revenue_projection
+        from engine.economics import compute_revenue_projection
 
         projection = compute_revenue_projection(state)
         self.assertGreater(projection["value_cloud_day"], 0)

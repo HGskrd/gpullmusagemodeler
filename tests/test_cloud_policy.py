@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import app as app_module
 import cloud_policy
-from calc import _cloud_price_per_m_in_preset
+from engine.economics import _cloud_price_per_m_in_preset
 from state import normalize_corpo_cloud
 
 
