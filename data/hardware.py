@@ -69,6 +69,15 @@ class GPUCard:
     note: str | None = None
 
 
+RADEON_GPU_SPECS_CAPTURED_AT = "2026-08-19"
+RADEON_GPU_SPEC_SOURCES = {
+    "RadeonRX9070XT": "https://www.amd.com/en/products/graphics/desktops/radeon/9000-series/amd-radeon-rx-9070xt.html",
+    "RadeonRX7900XT": "https://www.amd.com/en/products/graphics/desktops/radeon/7000-series/amd-radeon-rx-7900xt.html",
+    "RadeonRX7900XTX": "https://www.amd.com/en/products/graphics/desktops/radeon/7000-series/amd-radeon-rx-7900xtx.html",
+    "RadeonAIProR9700": "https://www.amd.com/en/products/graphics/workstations/radeon-ai-pro/ai-9000-series/amd-radeon-ai-pro-r9700.html",
+}
+
+
 GPUS: dict[str, GPU] = {
     # Normalized to per-GPU aggregate bidirectional peer-to-peer bandwidth for each local topology.
     # AMD values use aggregate peer-to-peer bandwidth rather than raw per-link or total-transport IF figures.
@@ -262,8 +271,28 @@ GPUS: dict[str, GPU] = {
     "RadeonProW7900": GPU(
         "RadeonProW7900", "Radeon PRO W7900 48GB", "amd", 48e9, 864e9, 123e12, 123e12, 64e9, 1
     ),
+    # Radeon desktop/workstation cards have no dedicated scale-up fabric in the planner.
+    # Their BF16/FP8 fields use AMD's dense matrix peaks where native, and fall back to
+    # dense FP16 matrix throughput on RDNA 3, which has no native FP8 path.
+    "RadeonRX9070XT": GPU(
+        "RadeonRX9070XT", "Radeon RX 9070 XT 16GB", "amd", 16e9, 640e9, 195e12, 389e12, 128e9, 1
+    ),
+    "RadeonRX7900XT": GPU(
+        "RadeonRX7900XT", "Radeon RX 7900 XT 20GB", "amd", 20e9, 800e9, 103e12, 103e12, 64e9, 1
+    ),
+    "RadeonRX7900XTX": GPU(
+        "RadeonRX7900XTX", "Radeon RX 7900 XTX 24GB", "amd", 24e9, 960e9, 123e12, 123e12, 64e9, 1
+    ),
     "RadeonAIProR9700": GPU(
-        "RadeonAIProR9700", "Radeon AI PRO R9700 32GB", "amd", 32e9, 640e9, 96e12, 96e12, 128e9, 1
+        "RadeonAIProR9700",
+        "Radeon AI PRO R9700 32GB",
+        "amd",
+        32e9,
+        640e9,
+        191e12,
+        383e12,
+        128e9,
+        1,
     ),
     # Tenstorrent publishes BLOCKFP8, rather than IEEE FP8, peak performance.
     # BF16 is a conservative half-rate planner proxy until a native BF16 peak is published.
@@ -433,6 +462,9 @@ GPU_TDP_WATTS = {
     "HELIOS_MI455X": 1500,
     "MI400": 1500,
     "RadeonProW7900": 295,
+    "RadeonRX9070XT": 304,
+    "RadeonRX7900XT": 315,
+    "RadeonRX7900XTX": 355,
     "RadeonAIProR9700": 300,
     "TT_BLACKHOLE_P100A": 300,
     "TT_BLACKHOLE_P150": 300,
@@ -509,6 +541,9 @@ GPU_TCO_PRICE_USD: dict[str, float] = {
     "HELIOS_MI455X": 5_250_000.0 / 72.0,
     "MI400": 5_250_000.0 / 72.0,
     "RadeonProW7900": 3_999.0,
+    "RadeonRX9070XT": 599.0,  # official launch SEP; board-partner pricing varies
+    "RadeonRX7900XT": 899.0,  # official launch SEP; current used/new pricing varies
+    "RadeonRX7900XTX": 999.0,  # official launch SEP; current used/new pricing varies
     "RadeonAIProR9700": 1_299.0,
     # Specialist accelerators, Intel, and Apple.
     "TT_BLACKHOLE_P100A": 999.0,
@@ -564,6 +599,8 @@ GPU_TCO_PRICE_SOURCES = {
     "AMD MI350X reported price": "https://www.investors.com/news/technology/amd-stock-ai-chip-price-increase-nvidia/",
     "AMD MI325X pricing context": "https://deploybase.ai/articles/amd-mi325x-price",
     "AMD Radeon PRO W7900 launch pricing": "https://www.amd.com/en/products/graphics/workstations/radeon-pro/w7900.html",
+    "AMD Radeon RX 9070 XT launch SEP": "https://ir.amd.com/news-events/press-releases/detail/1238/amd-unveils-next-generation-amd-rdna-4-architecture-with-the-launch-of-amd-radeon-rx-9000-series-graphics-cards",
+    "AMD Radeon RX 7900 XT/XTX launch SEP": "https://ir.amd.com/news-events/press-releases/detail/1099/amd-unveils-worlds-most-advanced-gaming-graphics-cards-built-on-groundbreaking-amd-rdna-3-architecture-with-chiplet-design",
     "AMD Radeon AI PRO R9700 MSRP": "https://www.techpowerup.com/342203/amd-radeon-ai-pro-r9700-gpu-arrives-october-27-at-usd-1-299-for-retail",
     "Tenstorrent official card pricing": "https://tenstorrent.com/en/hardware/cards",
     "Tenstorrent Galaxy official pricing": "https://tenstorrent.com/en/hardware/galaxy",
@@ -1042,7 +1079,16 @@ GPU_CARDS: list[GPUCard] = [
         "32 GB GDDR6",
         "Affordable local AI workstation and multi-GPU inference builds",
         (GPUPlannerOption("Add", "RadeonAIProR9700"),),
-        "Uses AMD's public 32GB/640GB/s profile; BF16/FP8 planner paths use the published FP16 matrix throughput proxy.",
+        "Uses AMD's public 32GB/640GB/s profile and dense 191 TFLOPS FP16 / 383 TFLOPS FP8 matrix peaks as planner proxies; no dedicated scale-up fabric is modeled.",
+    ),
+    GPUCard(
+        "Radeon RX 9070 XT",
+        "AMD",
+        "RDNA 4",
+        "16 GB GDDR6",
+        "Current-generation consumer desktop inference and AI experimentation",
+        (GPUPlannerOption("Add", "RadeonRX9070XT"),),
+        "Single-GPU desktop profile using AMD's 16GB/640GB/s reference specification and dense 195 TFLOPS FP16 / 389 TFLOPS FP8 matrix peaks; no dedicated scale-up fabric is modeled.",
     ),
     GPUCard(
         "Radeon PRO W7900",
@@ -1052,6 +1098,24 @@ GPU_CARDS: list[GPUCard] = [
         "Large-memory workstation graphics, visualization, and local inference",
         (GPUPlannerOption("Add", "RadeonProW7900"),),
         "Uses AMD's public 48GB profile and FP16 matrix throughput as the planner proxy.",
+    ),
+    GPUCard(
+        "Radeon RX 7900 XTX",
+        "AMD",
+        "RDNA 3",
+        "24 GB GDDR6",
+        "High-end consumer desktop inference and local model development",
+        (GPUPlannerOption("Add", "RadeonRX7900XTX"),),
+        "Single-GPU desktop profile using AMD's 24GB/960GB/s reference specification. The FP8 planner path falls back to the 123 TFLOPS dense FP16 matrix peak because RDNA 3 has no native FP8 path.",
+    ),
+    GPUCard(
+        "Radeon RX 7900 XT",
+        "AMD",
+        "RDNA 3",
+        "20 GB GDDR6",
+        "Consumer desktop inference and local model development",
+        (GPUPlannerOption("Add", "RadeonRX7900XT"),),
+        "Single-GPU desktop profile using AMD's 20GB/800GB/s reference specification. The FP8 planner path falls back to the 103 TFLOPS dense FP16 matrix peak because RDNA 3 has no native FP8 path.",
     ),
     GPUCard(
         "MI440X",
