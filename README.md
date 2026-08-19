@@ -156,7 +156,7 @@ For local debugging, add `DEBUG=1` or `FLASK_DEBUG=1`.
 
 ### Corporate Cloud Policy
 
-Set `PLANNER_CLOUD_POLICY` to a JSON file when procurement exposes only part of the public cloud catalog or negotiated prices differ from catalog prices. All sections are optional; model keys must already exist in `data.py`.
+Set `PLANNER_CLOUD_POLICY` to a JSON file when procurement exposes only part of the public cloud catalog or negotiated prices differ from catalog prices. All sections are optional; model keys must already exist in the `data` package.
 
 ```json
 {
@@ -208,7 +208,7 @@ Complete scenarios can be exported and imported as versioned JSON from the calcu
 Run the full regression suite and source compilation checks before changing planner math or catalog data:
 
 ```bash
-python -m compileall -q app.py calc.py data.py state.py tracking.py
+python -m compileall -q app.py calc.py data state.py tracking.py
 python -m pytest -q
 ```
 

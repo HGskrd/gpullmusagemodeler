@@ -1,4 +1,5 @@
 import unittest
+from dataclasses import replace
 from types import SimpleNamespace
 
 from data import MODELS
@@ -40,19 +41,11 @@ def _state_with_model(model_key="q08"):
 
 class SpecStateTests(unittest.TestCase):
     def _patch_profiles(self, model_key, profiles):
-        model = MODELS[model_key]
-        had = hasattr(model, "speculative_profiles")
-        old = getattr(model, "speculative_profiles", None)
-        model.speculative_profiles = profiles
+        original = MODELS[model_key]
+        MODELS[model_key] = replace(original, speculative_profiles=profiles)
 
         def restore():
-            if had:
-                model.speculative_profiles = old
-            else:
-                try:
-                    del model.speculative_profiles
-                except AttributeError:
-                    pass
+            MODELS[model_key] = original
 
         self.addCleanup(restore)
 
