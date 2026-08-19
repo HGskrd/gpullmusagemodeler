@@ -7,6 +7,8 @@ from data import (
     GPUS,
     MODELS,
     PREVIEW_ASSUMPTIONS,
+    RADEON_GPU_SPEC_SOURCES,
+    RADEON_GPU_SPECS_CAPTURED_AT,
 )
 from planner_service import add_model, add_models, change_gpu_qty, set_model_gpu_count
 from scenarios import deserialize_planner_state
@@ -210,6 +212,9 @@ class GPUCatalogTests(unittest.TestCase):
             "RTX6000_ADA",
             "RadeonProW7900",
             "RadeonAIProR9700",
+            "RadeonRX9070XT",
+            "RadeonRX7900XT",
+            "RadeonRX7900XTX",
             "ArcProB70",
             "T4",
             "V100",
@@ -234,6 +239,35 @@ class GPUCatalogTests(unittest.TestCase):
         self.assertEqual(GPUS["RadeonAIProR9700"].bw, 640e9)
         self.assertEqual(GPUS["ArcProB70"].bw, 608e9)
         self.assertEqual(GPUS["Gaudi2"].mem, 96e9)
+
+    def test_requested_radeon_desktop_entries_match_amd_reference_specs(self):
+        expected = {
+            "RadeonRX9070XT": (16e9, 640e9, 195e12, 389e12, 128e9, 304.0),
+            "RadeonRX7900XT": (20e9, 800e9, 103e12, 103e12, 64e9, 315.0),
+            "RadeonRX7900XTX": (24e9, 960e9, 123e12, 123e12, 64e9, 355.0),
+            "RadeonAIProR9700": (32e9, 640e9, 191e12, 383e12, 128e9, 300.0),
+        }
+
+        self.assertEqual(RADEON_GPU_SPECS_CAPTURED_AT, "2026-08-19")
+        self.assertEqual(set(RADEON_GPU_SPEC_SOURCES), set(expected))
+
+        for key, specs in expected.items():
+            with self.subTest(gpu=key):
+                gpu = GPUS[key]
+                self.assertEqual(
+                    (
+                        gpu.mem,
+                        gpu.bw,
+                        gpu.bf16,
+                        gpu.fp8,
+                        gpu.scale_up_p2p_bw_bidir,
+                        gpu.tdp_watts,
+                    ),
+                    specs,
+                )
+                self.assertEqual(gpu.vendor, "amd")
+                self.assertEqual(gpu.node_size, 1)
+                self.assertTrue(RADEON_GPU_SPEC_SOURCES[key].startswith("https://www.amd.com/"))
 
     def test_blackwell_ultra_catalog_entries_and_set_constraints(self):
         picker_keys = {option.gpu_key for card in GPU_CARDS for option in card.planner_options}
