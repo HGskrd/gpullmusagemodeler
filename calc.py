@@ -46,6 +46,7 @@ from data import (
     required_quality,
     success_rate,
 )
+from deployment import Deployment
 
 # Wall-clock accelerator draw as a fraction of published board TDP during saturated
 # inference. The 0.6–0.8 anchor comes primarily from vLLM measurements on H100/MI300
@@ -2220,16 +2221,18 @@ def _is_decode_pareto_model(model: Model) -> bool:
     )
 
 
-def get_decode_bs(states: Optional[list] = None) -> list[int]:
+def get_decode_bs(
+    states: Optional[list] = None, *, deployments: Optional[list[Deployment]] = None
+) -> list[int]:
     if not states:
         return list(BATCH_SIZES)
-
-    from placement import get_deployed
+    if deployments is None or len(deployments) != len(states):
+        raise ValueError("A resolved deployment is required for each planner state.")
 
     capacities = []
-    for state in states:
+    for state, deployment in zip(states, deployments):
         eff = state.decode_efficiency
-        for am in get_deployed(state, phase="decode"):
+        for am in deployment.decode:
             if not _is_decode_pareto_model(am.model):
                 continue
             gpu = am.gpu_spec
@@ -2254,15 +2257,17 @@ def get_decode_bs(states: Optional[list] = None) -> list[int]:
     return _batch_axis_sweep(capacities, BATCH_SIZES)
 
 
-def get_realtime_bs(states: Optional[list] = None) -> list[int]:
+def get_realtime_bs(
+    states: Optional[list] = None, *, deployments: Optional[list[Deployment]] = None
+) -> list[int]:
     if not states:
         return list(REALTIME_USER_SWEEP)
-
-    from placement import get_deployed
+    if deployments is None or len(deployments) != len(states):
+        raise ValueError("A resolved deployment is required for each planner state.")
 
     capacities = []
-    for state in states:
-        for am in get_deployed(state, phase="decode"):
+    for state, deployment in zip(states, deployments):
+        for am in deployment.decode:
             if getattr(am.model, "realtime_profile", None) is None:
                 continue
             gpu = am.gpu_spec
@@ -2501,16 +2506,18 @@ def _sample_user_exp_curve(points: list[dict], target_rps: float) -> Optional[di
 
 
 def chart_decode(
-    state, batch_sizes: Optional[list[int]] = None, panel_suffix: str = ""
+    state,
+    batch_sizes: Optional[list[int]] = None,
+    panel_suffix: str = "",
+    *,
+    deployment: Deployment,
 ) -> list[dict]:
-    from placement import get_deployed
-
     datasets = []
     eff = state.decode_efficiency
     is_b = panel_suffix != ""
     batch_sizes = batch_sizes or BATCH_SIZES
 
-    for am in get_deployed(state, phase="decode"):
+    for am in deployment.decode:
         model = am.model
         if not _is_decode_pareto_model(model):
             continue
@@ -2561,14 +2568,12 @@ def chart_decode(
     return datasets
 
 
-def chart_pareto(state, panel_suffix: str = "") -> list[dict]:
-    from placement import get_deployed
-
+def chart_pareto(state, panel_suffix: str = "", *, deployment: Deployment) -> list[dict]:
     datasets = []
     eff = state.decode_efficiency
     is_b = panel_suffix != ""
 
-    for am in get_deployed(state, phase="decode"):
+    for am in deployment.decode:
         model = am.model
         if not _is_decode_pareto_model(model):
             continue
@@ -2622,16 +2627,18 @@ def chart_pareto(state, panel_suffix: str = "") -> list[dict]:
 
 
 def chart_user_pareto(
-    state, batch_sizes: Optional[list[int]] = None, panel_suffix: str = ""
+    state,
+    batch_sizes: Optional[list[int]] = None,
+    panel_suffix: str = "",
+    *,
+    deployment: Deployment,
 ) -> list[dict]:
-    from placement import get_deployed
-
     datasets = []
     eff = state.decode_efficiency
     is_b = panel_suffix != ""
     batch_sizes = batch_sizes or BATCH_SIZES
 
-    for am in get_deployed(state, phase="decode"):
+    for am in deployment.decode:
         model = am.model
         if not _is_decode_pareto_model(model):
             continue
@@ -2687,14 +2694,16 @@ def chart_user_pareto(
 
 
 def chart_aggregate(
-    state, batch_sizes: Optional[list[int]] = None, panel_suffix: str = ""
+    state,
+    batch_sizes: Optional[list[int]] = None,
+    panel_suffix: str = "",
+    *,
+    deployment: Deployment,
 ) -> list[dict]:
-    from placement import get_deployed
-
     datasets = []
     eff = state.decode_efficiency
     is_b = panel_suffix != ""
-    deployed = get_deployed(state, phase="decode")
+    deployed = deployment.decode
     batch_sizes = batch_sizes or BATCH_SIZES
 
     agg = []

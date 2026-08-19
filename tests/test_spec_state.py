@@ -3,12 +3,12 @@ from types import SimpleNamespace
 
 from data import MODELS
 from placement import get_deployed
-from scenarios import deserialize_scenario, serialize_scenario
+from planner_service import deserialize_scenario, set_model_spec
+from scenarios import serialize_scenario
 from state import (
     GpuPool,
     ModelAssignment,
     PlannerState,
-    set_model_spec,
     set_spec_acceptance,
 )
 from viewmodels import get_model_info

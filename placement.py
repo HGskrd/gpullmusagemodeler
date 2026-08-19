@@ -28,11 +28,11 @@ from data import (
     model_profile_success_rate,
     required_quality,
 )
+from deployment import Deployment, ResolvedAssignment
 from state import (
     DEFAULT_AUTO_MODEL_STRATEGY,
     GpuPool,
     ModelAssignment,
-    ModelAssignmentProxy,
     PlannerState,
     Project,
     _next_uid,
@@ -315,8 +315,13 @@ def _assignment_memories(state: PlannerState, am: ModelAssignment, gpu: GPU):
     return prefill_mem, decode_mem
 
 
-def get_deployed(state: PlannerState, phase: str = "decode") -> list[ModelAssignmentProxy]:
-    deployed = []
+def get_deployed(state: PlannerState, phase: str = "decode") -> list[ResolvedAssignment]:
+    return list(resolve_deployment(state).for_phase(phase))
+
+
+def resolve_deployment(state: PlannerState) -> Deployment:
+    prefill = []
+    decode = []
     for am in state.models:
         if am.gpu_count <= 0:
             continue
@@ -324,11 +329,11 @@ def get_deployed(state: PlannerState, phase: str = "decode") -> list[ModelAssign
         if gp is None:
             continue
         prefill_mem, decode_mem = _assignment_memories(state, am, gp.gpu)
-        mem = prefill_mem if phase == "prefill" else decode_mem
-        if mem is None:
-            continue
-        deployed.append(ModelAssignmentProxy(am, gp.gpu, phase, prefill_mem, decode_mem))
-    return deployed
+        if prefill_mem is not None:
+            prefill.append(ResolvedAssignment(am, gp.gpu, "prefill", prefill_mem, decode_mem))
+        if decode_mem is not None:
+            decode.append(ResolvedAssignment(am, gp.gpu, "decode", prefill_mem, decode_mem))
+    return Deployment(prefill=tuple(prefill), decode=tuple(decode))
 
 
 def _model_serves_project(model: Model, project: Project) -> bool:

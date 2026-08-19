@@ -48,7 +48,7 @@ from data import (
     SpeculativeProfile,
     success_rate,
 )
-from placement import get_deployed, retune_models
+from placement import get_deployed, resolve_deployment, retune_models
 from state import GpuPool, ModelAssignment, PlannerState, Project
 
 
@@ -1013,7 +1013,7 @@ class SpeculativeDecodingMathTests(unittest.TestCase):
         )
         state = PlannerState(gpus=[GpuPool(1, "H100", 1)], models=[assignment])
         retune_models(state, preserve_existing=True)
-        datasets = chart_user_pareto(state, [1, 4])
+        datasets = chart_user_pareto(state, [1, 4], deployment=resolve_deployment(state))
 
         self.assertEqual(len(datasets), 1)
         dataset = datasets[0]

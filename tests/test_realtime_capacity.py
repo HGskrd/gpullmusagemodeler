@@ -12,7 +12,7 @@ from calc import (
     get_decode_bs,
 )
 from data import ASR_WER_PLACEHOLDER, DIST_PRESETS, MODELS, PUBLISHED_ASR_WER
-from placement import retune_models
+from placement import resolve_deployment, retune_models
 from state import (
     VISIBLE_PLOT_MODES,
     GpuPool,
@@ -93,11 +93,15 @@ class RealtimeCapacityTests(unittest.TestCase):
         retune_models(text_only, preserve_existing=False)
         retune_models(mixed, preserve_existing=False)
 
-        batch_sizes = get_decode_bs([mixed])
-        datasets = chart_user_pareto(mixed, batch_sizes)
+        mixed_deployment = resolve_deployment(mixed)
+        batch_sizes = get_decode_bs([mixed], deployments=[mixed_deployment])
+        datasets = chart_user_pareto(mixed, batch_sizes, deployment=mixed_deployment)
         labels = [dataset["label"] for dataset in datasets]
 
-        self.assertEqual(batch_sizes, get_decode_bs([text_only]))
+        self.assertEqual(
+            batch_sizes,
+            get_decode_bs([text_only], deployments=[resolve_deployment(text_only)]),
+        )
         self.assertEqual(len(datasets), 1)
         self.assertTrue(any("Qwen 3.5 0.8B" in label for label in labels))
         self.assertFalse(any("Voxtral" in label for label in labels))

@@ -293,7 +293,7 @@ class EngineeringHardeningTests(unittest.TestCase):
         # the prefix-reuse panel must quote the same basis, not task_il alone.
         from calc import avg_dist, effective_prefill_length
         from data import INPUT_BUCKETS
-        from state import create_default_state
+        from planner_service import create_default_state
 
         state = create_default_state()
         basis = max(state.task_il, avg_dist(state.in_dist, INPUT_BUCKETS))

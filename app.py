@@ -83,10 +83,21 @@ from data import (
 from econ_variants import econ_bp, econ_payload
 from placement import (
     auto_select_models,
+    resolve_deployment,
     retune_models,
 )
-from scenarios import (
+from planner_service import (
+    add_model,
+    add_models,
+    change_gpu_qty,
+    create_default_scenario,
     deserialize_scenario,
+    set_model_gpu_count,
+    set_model_gpu_pool,
+    set_model_prec,
+    set_model_spec,
+)
+from scenarios import (
     replace_project_set,
     replace_use_case_defs,
     serialize_project_set,
@@ -100,16 +111,12 @@ from state import (
     PlannerState,
     _normalize_use_case_def,
     add_gpu,
-    add_model,
-    add_models,
     add_project,
     add_use_case_def,
     allow_visitor_scope,
     auto_exclude_model,
     auto_reallow_model,
-    change_gpu_qty,
     clear_compare_state,
-    create_default_scenario,
     delete_visitor_states,
     duplicate_compare_state,
     format_scale_value,
@@ -130,10 +137,6 @@ from state import (
     set_dist_preset,
     set_dist_value,
     set_gpu_cost,
-    set_model_gpu_count,
-    set_model_gpu_pool,
-    set_model_prec,
-    set_model_spec,
     set_model_strat,
     set_project_batch_eligible,
     set_project_capability,
@@ -2190,6 +2193,7 @@ def chart_data():
         sb = get_compare_state(_scope_id())
         mode = sa.mode
         states = [sa] + ([sb] if sb else [])
+        deployments = [resolve_deployment(state) for state in states]
 
         if mode == "processingpareto":
             batch_sizes = get_processing_pareto_bs(states)
@@ -2209,7 +2213,7 @@ def chart_data():
             return jsonify({"type": "scatter", "datasets": datasets, "mode": mode})
 
         if mode == "realtime":
-            batch_sizes = get_realtime_bs(states)
+            batch_sizes = get_realtime_bs(states, deployments=deployments)
             datasets = chart_realtime_capacity(sa, batch_sizes)
             if sb:
                 datasets += chart_realtime_capacity(sb, batch_sizes, " (B)")
@@ -2230,10 +2234,15 @@ def chart_data():
                 }
             )
 
-        batch_sizes = get_decode_bs(states)
-        datasets = _annotate_chart_spec(sa, chart_user_pareto(sa, batch_sizes))
+        batch_sizes = get_decode_bs(states, deployments=deployments)
+        datasets = _annotate_chart_spec(
+            sa, chart_user_pareto(sa, batch_sizes, deployment=deployments[0])
+        )
         if sb:
-            datasets += _annotate_chart_spec(sb, chart_user_pareto(sb, batch_sizes, " (B)"))
+            datasets += _annotate_chart_spec(
+                sb,
+                chart_user_pareto(sb, batch_sizes, " (B)", deployment=deployments[1]),
+            )
         return jsonify(
             {"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]}
         )

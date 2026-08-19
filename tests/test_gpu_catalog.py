@@ -8,14 +8,11 @@ from data import (
     MODELS,
     PREVIEW_ASSUMPTIONS,
 )
+from planner_service import add_model, add_models, change_gpu_qty, set_model_gpu_count
 from scenarios import deserialize_planner_state
 from state import (
     PlannerState,
     add_gpu,
-    add_model,
-    add_models,
-    change_gpu_qty,
-    set_model_gpu_count,
 )
 from viewmodels import get_model_info
 

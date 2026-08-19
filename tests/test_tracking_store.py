@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from data import PROJECT_PRESETS
-from state import create_default_state
+from planner_service import create_default_state
 from tracking import SnapshotStore
 
 

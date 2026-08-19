@@ -19,14 +19,14 @@ from data import (
     swebench_pro_to_coding_quality,
 )
 from placement import _model_serves_project
-from scenarios import deserialize_scenario, serialize_scenario
+from planner_service import create_default_state, deserialize_scenario
+from scenarios import serialize_scenario
 from state import (
     GpuPool,
     ModelAssignment,
     PlannerState,
     Project,
     _normalize_use_case_def,
-    create_default_state,
 )
 
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import json
 import math
 import os
 import re
@@ -12,7 +11,7 @@ import time
 import weakref
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import cloud_policy
 from calc import (
@@ -33,8 +32,6 @@ from data import (
     MODEL_CAPABILITIES,
     MODELS,
     OUTPUT_BUCKETS,
-    PRECISION_LABELS,
-    PRECISIONS,
     PROJECT_PRESETS,
     QUALITY_DOMAINS,
     SCALE_MODELS,
@@ -503,16 +500,23 @@ class PlannerState:
 
 
 DEFAULT_SCENARIO_PATH = Path(__file__).with_name("default_scenario.json")
+_default_scenario_factory: Optional[
+    Callable[[], tuple["PlannerState", Optional["PlannerState"]]]
+] = None
+
+
+def configure_default_scenario_factory(
+    factory: Callable[[], tuple[PlannerState, Optional[PlannerState]]],
+) -> None:
+    global _default_scenario_factory
+    _default_scenario_factory = factory
 
 
 def create_default_scenario() -> tuple[PlannerState, Optional[PlannerState]]:
-    """Return fresh validated A/B states from the bundled default scenario."""
-    # Imported lazily because scenario validation is built on the state schema.
-    from scenarios import deserialize_scenario
-
-    with DEFAULT_SCENARIO_PATH.open("r", encoding="utf-8") as handle:
-        payload = json.load(handle)
-    return deserialize_scenario(payload)
+    """Return fresh validated A/B states through the configured application service."""
+    if _default_scenario_factory is None:
+        raise RuntimeError("Default scenario service has not been configured.")
+    return _default_scenario_factory()
 
 
 def create_default_state() -> PlannerState:
@@ -1339,13 +1343,12 @@ def remove_gpu(state: PlannerState, gpu_uid: int):
     state.gpus = [g for g in state.gpus if g.uid != gpu_uid]
 
 
-def change_gpu_qty(state: PlannerState, gpu_uid: int, delta: int):
-    from placement import _retune_model
-
+def change_gpu_qty(state: PlannerState, gpu_uid: int, delta: int) -> list[ModelAssignment]:
     gp = state.find_gpu(gpu_uid)
     if gp is None:
-        return
+        return []
 
+    changed = []
     new_count = normalize_gpu_count(gp.gpu_type, gp.count + delta, allow_zero=True)
     used = state.used_gpu_for_pool(gpu_uid)
     if new_count < used:
@@ -1356,101 +1359,27 @@ def change_gpu_qty(state: PlannerState, gpu_uid: int, delta: int):
             take = min(am.gpu_count, excess)
             am.gpu_count -= take
             excess -= take
-            _retune_model(state, am)
+            changed.append(am)
 
     gp.count = new_count
     if new_count == 0:
         state.models = [m for m in state.models if m.gpu_uid != gpu_uid]
         state.gpus = [g for g in state.gpus if g.uid != gpu_uid]
+    return changed
 
 
-def add_model(state: PlannerState, model_key: str):
-    from placement import (
-        _best_precision_need,
-        _finite_gpu_need,
-        _min_gpu_count_for_pool,
-        _retune_model,
-    )
-
-    if not state.gpus:
-        raise ValueError("Add a GPU pool before adding a model.")
-    if model_key not in MODELS or MODELS[model_key].hidden:
-        raise ValueError("Invalid model key.")
-    model = MODELS[model_key]
-
-    def fit_needs(gp: GpuPool) -> tuple[dict[str, float], dict[str, float]]:
-        avail = state.free_gpu_for_pool(gp.uid)
-        needs_now = {
-            prec: _min_gpu_count_for_pool(
-                model, gp.gpu, state.mu, state.profiled_non_kv_gb, prec, avail
-            )
-            for prec in PRECISIONS
-        }
-        needs_full = {
-            prec: _min_gpu_count_for_pool(
-                model, gp.gpu, state.mu, state.profiled_non_kv_gb, prec, gp.count
-            )
-            for prec in PRECISIONS
-        }
-        return needs_now, needs_full
-
-    def sort_key(gp: GpuPool) -> tuple[bool, float, bool, float, bool, float, int, int]:
-        avail = state.free_gpu_for_pool(gp.uid)
-        needs_now, needs_full = fit_needs(gp)
-        best_now = _finite_gpu_need(*needs_now.values())
-        best_full = _finite_gpu_need(*needs_full.values())
-        bf16_now = needs_now["bf16"]
-        return (
-            math.isinf(bf16_now),
-            bf16_now,
-            math.isinf(best_now),
-            best_now,
-            math.isinf(best_full),
-            best_full,
-            -avail,
-            -gp.count,
-        )
-
-    gp = min(state.gpus, key=sort_key)
-    avail = state.free_gpu_for_pool(gp.uid)
-    needs_now, needs_full = fit_needs(gp)
-    best_full = _finite_gpu_need(*needs_full.values())
-    if math.isinf(best_full):
-        labels = ", ".join(PRECISION_LABELS[p] for p in PRECISIONS)
-        raise ValueError(
-            f"{model.name} does not fit on any configured GPU pool under the current memory cap in {labels}."
-        )
-
-    bf16_now = needs_now["bf16"]
-    if not math.isinf(bf16_now):
-        selected_prec = "bf16"
-        gpu_count = int(bf16_now)
-    else:
-        selected_prec, best_now = _best_precision_need(needs_now)
-        if selected_prec is not None and not math.isinf(best_now):
-            gpu_count = int(best_now)
-        else:
-            selected_prec, _ = _best_precision_need(needs_full)
-            selected_prec = selected_prec or "bf16"
-            gpu_count = avail
-
-    am = ModelAssignment(_next_uid(), model_key, gp.uid, gpu_count, 1, 1, selected_prec)
+def add_model_assignment(
+    state: PlannerState,
+    model_key: str,
+    gpu_uid: int,
+    gpu_count: int,
+    prec: str,
+) -> ModelAssignment:
+    am = ModelAssignment(_next_uid(), model_key, gpu_uid, gpu_count, 1, 1, prec)
     state.models.append(am)
-    _retune_model(state, am)
     state.auto_mode = False
     state.auto_excluded = []
-
-
-def add_models(state: PlannerState, model_keys: list[str]) -> list[str]:
-    existing = {am.model_key for am in state.models}
-    added: list[str] = []
-    for model_key in model_keys:
-        if model_key in existing:
-            continue
-        add_model(state, model_key)
-        existing.add(model_key)
-        added.append(model_key)
-    return added
+    return am
 
 
 def auto_exclude_model(state: PlannerState, model_uid: int):
@@ -1475,18 +1404,14 @@ def remove_model(state: PlannerState, model_uid: int):
 
 
 def set_model_prec(state: PlannerState, model_uid: int, prec: str):
-    from placement import _retune_model
-
     am = state.find_model(model_uid)
     if am is None:
         return
     am.prec = normalize_precision(prec)
-    _retune_model(state, am, preserve_existing=True)
+    return am
 
 
 def set_model_spec(state: PlannerState, model_uid: int, method: str, spec_k: int):
-    from placement import _retune_model
-
     am = state.find_model(model_uid)
     if am is None:
         return
@@ -1544,12 +1469,10 @@ def set_model_spec(state: PlannerState, model_uid: int, method: str, spec_k: int
             # disappear. Keep the known-good target-only assignment instead.
             am.spec_method = "off"
             am.spec_k = 0
-    _retune_model(state, am, preserve_existing=True)
+    return am
 
 
 def set_model_gpu_count(state: PlannerState, model_uid: int, count: int):
-    from placement import _retune_model
-
     am = state.find_model(model_uid)
     if am is None:
         return
@@ -1562,7 +1485,7 @@ def set_model_gpu_count(state: PlannerState, model_uid: int, count: int):
     )
     max_avail = max(0, gp.count - others_used)
     am.gpu_count = min(count, max_avail)
-    _retune_model(state, am)
+    return am
 
 
 def set_model_strat(
@@ -1617,8 +1540,6 @@ def set_model_strat(
 
 
 def set_model_gpu_pool(state: PlannerState, model_uid: int, gpu_uid: int):
-    from placement import _retune_model
-
     am = state.find_model(model_uid)
     if am is None:
         return
@@ -1627,7 +1548,7 @@ def set_model_gpu_pool(state: PlannerState, model_uid: int, gpu_uid: int):
     gp = state.find_gpu(gpu_uid)
     max_avail = gp.count - others_used if gp else 0
     am.gpu_count = min(am.gpu_count, max_avail)
-    _retune_model(state, am)
+    return am
 
 
 def set_dist_preset(state: PlannerState, kind: str, preset_key: str):

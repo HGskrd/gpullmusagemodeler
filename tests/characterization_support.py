@@ -21,8 +21,8 @@ from calc import (
     chart_user_pareto,
     compute_revenue_projection,
 )
-from placement import retune_models
-from scenarios import deserialize_scenario
+from placement import resolve_deployment, retune_models
+from planner_service import deserialize_scenario
 from state import GpuPool, ModelAssignment, PlannerState, Project
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -168,12 +168,13 @@ def projection_outputs() -> dict[str, dict]:
 
 def chart_outputs() -> dict[str, list[dict]]:
     state = chart_state()
+    deployment = resolve_deployment(state)
     batch_sizes = [1, 4, 16]
     return {
-        "chart_decode": chart_decode(state, batch_sizes),
-        "chart_pareto": chart_pareto(state),
-        "chart_user_pareto": chart_user_pareto(state, batch_sizes),
-        "chart_aggregate": chart_aggregate(state, batch_sizes),
+        "chart_decode": chart_decode(state, batch_sizes, deployment=deployment),
+        "chart_pareto": chart_pareto(state, deployment=deployment),
+        "chart_user_pareto": chart_user_pareto(state, batch_sizes, deployment=deployment),
+        "chart_aggregate": chart_aggregate(state, batch_sizes, deployment=deployment),
         "chart_data_processing": chart_data_processing(state, batch_sizes),
         "chart_embedding_throughput": chart_embedding_throughput(state, batch_sizes),
         "chart_embedding_quality": chart_embedding_quality(state),

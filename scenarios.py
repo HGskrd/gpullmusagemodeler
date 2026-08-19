@@ -21,7 +21,6 @@ from data import (
     normalize_quality_domain,
     normalize_quality_weights,
 )
-from placement import retune_models
 from state import (
     ALLOWED_CAPABILITIES,
     DEFAULT_SCALE_KIND,
@@ -510,7 +509,6 @@ def deserialize_planner_state(payload: Any) -> PlannerState:
     # Ignore the legacy user-controlled panel rate and derive the portfolio
     # value from the imported use-case priors.
     _sync_aggregate_distribution(state)
-    retune_models(state, preserve_existing=True)
     return state
 
 
