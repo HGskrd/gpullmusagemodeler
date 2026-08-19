@@ -310,13 +310,13 @@
   {% if total_snapshots > 0 %}
   <nav class="pagination" aria-label="Snapshot pages">
     {% if page > 1 %}
-    <a href="{{ url_for('admin', page=page - 1, per_page=page_size) }}" rel="prev">← Previous</a>
+    <a href="{{ url_for('admin.admin', page=page - 1, per_page=page_size) }}" rel="prev">← Previous</a>
     {% else %}
     <span class="disabled" aria-hidden="true">← Previous</span>
     {% endif %}
     <span>Page {{ page }} of {{ [total_pages, 1]|max }}</span>
     {% if page * page_size < total_snapshots %}
-    <a href="{{ url_for('admin', page=page + 1, per_page=page_size) }}" rel="next">Next →</a>
+    <a href="{{ url_for('admin.admin', page=page + 1, per_page=page_size) }}" rel="next">Next →</a>
     {% else %}
     <span class="disabled" aria-hidden="true">Next →</span>
     {% endif %}

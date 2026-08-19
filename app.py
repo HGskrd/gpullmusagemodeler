@@ -1,20 +1,16 @@
 """Flask application for the GPU/LLM Usage Modeler."""
 
-import gzip
 import hmac
 import json
 import math
 import os
-import re
 import secrets
-import threading
-import time
-import uuid
-from collections import defaultdict, deque
+from collections import defaultdict
 from pathlib import Path
 
 from flask import (
     Flask,
+    current_app,
     g,
     jsonify,
     make_response,
@@ -24,8 +20,8 @@ from flask import (
     session,
     url_for,
 )
+from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
-from werkzeug.security import safe_join
 
 import cloud_policy
 from calc import (
@@ -71,7 +67,6 @@ from data import (
     quality_to_aa_intelligence,
     quality_weights_label,
     required_quality,
-    success_rate,
 )
 from econ_variants import econ_bp, econ_payload
 from engine.economics import compute_revenue_projection
@@ -115,7 +110,6 @@ from state import (
     add_gpu,
     add_project,
     add_use_case_def,
-    allow_visitor_scope,
     auto_exclude_model,
     auto_reallow_model,
     clear_compare_state,
@@ -163,6 +157,18 @@ from viewmodels import (
     get_model_info,
     get_model_infos,
 )
+from web.admin import admin_bp
+from web.api import api_bp
+from web.middleware import (
+    VISITOR_COOKIE,
+    _scope_id,
+    _tab_id,
+    _visitor_id,
+    register_middleware,
+)
+from web.planner import planner_bp
+from web.scenarios import scenarios_bp
+from web.use_cases import use_cases_bp
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -221,35 +227,8 @@ def _enforce_single_worker() -> None:
         )
 
 
-_enforce_single_worker()
-
-app = Flask(__name__)
-app.register_blueprint(econ_bp)
-# Only trust X-Forwarded-* when PLANNER_BEHIND_PROXY=true, i.e. when a reverse
-# proxy sets/overwrites those headers. Otherwise clients could spoof their IP
-# to evade the per-IP rate limits.
-if _env_bool("PLANNER_BEHIND_PROXY", False):
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 _configured_secret = os.environ.get("PLANNER_SECRET_KEY", "").strip()
-app.secret_key = _configured_secret or secrets.token_urlsafe(48)
-if not _configured_secret:
-    # A per-process key silently invalidates every session on restart, which
-    # mostly shows up as admin logins that will not stick. Say so at boot.
-    app.logger.warning(
-        "PLANNER_SECRET_KEY is unset; generated an ephemeral key for this process. "
-        "Sessions and admin logins will not survive a restart. Set it before deploying."
-    )
-# SameSite=Lax reduces cross-site request risk. Deploy this app on a dedicated
-# site/origin; sibling subdomains remain same-site and are outside that defense.
-app.config.update(
-    SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_SECURE=_env_bool("PLANNER_SECURE_COOKIES", False),
-    MAX_CONTENT_LENGTH=_env_positive_int("PLANNER_MAX_REQUEST_BYTES", 2 * 1024 * 1024),
-)
 
-VISITOR_COOKIE = "planner_vid"
-TAB_PARAM = "tab_id"
 ADMIN_SESSION_KEY = "planner_admin_ok"
 SNAPSHOT_STORE = SnapshotStore(BASE_DIR / "instance" / "planner_snapshots.json")
 TRACKING_ENABLED = _env_bool("PLANNER_TRACKING_ENABLED", True)
@@ -258,13 +237,7 @@ MAX_TABS_PER_VISITOR = _env_positive_int("PLANNER_MAX_TABS_PER_VISITOR", 64)
 ADMIN_PAGE_SIZE = min(_env_positive_int("PLANNER_ADMIN_PAGE_SIZE", 100), 500)
 REQUEST_RATE_LIMIT = _env_positive_int("PLANNER_RATE_LIMIT_PER_MINUTE", 600)
 ADMIN_LOGIN_RATE_LIMIT = _env_positive_int("PLANNER_ADMIN_LOGIN_ATTEMPTS_PER_MINUTE", 10)
-_TAB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
-RATE_WINDOW_SECONDS = 60.0
-RATE_SWEEP_INTERVAL_SECONDS = 60.0
 RATE_LIMIT_MAX_IDENTITIES = _env_positive_int("PLANNER_RATE_LIMIT_MAX_IDENTITIES", 20000)
-_rate_lock = threading.Lock()
-_rate_windows: dict[tuple[str, str], deque[float]] = {}
-_rate_last_sweep = 0.0
 EFFICIENCY_SETTING_BOUNDS = {
     "prefill_bw_eff": (0.50, 1.00),
     "prefill_comp_eff": (0.50, 1.00),
@@ -522,295 +495,17 @@ def use_case_detail_for(definition: dict) -> dict:
     return USE_CASE_DETAILS.get(key, {})
 
 
-def _new_id() -> str:
-    return str(uuid.uuid4())
-
-
-def _visitor_id() -> str:
-    visitor_id = getattr(g, "visitor_id", None)
-    if visitor_id:
-        return visitor_id
-
-    visitor_id = request.cookies.get(VISITOR_COOKIE, "")
-    try:
-        valid = str(uuid.UUID(visitor_id)) == visitor_id.lower()
-    except (ValueError, AttributeError):
-        valid = False
-    if not valid:
-        visitor_id = _new_id()
-    g.visitor_id = visitor_id
-    return visitor_id
-
-
-def _tab_id(optional: bool = False) -> str | None:
-    tab_id = request.headers.get("X-Tab-ID") or request.form.get(TAB_PARAM)
-    if tab_id and _TAB_ID_RE.fullmatch(tab_id):
-        return tab_id
-    return None if optional else "default"
-
-
-def _scope_id() -> str:
-    cached = getattr(g, "planner_scope_id", None)
-    if cached:
-        return cached
-    scope_id = f"{_visitor_id()}:{_tab_id()}"
-    g.planner_scope_id = scope_id
-    return scope_id
-
-
-def _sweep_rate_windows(now: float) -> None:
-    """Drop windows with nothing left inside them. Caller must hold _rate_lock.
-
-    Without this the map keeps one deque per source address forever, which is
-    unbounded growth on a public deployment. Every other per-visitor structure
-    here is capped (PLANNER_STATE_MAX_SCOPES, PLANNER_MAX_TABS_PER_VISITOR,
-    snapshot retention), so this one is capped too.
-    """
-    global _rate_last_sweep
-    _rate_last_sweep = now
-    stale = [
-        key
-        for key, window in _rate_windows.items()
-        if not window or now - window[-1] >= RATE_WINDOW_SECONDS
-    ]
-    for key in stale:
-        del _rate_windows[key]
-
-    excess = len(_rate_windows) - RATE_LIMIT_MAX_IDENTITIES
-    if excess > 0:
-        # Still over the cap after expiry: evict the least recently active.
-        # This hands back rate budget to whoever is evicted, which is the right
-        # trade against unbounded memory when under a spoofed-source flood.
-        oldest = sorted(_rate_windows, key=lambda key: _rate_windows[key][-1])[:excess]
-        for key in oldest:
-            del _rate_windows[key]
-
-
-def _rate_limit(bucket: str, limit: int) -> bool:
-    identity = request.remote_addr or "unknown"
-    now = time.monotonic()
-    key = (bucket, identity)
-    with _rate_lock:
-        if now - _rate_last_sweep >= RATE_SWEEP_INTERVAL_SECONDS:
-            _sweep_rate_windows(now)
-        window = _rate_windows.get(key)
-        if window is None:
-            window = _rate_windows[key] = deque()
-        while window and now - window[0] >= RATE_WINDOW_SECONDS:
-            window.popleft()
-        if len(window) >= limit:
-            return False
-        window.append(now)
-        return True
-
-
-_UNSCOPED_ENDPOINTS = {
-    "static",
-    "explainer",
-    "admin",
-    "admin_login",
-    "admin_logout",
-    "healthz",
-    "session_data_delete",
-}
-
-
-@app.before_request
-def _protect_and_lock_request_scope():
-    if request.endpoint == "admin_login" and not _rate_limit("admin-login", ADMIN_LOGIN_RATE_LIMIT):
-        return jsonify({"error": "Too many login attempts. Try again later."}), 429
-    if request.method not in {"GET", "HEAD", "OPTIONS"} and not _rate_limit(
-        "mutation", REQUEST_RATE_LIMIT
-    ):
-        return jsonify({"error": "Too many updates. Try again shortly."}), 429
-    if request.endpoint and request.endpoint not in _UNSCOPED_ENDPOINTS:
-        visitor_id = _visitor_id()
-        visitor_lock = get_scope_lock(f"visitor:{visitor_id}")
-        visitor_lock.acquire()
-        scope_id = _scope_id()
-        if not allow_visitor_scope(scope_id, visitor_id, MAX_TABS_PER_VISITOR):
-            visitor_lock.release()
-            return jsonify({"error": "Too many active tabs for this planner session."}), 429
-        scope_lock = get_scope_lock(scope_id)
-        scope_lock.acquire()
-        g.planner_scope_locks = (scope_lock, visitor_lock)
-    return None
-
-
-@app.teardown_request
-def _release_request_scope_lock(_error=None):
-    for lock in getattr(g, "planner_scope_locks", ()):
-        lock.release()
-
-
-@app.after_request
-def _set_identity_cookie(response):
-    if getattr(g, "suppress_identity_cookie", False):
-        return response
-    visitor_id = getattr(g, "visitor_id", None)
-    if visitor_id and request.cookies.get(VISITOR_COOKIE) != visitor_id:
-        response.set_cookie(
-            VISITOR_COOKIE,
-            visitor_id,
-            max_age=60 * 60 * 24 * 365,
-            httponly=True,
-            samesite="Lax",
-            secure=app.config["SESSION_COOKIE_SECURE"] or request.is_secure,
-        )
-    return response
-
-
 # No template references an external origin, so 'self' is enough for every
 # fetchable type. 'unsafe-inline' stays for scripts (one inline block in
 # base.html) and styles (~250 inline style attributes across the templates);
 # the rest of the policy still blocks external script origins, plugin content,
 # framing, <base> hijacking, and cross-origin form posts.
-CONTENT_SECURITY_POLICY = "; ".join(
-    (
-        "default-src 'self'",
-        "script-src 'self' 'unsafe-inline'",
-        "style-src 'self' 'unsafe-inline'",
-        "img-src 'self' data:",
-        "font-src 'self'",
-        "connect-src 'self'",
-        "form-action 'self'",
-        "base-uri 'self'",
-        "frame-ancestors 'none'",
-        "object-src 'none'",
-    )
-)
-
-
-@app.after_request
-def _set_security_headers(response):
-    response.headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
-    response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    response.headers.setdefault("Referrer-Policy", "same-origin")
-    response.headers.setdefault("X-Frame-Options", "DENY")
-    return response
-
-
-@app.after_request
-def _compress_large_text_responses(response):
-    """Compress large HTMX/JSON responses when the client supports gzip."""
-    if (
-        request.method == "HEAD"
-        or response.status_code < 200
-        or response.status_code >= 300
-        or response.direct_passthrough
-        or response.headers.get("Content-Encoding")
-        or "no-transform" in response.headers.get("Cache-Control", "")
-    ):
-        return response
-
-    content_type = response.mimetype or ""
-    compressible = content_type.startswith("text/") or content_type in {
-        "application/json",
-        "application/javascript",
-        "image/svg+xml",
-    }
-    if not compressible:
-        return response
-
-    response.vary.add("Accept-Encoding")
-    if request.accept_encodings["gzip"] <= 0:
-        return response
-
-    body = response.get_data()
-    if len(body) < 1024:
-        return response
-
-    response.set_data(gzip.compress(body, compresslevel=4))
-    response.headers["Content-Encoding"] = "gzip"
-    return response
 
 
 # The after_request compressor deliberately skips direct_passthrough responses,
 # which is every file served by Flask's static handler — so the vendor bundles
 # (~1.1 MB of JS/CSS) went out uncompressed. Compress those once and keep the
 # result keyed by (mtime, size) so a redeploy or edit invalidates it.
-_STATIC_COMPRESSIBLE_SUFFIXES = {".css", ".js", ".json", ".map", ".svg", ".txt"}
-_GZIP_ETAG_MARKER = '-gzip"'
-_STATIC_GZIP_MIN_BYTES = 1024
-_static_gzip_cache: dict[str, tuple[float, int, bytes]] = {}
-_static_gzip_lock = threading.Lock()
-
-
-def _static_gzip_payload(path: Path) -> bytes | None:
-    """Return the gzip bytes for a static file, compressing at most once per version."""
-    try:
-        stat = path.stat()
-    except OSError:
-        return None
-    if stat.st_size < _STATIC_GZIP_MIN_BYTES:
-        return None
-
-    key = str(path)
-    cached = _static_gzip_cache.get(key)
-    if cached is not None and cached[0] == stat.st_mtime and cached[1] == stat.st_size:
-        return cached[2]
-
-    try:
-        raw = path.read_bytes()
-    except OSError:
-        return None
-    # Static assets are compressed once and served many times, so pay for level 9
-    # here rather than the level 4 used on per-request dynamic responses.
-    payload = gzip.compress(raw, compresslevel=9)
-    if len(payload) >= len(raw):
-        return None
-    with _static_gzip_lock:
-        _static_gzip_cache[key] = (stat.st_mtime, stat.st_size, payload)
-    return payload
-
-
-def _mark_gzip_etag(response) -> None:
-    """Make the ETag encoding-specific so caches keep the variants apart."""
-    etag = response.headers.get("ETag")
-    if etag and etag.endswith('"') and not etag.endswith(_GZIP_ETAG_MARKER):
-        response.headers["ETag"] = f'{etag[:-1]}-gzip"'
-
-
-def _serve_static(filename: str):
-    # A client revalidating the compressed variant sends back the "-gzip" ETag we
-    # issued. send_static_file compares If-None-Match against the file's own ETag,
-    # so strip the marker first or every revalidation misses and refetches.
-    if_none_match = request.environ.get("HTTP_IF_NONE_MATCH")
-    if if_none_match and _GZIP_ETAG_MARKER in if_none_match:
-        request.environ["HTTP_IF_NONE_MATCH"] = if_none_match.replace(_GZIP_ETAG_MARKER, '"')
-
-    response = app.send_static_file(filename)
-    if (
-        request.method == "HEAD"
-        or Path(filename).suffix.lower() not in _STATIC_COMPRESSIBLE_SUFFIXES
-    ):
-        return response
-
-    response.vary.add("Accept-Encoding")
-    if request.accept_encodings["gzip"] <= 0:
-        return response
-
-    if response.status_code == 304:
-        _mark_gzip_etag(response)
-        return response
-    if response.status_code != 200:
-        return response
-
-    full_path = safe_join(app.static_folder or "", filename)
-    payload = _static_gzip_payload(Path(full_path)) if full_path else None
-    if payload is None:
-        return response
-
-    # send_static_file hands back a file wrapper, so drop passthrough before
-    # replacing the body.
-    response.direct_passthrough = False
-    response.set_data(payload)
-    response.headers["Content-Encoding"] = "gzip"
-    _mark_gzip_etag(response)
-    return response
-
-
-app.view_functions["static"] = _serve_static
 
 
 def _admin_password() -> str | None:
@@ -820,7 +515,7 @@ def _admin_password() -> str | None:
 def _admin_configuration_error() -> str | None:
     if not _admin_password():
         return "Set PLANNER_ADMIN_PASSWORD to enable /admin."
-    if not _configured_secret:
+    if not current_app.config.get("PLANNER_SECRET_CONFIGURED", False):
         return "Set PLANNER_SECRET_KEY to enable /admin securely."
     return None
 
@@ -878,14 +573,10 @@ def _template_context() -> dict:
         "dist_percentile": dist_percentile,
         "get_model_info": get_model_info,
         "get_model_infos": get_model_infos,
-        "compute_revenue_projection": compute_revenue_projection,
-        "econ_payload": econ_payload,
-        "valid_strategies": valid_strategies,
         "effective_prefill_length": effective_prefill_length,
         "strategy_label": strategy_label,
         "required_quality": required_quality,
         "effective_quality": effective_quality,
-        "success_rate": success_rate,
         "quality_to_aa_intelligence": quality_to_aa_intelligence,
         "project_scale_config": project_scale_config,
         "format_scale_value": format_scale_value,
@@ -894,12 +585,20 @@ def _template_context() -> dict:
     }
 
 
+def _planner_view_context(state_a: PlannerState, state_b: PlannerState | None) -> dict:
+    """Build controller-owned view models before rendering planner templates."""
+    return _template_context() | {
+        "ECON_A": econ_payload(state_a),
+        "ECON_B": econ_payload(state_b) if state_b is not None else None,
+    }
+
+
 def _record_snapshot(
     reason: str, state_a: PlannerState, state_b: PlannerState | None, path: str | None = None
 ):
-    if not TRACKING_ENABLED:
+    if not current_app.config["TRACKING_ENABLED"]:
         return
-    SNAPSHOT_STORE.record_snapshot(
+    current_app.extensions["snapshot_store"].record_snapshot(
         visitor_id=_visitor_id(),
         tab_id=_tab_id() or "default",
         reason=reason,
@@ -915,7 +614,7 @@ def _htmx_response(state_a=None):
     sa = get_state(_scope_id())
     sb = get_compare_state(_scope_id())
     resp = make_response(
-        render_template("partials/htmx_response.html", A=sa, B=sb, **_template_context())
+        render_template("partials/htmx_response.html", A=sa, B=sb, **_planner_view_context(sa, sb))
     )
     resp.headers["HX-Trigger"] = "refreshChart"
     return resp
@@ -928,7 +627,7 @@ def _tracked_htmx_response(reason: str, state_a: PlannerState | None = None):
     sb = get_compare_state(_scope_id())
     _record_snapshot(reason, sa, sb)
     resp = make_response(
-        render_template("partials/htmx_response.html", A=sa, B=sb, **_template_context())
+        render_template("partials/htmx_response.html", A=sa, B=sb, **_planner_view_context(sa, sb))
     )
     resp.headers["HX-Trigger"] = "refreshChart"
     return resp
@@ -1190,25 +889,27 @@ def _format_projection_report(state_a: PlannerState, state_b: PlannerState | Non
     return "\n".join(parts).strip() + "\n"
 
 
-@app.route("/")
+@planner_bp.route("/")
 def index():
     tab_id = _tab_id(optional=True)
     if tab_id is None:
         default_a, default_b = create_default_scenario()
-        return render_template("index.html", A=default_a, B=default_b, **_template_context())
+        return render_template(
+            "index.html", A=default_a, B=default_b, **_planner_view_context(default_a, default_b)
+        )
 
     sa = get_state(_scope_id())
     sb = get_compare_state(_scope_id())
     _record_snapshot("open", sa, sb)
-    return render_template("index.html", A=sa, B=sb, **_template_context())
+    return render_template("index.html", A=sa, B=sb, **_planner_view_context(sa, sb))
 
 
-@app.route("/explainer")
+@planner_bp.route("/explainer")
 def explainer():
     return render_template("explainer.html")
 
 
-@app.route("/use-cases")
+@use_cases_bp.route("/use-cases")
 def use_cases():
     s = get_state(_scope_id())
     return render_template(
@@ -1233,147 +934,113 @@ def _use_case_library_response(reason: str | None = None):
     )
 
 
-@app.route("/use-cases/library")
+@use_cases_bp.route("/use-cases/library")
 def use_cases_library():
     return _use_case_library_response()
 
 
-@app.route("/use-cases/definition/add", methods=["POST"])
+@use_cases_bp.route("/use-cases/definition/add", methods=["POST"])
 def use_case_definition_add():
-    try:
-        s = get_state(_scope_id())
-        add_use_case_def(s)
-        return _use_case_library_response("use_case_def_add")
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
+    s = get_state(_scope_id())
+    add_use_case_def(s)
+    return _use_case_library_response("use_case_def_add")
 
 
-@app.route("/use-cases/definition/remove", methods=["POST"])
+@use_cases_bp.route("/use-cases/definition/remove", methods=["POST"])
 def use_case_definition_remove():
-    try:
-        s = get_state(_scope_id())
-        remove_use_case_def(s, request.form.get("key", ""))
-        return _use_case_library_response("use_case_def_remove")
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
+    s = get_state(_scope_id())
+    remove_use_case_def(s, request.form.get("key", ""))
+    return _use_case_library_response("use_case_def_remove")
 
 
-@app.route("/use-cases/definition/set", methods=["POST"])
+@use_cases_bp.route("/use-cases/definition/set", methods=["POST"])
 def use_case_definition_set():
-    try:
-        s = get_state(_scope_id())
-        key = request.form.get("key", "")
-        field_name = request.form.get("field", "")
-        raw_value = request.form.get("value", "")
-        if field_name == "capability":
-            set_use_case_def_capability(
-                s, key, request.form.get("cap", ""), raw_value in ("on", "true", "1")
-            )
-        elif field_name == "batch_eligible":
-            set_use_case_def_field(s, key, "batch_eligible", raw_value in ("on", "true", "1"))
-        elif field_name == "tokens_day_m":
-            set_use_case_def_field(s, key, "tokens_day", float(raw_value or 0.0) * 1e6)
-        elif field_name == "latent_jobs_day_m":
-            set_use_case_def_field(s, key, "latent_jobs_day", float(raw_value or 0.0) * 1e6)
-        elif field_name == "wtp_per_m_cents":
-            set_use_case_def_field(s, key, "wtp_per_m", float(raw_value or 0.0) / 100.0)
-        elif field_name == "unlock_price_per_m_cents":
-            set_use_case_def_field(s, key, "unlock_price_per_m", float(raw_value or 0.0) / 100.0)
-        elif field_name == "min_success_rate_pct":
-            set_use_case_def_field(s, key, "min_success_rate", float(raw_value or 0.0) / 100.0)
-        elif field_name == "quality_floor_pct":
-            set_use_case_def_field(s, key, "quality_floor", float(raw_value or 0.0) / 100.0)
-        elif field_name.startswith("quality_weight_") and field_name.endswith("_pct"):
-            domain = field_name.removeprefix("quality_weight_").removesuffix("_pct")
-            set_use_case_def_field(
-                s, key, f"quality_weight_{domain}", float(raw_value or 0.0) / 100.0
-            )
-        elif field_name == "difficulty_aa_index":
-            set_use_case_def_field(
-                s, key, "difficulty", aa_intelligence_to_quality(float(raw_value or 0.0))
-            )
-        elif field_name == "difficulty_elo":  # Legacy form payloads from pre-AA-index UI.
-            set_use_case_def_field(
-                s, key, "difficulty", max(0.0, min(1.0, float(raw_value or 0.0) / 3000.0))
-            )
-        elif field_name == "scale_value":
-            set_use_case_def_field(s, key, "scale_value", float(raw_value or 0.0))
-        elif field_name == "scale_token_multiplier":
-            set_use_case_def_field(s, key, "scale_token_multiplier", float(raw_value or 0.0))
-        elif field_name in {"scale_max", "scale_step"}:
-            set_use_case_def_field(s, key, field_name, float(raw_value or 0.0))
-        elif field_name in {
-            "name",
-            "scale_hint",
-            "scale_model",
-            "scale_label",
-            "scale_unit",
-            "scale_formula",
-            "quality_domain",
-            "in_pre",
-            "out_pre",
-        }:
-            set_use_case_def_field(s, key, field_name, raw_value)
-        elif field_name in {
-            "tokens_day",
-            "wtp_per_m",
-            "difficulty",
-            "min_success_rate",
-            "quality_floor",
-            "latent_jobs_day",
-            "unlock_price_per_m",
-        }:
-            set_use_case_def_field(s, key, field_name, float(raw_value or 0.0))
-        return _use_case_library_response("use_case_def_set")
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
+    s = get_state(_scope_id())
+    key = request.form.get("key", "")
+    field_name = request.form.get("field", "")
+    raw_value = request.form.get("value", "")
+    if field_name == "capability":
+        set_use_case_def_capability(
+            s, key, request.form.get("cap", ""), raw_value in ("on", "true", "1")
+        )
+    elif field_name == "batch_eligible":
+        set_use_case_def_field(s, key, "batch_eligible", raw_value in ("on", "true", "1"))
+    elif field_name == "tokens_day_m":
+        set_use_case_def_field(s, key, "tokens_day", float(raw_value or 0.0) * 1e6)
+    elif field_name == "latent_jobs_day_m":
+        set_use_case_def_field(s, key, "latent_jobs_day", float(raw_value or 0.0) * 1e6)
+    elif field_name == "wtp_per_m_cents":
+        set_use_case_def_field(s, key, "wtp_per_m", float(raw_value or 0.0) / 100.0)
+    elif field_name == "unlock_price_per_m_cents":
+        set_use_case_def_field(s, key, "unlock_price_per_m", float(raw_value or 0.0) / 100.0)
+    elif field_name == "min_success_rate_pct":
+        set_use_case_def_field(s, key, "min_success_rate", float(raw_value or 0.0) / 100.0)
+    elif field_name == "quality_floor_pct":
+        set_use_case_def_field(s, key, "quality_floor", float(raw_value or 0.0) / 100.0)
+    elif field_name.startswith("quality_weight_") and field_name.endswith("_pct"):
+        domain = field_name.removeprefix("quality_weight_").removesuffix("_pct")
+        set_use_case_def_field(s, key, f"quality_weight_{domain}", float(raw_value or 0.0) / 100.0)
+    elif field_name == "difficulty_aa_index":
+        set_use_case_def_field(
+            s, key, "difficulty", aa_intelligence_to_quality(float(raw_value or 0.0))
+        )
+    elif field_name == "difficulty_elo":  # Legacy form payloads from pre-AA-index UI.
+        set_use_case_def_field(
+            s, key, "difficulty", max(0.0, min(1.0, float(raw_value or 0.0) / 3000.0))
+        )
+    elif field_name == "scale_value":
+        set_use_case_def_field(s, key, "scale_value", float(raw_value or 0.0))
+    elif field_name == "scale_token_multiplier":
+        set_use_case_def_field(s, key, "scale_token_multiplier", float(raw_value or 0.0))
+    elif field_name in {"scale_max", "scale_step"}:
+        set_use_case_def_field(s, key, field_name, float(raw_value or 0.0))
+    elif field_name in {
+        "name",
+        "scale_hint",
+        "scale_model",
+        "scale_label",
+        "scale_unit",
+        "scale_formula",
+        "quality_domain",
+        "in_pre",
+        "out_pre",
+    }:
+        set_use_case_def_field(s, key, field_name, raw_value)
+    elif field_name in {
+        "tokens_day",
+        "wtp_per_m",
+        "difficulty",
+        "min_success_rate",
+        "quality_floor",
+        "latent_jobs_day",
+        "unlock_price_per_m",
+    }:
+        set_use_case_def_field(s, key, field_name, float(raw_value or 0.0))
+    return _use_case_library_response("use_case_def_set")
 
 
-@app.route("/use-cases/export")
+@use_cases_bp.route("/use-cases/export")
 def use_case_definition_export():
-    try:
-        s = get_state(_scope_id())
-        body = json.dumps(serialize_use_case_defs(s), indent=2, sort_keys=True) + "\n"
-        resp = make_response(body)
-        resp.headers["Content-Type"] = "application/json; charset=utf-8"
-        resp.headers["Content-Disposition"] = 'attachment; filename="use-case-library.json"'
-        return resp
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
+    s = get_state(_scope_id())
+    body = json.dumps(serialize_use_case_defs(s), indent=2, sort_keys=True) + "\n"
+    resp = make_response(body)
+    resp.headers["Content-Type"] = "application/json; charset=utf-8"
+    resp.headers["Content-Disposition"] = 'attachment; filename="use-case-library.json"'
+    return resp
 
 
-@app.route("/use-cases/import", methods=["POST"])
+@use_cases_bp.route("/use-cases/import", methods=["POST"])
 def use_case_definition_import():
-    try:
-        s = get_state(_scope_id())
-        raw = request.form.get("json", "")
-        if not raw.strip():
-            return jsonify({"error": "Choose a use-case JSON file first."}), 400
-        replace_use_case_defs(s, _load_import_json(raw))
-        retune_models(s, preserve_existing=False)
-        return _use_case_library_response("use_case_def_import")
-    except json.JSONDecodeError as e:
-        return jsonify({"error": f"Invalid JSON: {e.msg}"}), 400
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
+    s = get_state(_scope_id())
+    raw = request.form.get("json", "")
+    if not raw.strip():
+        return jsonify({"error": "Choose a use-case JSON file first."}), 400
+    replace_use_case_defs(s, _load_import_json(raw))
+    retune_models(s, preserve_existing=False)
+    return _use_case_library_response("use_case_def_import")
 
 
-@app.route("/session/sync")
+@scenarios_bp.route("/session/sync")
 def session_sync():
     sa = get_state(_scope_id())
     sb = get_compare_state(_scope_id())
@@ -1381,779 +1048,559 @@ def session_sync():
     return _htmx_response(sa)
 
 
-@app.route("/gpu/add", methods=["POST"])
+@planner_bp.route("/gpu/add", methods=["POST"])
 def gpu_add():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        gpu_type = request.form.get("gpu_type")
-        if gpu_type not in GPUS:
-            return jsonify({"error": "Invalid GPU type"}), 400
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    gpu_type = request.form.get("gpu_type")
+    if gpu_type not in GPUS:
+        return jsonify({"error": "Invalid GPU type"}), 400
 
-        count = _form_int("count", 8)
-        if count <= 0:
-            return jsonify({"error": "Count must be positive"}), 400
+    count = _form_int("count", 8)
+    if count <= 0:
+        return jsonify({"error": "Count must be positive"}), 400
 
-        add_gpu(s, gpu_type, count)
-        return _tracked_htmx_response("gpu_add", s)
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
+    add_gpu(s, gpu_type, count)
+    return _tracked_htmx_response("gpu_add", s)
 
 
-@app.route("/gpu/qty", methods=["POST"])
+@planner_bp.route("/gpu/qty", methods=["POST"])
 def gpu_qty():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        uid = _form_int("uid")
-        if "count" in request.form:
-            gp = s.find_gpu(uid)
-            if gp is None:
-                return jsonify({"error": "GPU pool not found"}), 404
-            count = max(0, int(_form_float("count", 0.0)))
-            change_gpu_qty(s, uid, count - gp.count)
-        else:
-            delta = _form_int("delta")
-            change_gpu_qty(s, uid, delta)
-        # GPU count edits can fire repeatedly while a user types or steps the
-        # control. Keep this hot path untracked to avoid a snapshot row for every
-        # transient keystroke; stable changes are captured by subsequent actions.
-        return _htmx_response(s)
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
-
-
-@app.route("/gpu/remove", methods=["POST"])
-def gpu_remove():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        uid = _form_int("uid")
-        remove_gpu(s, uid)
-        return _tracked_htmx_response("gpu_remove", s)
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
-
-
-@app.route("/gpu/cost", methods=["POST"])
-def gpu_cost():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        uid = _form_int("uid")
-        cost = _form_float("value", 0.0)
-        set_gpu_cost(s, uid, cost)
-        # Like GPU quantity, cost edits are high-frequency numeric updates.
-        return _htmx_response(s)
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
-
-
-@app.route("/model/add", methods=["POST"])
-def model_add():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        model_key = request.form.get("model_key")
-        if model_key not in MODELS or MODELS[model_key].hidden:
-            return jsonify({"error": "Invalid model key"}), 400
-
-        add_model(s, model_key)
-        return _htmx_response(s)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
-
-
-@app.route("/model/add-many", methods=["POST"])
-def model_add_many():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        model_keys = [key for key in request.form.getlist("model_key") if key]
-        if not model_keys and request.form.get("model_keys"):
-            model_keys = [
-                key.strip() for key in request.form.get("model_keys", "").split(",") if key.strip()
-            ]
-        if not model_keys:
-            return jsonify({"error": "No model keys supplied"}), 400
-        invalid = [key for key in model_keys if key not in MODELS or MODELS[key].hidden]
-        if invalid:
-            return jsonify({"error": "Invalid model key"}), 400
-
-        add_models(s, model_keys)
-        return _htmx_response(s)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
-
-
-@app.route("/model/auto", methods=["POST"])
-def model_auto():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        strategy = normalize_auto_strategy(
-            request.form.get("strategy")
-            or request.form.get("auto_strategy")
-            or getattr(s, "auto_strategy", None)
-        )
-        auto_select_models(s, strategy)
-        return _tracked_htmx_response("model_auto", s)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
-
-
-@app.route("/model/auto-exclude", methods=["POST"])
-def model_auto_exclude():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        uid = _form_int("uid")
-        auto_exclude_model(s, uid)
-        return _htmx_response(s)
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
-
-
-@app.route("/model/auto-reallow", methods=["POST"])
-def model_auto_reallow():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        model_key = request.form.get("key", "")
-        auto_reallow_model(s, model_key)
-        return _htmx_response(s)
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
-
-
-@app.route("/model/remove", methods=["POST"])
-def model_remove():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        uid = _form_int("uid")
-        remove_model(s, uid)
-        return _htmx_response(s)
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
-
-
-@app.route("/model/prec", methods=["POST"])
-def model_prec():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        uid = _form_int("uid")
-        prec = request.form.get("prec")
-        if prec not in PRECISIONS:
-            return jsonify({"error": "Invalid precision"}), 400
-
-        set_model_prec(s, uid, prec)
-        return _htmx_response(s)
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
-
-
-@app.route("/model/spec", methods=["POST"])
-def model_spec():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        uid = _form_int("uid")
-        method = request.form.get("method", "off")
-        try:
-            spec_k = _form_int("spec_k", 0)
-        except (TypeError, ValueError):
-            spec_k = 0
-        am = s.find_model(uid)
-        if am is not None and method != "off" and spec_k > 0:
-            model = MODELS.get(am.model_key)
-            profile = (
-                next(
-                    (
-                        p
-                        for p in getattr(model, "available_spec_profiles", ())
-                        if p.method == method
-                    ),
-                    None,
-                )
-                if model is not None
-                else None
-            )
-            supported_ks = tuple(getattr(profile, "supported_ks", ()) or ())
-            if supported_ks and spec_k not in supported_ks:
-                if method != am.spec_method:
-                    # The method selector submits the old method's k alongside
-                    # the new profile. Start the new profile in Auto instead of
-                    # rejecting an otherwise valid method change.
-                    spec_k = 0
-                else:
-                    return jsonify(
-                        {
-                            "error": f"k={spec_k} is unsupported for {profile.label}; choose one of {supported_ks} or Auto"
-                        }
-                    ), 400
-        set_model_spec(s, uid, method, spec_k)
-        return _htmx_response(s)
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
-
-
-@app.route("/model/count", methods=["POST"])
-def model_count():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        uid = _form_int("uid")
-        count = _form_int("count")
-        if count < 0:
-            return jsonify({"error": "Count cannot be negative"}), 400
-
-        set_model_gpu_count(s, uid, count)
-        return _htmx_response(s)
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
-
-
-@app.route("/model/strat", methods=["POST"])
-def model_strat():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        uid = _form_int("uid")
-        phase = request.form.get("phase", "decode")
-        tp = _form_int("tp")
-        pp = _form_int("pp", 1)
-        dp = _form_int("dp")
-
-        # Validate the strategy before setting
-        am = s.find_model(uid)
-        if am is None:
-            return jsonify({"error": "Model not found"}), 404
-
-        gp = s.find_gpu(am.gpu_uid)
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    uid = _form_int("uid")
+    if "count" in request.form:
+        gp = s.find_gpu(uid)
         if gp is None:
-            return jsonify({"error": "GPU not found"}), 404
-
-        model = MODELS[am.model_key]
-        spec = resolve_spec_runtime(model, am.spec_method, am.spec_k, s.spec_acceptance, am.prec)
-        valid = valid_strategies(
-            model, am.gpu_count, gp.gpu, s.mu, s.profiled_non_kv_gb, am.prec, spec
-        )
-        strategy = (tp, pp, dp)
-        if strategy not in valid:
-            return jsonify({"error": "Invalid strategy for this model/GPU combination"}), 400
-
-        set_model_strat(s, uid, tp, pp, dp, phase)
-        return _htmx_response(s)
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
+            return jsonify({"error": "GPU pool not found"}), 404
+        count = max(0, int(_form_float("count", 0.0)))
+        change_gpu_qty(s, uid, count - gp.count)
+    else:
+        delta = _form_int("delta")
+        change_gpu_qty(s, uid, delta)
+    # GPU count edits can fire repeatedly while a user types or steps the
+    # control. Keep this hot path untracked to avoid a snapshot row for every
+    # transient keystroke; stable changes are captured by subsequent actions.
+    return _htmx_response(s)
 
 
-@app.route("/model/gpu_pool", methods=["POST"])
-def model_gpu_pool():
+@planner_bp.route("/gpu/remove", methods=["POST"])
+def gpu_remove():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    uid = _form_int("uid")
+    remove_gpu(s, uid)
+    return _tracked_htmx_response("gpu_remove", s)
+
+
+@planner_bp.route("/gpu/cost", methods=["POST"])
+def gpu_cost():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    uid = _form_int("uid")
+    cost = _form_float("value", 0.0)
+    set_gpu_cost(s, uid, cost)
+    # Like GPU quantity, cost edits are high-frequency numeric updates.
+    return _htmx_response(s)
+
+
+@planner_bp.route("/model/add", methods=["POST"])
+def model_add():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    model_key = request.form.get("model_key")
+    if model_key not in MODELS or MODELS[model_key].hidden:
+        return jsonify({"error": "Invalid model key"}), 400
+
+    add_model(s, model_key)
+    return _htmx_response(s)
+
+
+@planner_bp.route("/model/add-many", methods=["POST"])
+def model_add_many():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    model_keys = [key for key in request.form.getlist("model_key") if key]
+    if not model_keys and request.form.get("model_keys"):
+        model_keys = [
+            key.strip() for key in request.form.get("model_keys", "").split(",") if key.strip()
+        ]
+    if not model_keys:
+        return jsonify({"error": "No model keys supplied"}), 400
+    invalid = [key for key in model_keys if key not in MODELS or MODELS[key].hidden]
+    if invalid:
+        return jsonify({"error": "Invalid model key"}), 400
+
+    add_models(s, model_keys)
+    return _htmx_response(s)
+
+
+@planner_bp.route("/model/auto", methods=["POST"])
+def model_auto():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    strategy = normalize_auto_strategy(
+        request.form.get("strategy")
+        or request.form.get("auto_strategy")
+        or getattr(s, "auto_strategy", None)
+    )
+    auto_select_models(s, strategy)
+    return _tracked_htmx_response("model_auto", s)
+
+
+@planner_bp.route("/model/auto-exclude", methods=["POST"])
+def model_auto_exclude():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    uid = _form_int("uid")
+    auto_exclude_model(s, uid)
+    return _htmx_response(s)
+
+
+@planner_bp.route("/model/auto-reallow", methods=["POST"])
+def model_auto_reallow():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    model_key = request.form.get("key", "")
+    auto_reallow_model(s, model_key)
+    return _htmx_response(s)
+
+
+@planner_bp.route("/model/remove", methods=["POST"])
+def model_remove():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    uid = _form_int("uid")
+    remove_model(s, uid)
+    return _htmx_response(s)
+
+
+@planner_bp.route("/model/prec", methods=["POST"])
+def model_prec():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    uid = _form_int("uid")
+    prec = request.form.get("prec")
+    if prec not in PRECISIONS:
+        return jsonify({"error": "Invalid precision"}), 400
+
+    set_model_prec(s, uid, prec)
+    return _htmx_response(s)
+
+
+@planner_bp.route("/model/spec", methods=["POST"])
+def model_spec():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    uid = _form_int("uid")
+    method = request.form.get("method", "off")
     try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        uid = _form_int("uid")
-        gpu_uid = _form_int("gpu_uid")
-        set_model_gpu_pool(s, uid, gpu_uid)
-        return _htmx_response(s)
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
-
-
-@app.route("/dist/preset", methods=["POST"])
-def dist_preset():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        kind = request.form.get("kind")
-        preset = request.form.get("preset")
-        set_dist_preset(s, kind, preset)
-        retune_models(s, preserve_existing=False)
-        return _tracked_htmx_response("dist_preset", s)
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
-
-
-@app.route("/dist/slide", methods=["POST"])
-def dist_slide():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        kind = request.form.get("kind")
-        if kind not in {"in", "out", "embedding_doc"}:
-            return jsonify({"error": "Invalid distribution kind"}), 400
-        index = _bounded_int(request.form.get("index"), name="index", lo=0, hi=256)
-        value = _bounded_int(request.form.get("value"), name="value", lo=0, hi=1_000_000)
-        set_dist_value(s, kind, index, value)
-        retune_models(s, preserve_existing=False)
-        return _tracked_htmx_response("dist_slide", s)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
-
-
-@app.route("/settings/mu", methods=["POST"])
-def settings_mu():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        value = _bounded_int(request.form.get("value"), name="gpu_mem_util", lo=50, hi=98)
-        s.mu = value / 100
-        retune_models(s, preserve_existing=False)
-        return _tracked_htmx_response("settings_mu", s)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
-
-
-@app.route("/settings/non-kv", methods=["POST"])
-def settings_non_kv():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        value = _finite_float(
-            request.form.get("value"), name="profiled non-KV memory", lo=0.0, hi=4096.0
-        )
-        s.profiled_non_kv_gb = value
-        retune_models(s, preserve_existing=False)
-        return _tracked_htmx_response("settings_non_kv", s)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
-
-
-@app.route("/settings/eff", methods=["POST"])
-def settings_eff():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        key = request.form.get("key")
-        bounds = EFFICIENCY_SETTING_BOUNDS.get(key)
-        if bounds is None:
-            return jsonify({"error": "Invalid efficiency setting"}), 400
-        lo, hi = bounds
-        value = _finite_float(request.form.get("value"), name=key, lo=lo * 100, hi=hi * 100) / 100
-        setattr(s, key, value)
-        retune_models(s, preserve_existing=False)
-        return _tracked_htmx_response("settings_eff", s)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
-
-
-@app.route("/settings/int", methods=["POST"])
-def settings_int():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        key = request.form.get("key")
-        bounds = INTEGER_SETTING_BOUNDS.get(key)
-        if bounds is None:
-            return jsonify({"error": "Invalid integer setting"}), 400
-        value = _bounded_int(request.form.get("value"), name=key, lo=bounds[0], hi=bounds[1])
-        setattr(s, key, value)
-        retune_models(s, preserve_existing=False)
-        return _tracked_htmx_response("settings_int", s)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
-
-
-@app.route("/projection/pct", methods=["POST"])
-def projection_pct():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        key = request.form.get("key", "")
-        value = _form_int("value") / 100
-        set_projection_pct(s, key, value)
-        return _tracked_htmx_response("projection_pct", s)
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
-
-
-@app.route("/projection/choice", methods=["POST"])
-def projection_choice():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        key = request.form.get("key", "")
-        value = request.form.get("value", "")
-        set_projection_choice(s, key, value)
-        return _tracked_htmx_response("projection_choice", s)
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
-
-
-@app.route("/projection/toggle", methods=["POST"])
-def projection_toggle():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        key = request.form.get("key", "")
-        # HTMX sends a form-encoded value only when the checkbox is checked.
-        value = request.form.get("value") in ("on", "true", "1")
-        set_projection_toggle(s, key, value)
-        return _tracked_htmx_response("projection_toggle", s)
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
-
-
-@app.route("/project/add", methods=["POST"])
-def project_add():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        preset_key = request.form.get("preset") or None
-        add_project(s, preset_key)
-        retune_models(s, preserve_existing=False)
-        return _tracked_htmx_response("project_add", s)
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
-
-
-@app.route("/project/add-all", methods=["POST"])
-def project_add_all():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        for preset in get_use_case_defs(s):
-            add_project(s, str(preset["key"]))
-        retune_models(s, preserve_existing=False)
-        return _tracked_htmx_response("project_add_all", s)
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
-
-
-@app.route("/project/remove", methods=["POST"])
-def project_remove():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        uid = _form_int("uid", 0)
-        remove_project(s, uid)
-        retune_models(s, preserve_existing=False)
-        return _tracked_htmx_response("project_remove", s)
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
-
-
-@app.route("/project/set", methods=["POST"])
-def project_set():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        uid = _form_int("uid", 0)
-        field_name = request.form.get("field", "")
-        raw_value = request.form.get("value", "")
-        if field_name == "kind":
-            set_project_kind(s, uid, raw_value)
-            retune_models(s, preserve_existing=False)
-        elif field_name == "name":
-            set_project_name(s, uid, raw_value)
-        elif field_name == "batch_eligible":
-            set_project_batch_eligible(s, uid, raw_value in ("on", "true", "1"))
-        elif field_name == "tokens_day_m":
-            # slider gives millions of tokens/day; persist in tokens/day
-            set_project_field(s, uid, "tokens_day", float(raw_value or 0.0) * 1e6)
-            retune_models(s, preserve_existing=False)
-        elif field_name == "scale_value":
-            set_project_scale_value(s, uid, float(raw_value or 0.0))
-            retune_models(s, preserve_existing=False)
-        elif field_name == "wtp_per_m_cents":
-            # slider gives cents per M tokens; persist as $/M tokens
-            set_project_field(s, uid, "wtp_per_m", float(raw_value or 0.0) / 100.0)
-        elif field_name == "min_success_rate_pct":
-            # slider gives whole-number percent; persist as 0..1 fraction
-            set_project_field(s, uid, "min_success_rate", float(raw_value or 0.0) / 100.0)
-        elif field_name == "quality_floor_pct":
-            set_project_field(s, uid, "quality_floor", float(raw_value or 0.0) / 100.0)
-        elif field_name == "difficulty_pct":
-            # legacy: slider gave whole-number percent; persist as 0..1 fraction
-            set_project_field(s, uid, "difficulty", float(raw_value or 0.0) / 100.0)
-        elif field_name == "difficulty_aa_index":
-            # UI uses the same published source scale as the model anchors.
-            set_project_field(
-                s, uid, "difficulty", aa_intelligence_to_quality(float(raw_value or 0.0))
+        spec_k = _form_int("spec_k", 0)
+    except (TypeError, ValueError):
+        spec_k = 0
+    am = s.find_model(uid)
+    if am is not None and method != "off" and spec_k > 0:
+        model = MODELS.get(am.model_key)
+        profile = (
+            next(
+                (p for p in getattr(model, "available_spec_profiles", ()) if p.method == method),
+                None,
             )
-        elif field_name == "difficulty_elo":  # Legacy form payloads from pre-AA-index UI.
-            elo = float(raw_value or 0.0)
-            set_project_field(s, uid, "difficulty", max(0.0, min(1.0, elo / 3000.0)))
-        elif field_name == "capability":
-            # `cap` field carries the capability name; `value` is on/off
-            cap_name = request.form.get("cap", "")
-            set_project_capability(s, uid, cap_name, raw_value in ("on", "true", "1"))
-        elif field_name == "latent_jobs_day_m":
-            # slider gives millions of latent tokens/day; persist as tokens/day
-            set_project_field(s, uid, "latent_jobs_day", float(raw_value or 0.0) * 1e6)
-        elif field_name == "unlock_price_per_m_cents":
-            # slider gives cents per M tokens; persist as $/M tokens
-            set_project_field(s, uid, "unlock_price_per_m", float(raw_value or 0.0) / 100.0)
-        elif field_name == "in_pre":
-            set_project_dist_preset(s, uid, "in", raw_value)
-            retune_models(s, preserve_existing=False)
-        elif field_name == "out_pre":
-            set_project_dist_preset(s, uid, "out", raw_value)
-            retune_models(s, preserve_existing=False)
-        elif field_name in (
-            "tokens_day",
-            "wtp_per_m",
-            "difficulty",
-            "min_success_rate",
-            "quality_floor",
-            "latent_jobs_day",
-            "unlock_price_per_m",
-        ):
-            set_project_field(s, uid, field_name, float(raw_value or 0.0))
-            if field_name == "tokens_day":
-                retune_models(s, preserve_existing=False)
-        return _tracked_htmx_response("project_set", s)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
+            if model is not None
+            else None
+        )
+        supported_ks = tuple(getattr(profile, "supported_ks", ()) or ())
+        if supported_ks and spec_k not in supported_ks:
+            if method != am.spec_method:
+                # The method selector submits the old method's k alongside
+                # the new profile. Start the new profile in Auto instead of
+                # rejecting an otherwise valid method change.
+                spec_k = 0
+            else:
+                return jsonify(
+                    {
+                        "error": f"k={spec_k} is unsupported for {profile.label}; choose one of {supported_ks} or Auto"
+                    }
+                ), 400
+    set_model_spec(s, uid, method, spec_k)
+    return _htmx_response(s)
 
 
-@app.route("/project/export")
-def project_export():
-    try:
-        s = _request_state()
-        if s is None:
-            return jsonify({"error": "No state found"}), 404
-        payload = serialize_project_set(s)
-        body = json.dumps(payload, indent=2, sort_keys=True) + "\n"
-        resp = make_response(body)
-        resp.headers["Content-Type"] = "application/json; charset=utf-8"
-        resp.headers["Content-Disposition"] = 'attachment; filename="use-cases.json"'
-        return resp
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
+@planner_bp.route("/model/count", methods=["POST"])
+def model_count():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    uid = _form_int("uid")
+    count = _form_int("count")
+    if count < 0:
+        return jsonify({"error": "Count cannot be negative"}), 400
+
+    set_model_gpu_count(s, uid, count)
+    return _htmx_response(s)
 
 
-@app.route("/project/import", methods=["POST"])
-def project_import():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        raw = request.form.get("json", "")
-        if not raw.strip():
-            return jsonify({"error": "Choose a use-case JSON file first."}), 400
-        payload = _load_import_json(raw)
-        replace_project_set(s, payload)
+@planner_bp.route("/model/strat", methods=["POST"])
+def model_strat():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    uid = _form_int("uid")
+    phase = request.form.get("phase", "decode")
+    tp = _form_int("tp")
+    pp = _form_int("pp", 1)
+    dp = _form_int("dp")
+
+    # Validate the strategy before setting
+    am = s.find_model(uid)
+    if am is None:
+        return jsonify({"error": "Model not found"}), 404
+
+    gp = s.find_gpu(am.gpu_uid)
+    if gp is None:
+        return jsonify({"error": "GPU not found"}), 404
+
+    model = MODELS[am.model_key]
+    spec = resolve_spec_runtime(model, am.spec_method, am.spec_k, s.spec_acceptance, am.prec)
+    valid = valid_strategies(model, am.gpu_count, gp.gpu, s.mu, s.profiled_non_kv_gb, am.prec, spec)
+    strategy = (tp, pp, dp)
+    if strategy not in valid:
+        return jsonify({"error": "Invalid strategy for this model/GPU combination"}), 400
+
+    set_model_strat(s, uid, tp, pp, dp, phase)
+    return _htmx_response(s)
+
+
+@planner_bp.route("/model/gpu_pool", methods=["POST"])
+def model_gpu_pool():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    uid = _form_int("uid")
+    gpu_uid = _form_int("gpu_uid")
+    set_model_gpu_pool(s, uid, gpu_uid)
+    return _htmx_response(s)
+
+
+@planner_bp.route("/dist/preset", methods=["POST"])
+def dist_preset():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    kind = request.form.get("kind")
+    preset = request.form.get("preset")
+    set_dist_preset(s, kind, preset)
+    retune_models(s, preserve_existing=False)
+    return _tracked_htmx_response("dist_preset", s)
+
+
+@planner_bp.route("/dist/slide", methods=["POST"])
+def dist_slide():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    kind = request.form.get("kind")
+    if kind not in {"in", "out", "embedding_doc"}:
+        return jsonify({"error": "Invalid distribution kind"}), 400
+    index = _bounded_int(request.form.get("index"), name="index", lo=0, hi=256)
+    value = _bounded_int(request.form.get("value"), name="value", lo=0, hi=1_000_000)
+    set_dist_value(s, kind, index, value)
+    retune_models(s, preserve_existing=False)
+    return _tracked_htmx_response("dist_slide", s)
+
+
+@planner_bp.route("/settings/mu", methods=["POST"])
+def settings_mu():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    value = _bounded_int(request.form.get("value"), name="gpu_mem_util", lo=50, hi=98)
+    s.mu = value / 100
+    retune_models(s, preserve_existing=False)
+    return _tracked_htmx_response("settings_mu", s)
+
+
+@planner_bp.route("/settings/non-kv", methods=["POST"])
+def settings_non_kv():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    value = _finite_float(
+        request.form.get("value"), name="profiled non-KV memory", lo=0.0, hi=4096.0
+    )
+    s.profiled_non_kv_gb = value
+    retune_models(s, preserve_existing=False)
+    return _tracked_htmx_response("settings_non_kv", s)
+
+
+@planner_bp.route("/settings/eff", methods=["POST"])
+def settings_eff():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    key = request.form.get("key")
+    bounds = EFFICIENCY_SETTING_BOUNDS.get(key)
+    if bounds is None:
+        return jsonify({"error": "Invalid efficiency setting"}), 400
+    lo, hi = bounds
+    value = _finite_float(request.form.get("value"), name=key, lo=lo * 100, hi=hi * 100) / 100
+    setattr(s, key, value)
+    retune_models(s, preserve_existing=False)
+    return _tracked_htmx_response("settings_eff", s)
+
+
+@planner_bp.route("/settings/int", methods=["POST"])
+def settings_int():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    key = request.form.get("key")
+    bounds = INTEGER_SETTING_BOUNDS.get(key)
+    if bounds is None:
+        return jsonify({"error": "Invalid integer setting"}), 400
+    value = _bounded_int(request.form.get("value"), name=key, lo=bounds[0], hi=bounds[1])
+    setattr(s, key, value)
+    retune_models(s, preserve_existing=False)
+    return _tracked_htmx_response("settings_int", s)
+
+
+@planner_bp.route("/projection/pct", methods=["POST"])
+def projection_pct():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    key = request.form.get("key", "")
+    value = _form_int("value") / 100
+    set_projection_pct(s, key, value)
+    return _tracked_htmx_response("projection_pct", s)
+
+
+@planner_bp.route("/projection/choice", methods=["POST"])
+def projection_choice():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    key = request.form.get("key", "")
+    value = request.form.get("value", "")
+    set_projection_choice(s, key, value)
+    return _tracked_htmx_response("projection_choice", s)
+
+
+@planner_bp.route("/projection/toggle", methods=["POST"])
+def projection_toggle():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    key = request.form.get("key", "")
+    # HTMX sends a form-encoded value only when the checkbox is checked.
+    value = request.form.get("value") in ("on", "true", "1")
+    set_projection_toggle(s, key, value)
+    return _tracked_htmx_response("projection_toggle", s)
+
+
+@planner_bp.route("/project/add", methods=["POST"])
+def project_add():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    preset_key = request.form.get("preset") or None
+    add_project(s, preset_key)
+    retune_models(s, preserve_existing=False)
+    return _tracked_htmx_response("project_add", s)
+
+
+@planner_bp.route("/project/add-all", methods=["POST"])
+def project_add_all():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    for preset in get_use_case_defs(s):
+        add_project(s, str(preset["key"]))
+    retune_models(s, preserve_existing=False)
+    return _tracked_htmx_response("project_add_all", s)
+
+
+@planner_bp.route("/project/remove", methods=["POST"])
+def project_remove():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    uid = _form_int("uid", 0)
+    remove_project(s, uid)
+    retune_models(s, preserve_existing=False)
+    return _tracked_htmx_response("project_remove", s)
+
+
+@planner_bp.route("/project/set", methods=["POST"])
+def project_set():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    uid = _form_int("uid", 0)
+    field_name = request.form.get("field", "")
+    raw_value = request.form.get("value", "")
+    if field_name == "kind":
+        set_project_kind(s, uid, raw_value)
         retune_models(s, preserve_existing=False)
-        return _tracked_htmx_response("project_import", s)
-    except json.JSONDecodeError as e:
-        return jsonify({"error": f"Invalid JSON: {e.msg}"}), 400
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
+    elif field_name == "name":
+        set_project_name(s, uid, raw_value)
+    elif field_name == "batch_eligible":
+        set_project_batch_eligible(s, uid, raw_value in ("on", "true", "1"))
+    elif field_name == "tokens_day_m":
+        # slider gives millions of tokens/day; persist in tokens/day
+        set_project_field(s, uid, "tokens_day", float(raw_value or 0.0) * 1e6)
+        retune_models(s, preserve_existing=False)
+    elif field_name == "scale_value":
+        set_project_scale_value(s, uid, float(raw_value or 0.0))
+        retune_models(s, preserve_existing=False)
+    elif field_name == "wtp_per_m_cents":
+        # slider gives cents per M tokens; persist as $/M tokens
+        set_project_field(s, uid, "wtp_per_m", float(raw_value or 0.0) / 100.0)
+    elif field_name == "min_success_rate_pct":
+        # slider gives whole-number percent; persist as 0..1 fraction
+        set_project_field(s, uid, "min_success_rate", float(raw_value or 0.0) / 100.0)
+    elif field_name == "quality_floor_pct":
+        set_project_field(s, uid, "quality_floor", float(raw_value or 0.0) / 100.0)
+    elif field_name == "difficulty_pct":
+        # legacy: slider gave whole-number percent; persist as 0..1 fraction
+        set_project_field(s, uid, "difficulty", float(raw_value or 0.0) / 100.0)
+    elif field_name == "difficulty_aa_index":
+        # UI uses the same published source scale as the model anchors.
+        set_project_field(s, uid, "difficulty", aa_intelligence_to_quality(float(raw_value or 0.0)))
+    elif field_name == "difficulty_elo":  # Legacy form payloads from pre-AA-index UI.
+        elo = float(raw_value or 0.0)
+        set_project_field(s, uid, "difficulty", max(0.0, min(1.0, elo / 3000.0)))
+    elif field_name == "capability":
+        # `cap` field carries the capability name; `value` is on/off
+        cap_name = request.form.get("cap", "")
+        set_project_capability(s, uid, cap_name, raw_value in ("on", "true", "1"))
+    elif field_name == "latent_jobs_day_m":
+        # slider gives millions of latent tokens/day; persist as tokens/day
+        set_project_field(s, uid, "latent_jobs_day", float(raw_value or 0.0) * 1e6)
+    elif field_name == "unlock_price_per_m_cents":
+        # slider gives cents per M tokens; persist as $/M tokens
+        set_project_field(s, uid, "unlock_price_per_m", float(raw_value or 0.0) / 100.0)
+    elif field_name == "in_pre":
+        set_project_dist_preset(s, uid, "in", raw_value)
+        retune_models(s, preserve_existing=False)
+    elif field_name == "out_pre":
+        set_project_dist_preset(s, uid, "out", raw_value)
+        retune_models(s, preserve_existing=False)
+    elif field_name in (
+        "tokens_day",
+        "wtp_per_m",
+        "difficulty",
+        "min_success_rate",
+        "quality_floor",
+        "latent_jobs_day",
+        "unlock_price_per_m",
+    ):
+        set_project_field(s, uid, field_name, float(raw_value or 0.0))
+        if field_name == "tokens_day":
+            retune_models(s, preserve_existing=False)
+    return _tracked_htmx_response("project_set", s)
 
 
-@app.route("/mode", methods=["POST"])
+@planner_bp.route("/project/export")
+def project_export():
+    s = _request_state()
+    if s is None:
+        return jsonify({"error": "No state found"}), 404
+    payload = serialize_project_set(s)
+    body = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    resp = make_response(body)
+    resp.headers["Content-Type"] = "application/json; charset=utf-8"
+    resp.headers["Content-Disposition"] = 'attachment; filename="use-cases.json"'
+    return resp
+
+
+@planner_bp.route("/project/import", methods=["POST"])
+def project_import():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    raw = request.form.get("json", "")
+    if not raw.strip():
+        return jsonify({"error": "Choose a use-case JSON file first."}), 400
+    payload = _load_import_json(raw)
+    replace_project_set(s, payload)
+    retune_models(s, preserve_existing=False)
+    return _tracked_htmx_response("project_import", s)
+
+
+@planner_bp.route("/mode", methods=["POST"])
 def set_mode():
-    try:
-        mode = normalize_plot_mode(request.form.get("mode"))
-        sa = get_state(_scope_id())
-        sb = get_compare_state(_scope_id())
-        if sa:
-            sa.mode = mode
-        if sb:
-            sb.mode = mode
-        return _tracked_htmx_response("mode", sa)
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
+    mode = normalize_plot_mode(request.form.get("mode"))
+    sa = get_state(_scope_id())
+    sb = get_compare_state(_scope_id())
+    if sa:
+        sa.mode = mode
+    if sb:
+        sb.mode = mode
+    return _tracked_htmx_response("mode", sa)
 
 
-@app.route("/compare/duplicate", methods=["POST"])
+@scenarios_bp.route("/compare/duplicate", methods=["POST"])
 def compare_duplicate():
-    try:
-        duplicate_compare_state(_scope_id())
-        return _tracked_htmx_response("compare_duplicate")
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
+    duplicate_compare_state(_scope_id())
+    return _tracked_htmx_response("compare_duplicate")
 
 
-@app.route("/compare/close", methods=["POST"])
+@scenarios_bp.route("/compare/close", methods=["POST"])
 def compare_close():
-    try:
-        clear_compare_state(_scope_id())
-        return _tracked_htmx_response("compare_close")
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
+    clear_compare_state(_scope_id())
+    return _tracked_htmx_response("compare_close")
 
 
-@app.route("/task/preset", methods=["POST"])
+@planner_bp.route("/task/preset", methods=["POST"])
 def task_preset():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        key = request.form.get("key")
-        if getattr(s, "mode", "") in ("embedding", "embedquality"):
-            preset = EMBEDDING_DOC_PRESETS.get(key)
-            if preset:
-                s.embedding_doc_dist = list(preset)
-                s.embedding_doc_pre = key
-                s.task_il = avg_dist(s.embedding_doc_dist, EMBEDDING_DOC_BUCKETS)
-                s.task_ol = 0
-                retune_models(s, preserve_existing=False)
-            return _tracked_htmx_response("task_preset", s)
-
-        tp = TASK_PRESETS.get(key)
-        if tp:
-            s.task_il = tp["i"]
-            s.task_ol = tp["o"]
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    key = request.form.get("key")
+    if getattr(s, "mode", "") in ("embedding", "embedquality"):
+        preset = EMBEDDING_DOC_PRESETS.get(key)
+        if preset:
+            s.embedding_doc_dist = list(preset)
+            s.embedding_doc_pre = key
+            s.task_il = avg_dist(s.embedding_doc_dist, EMBEDDING_DOC_BUCKETS)
+            s.task_ol = 0
             retune_models(s, preserve_existing=False)
         return _tracked_htmx_response("task_preset", s)
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
 
-
-@app.route("/task/length", methods=["POST"])
-def task_length():
-    try:
-        s = _request_state()
-        if s is None:
-            return _htmx_response()
-        length = 2 ** _form_int("value")
-        kind = request.form.get("kind")
-        if kind == "in":
-            s.task_il = length
-        else:
-            s.task_ol = length
+    tp = TASK_PRESETS.get(key)
+    if tp:
+        s.task_il = tp["i"]
+        s.task_ol = tp["o"]
         retune_models(s, preserve_existing=False)
-        return _tracked_htmx_response("task_length", s)
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
+    return _tracked_htmx_response("task_preset", s)
+
+
+@planner_bp.route("/task/length", methods=["POST"])
+def task_length():
+    s = _request_state()
+    if s is None:
+        return _htmx_response()
+    length = 2 ** _form_int("value")
+    kind = request.form.get("kind")
+    if kind == "in":
+        s.task_il = length
+    else:
+        s.task_ol = length
+    retune_models(s, preserve_existing=False)
+    return _tracked_htmx_response("task_length", s)
 
 
 def _annotate_chart_spec(state: PlannerState, datasets: list[dict]) -> list[dict]:
@@ -2188,87 +1635,71 @@ def _annotate_chart_spec(state: PlannerState, datasets: list[dict]) -> list[dict
     return datasets
 
 
-@app.route("/api/chart-data")
+@api_bp.route("/api/chart-data")
 def chart_data():
-    try:
-        sa = get_state(_scope_id())
-        sb = get_compare_state(_scope_id())
-        mode = sa.mode
-        states = [sa] + ([sb] if sb else [])
-        deployments = [resolve_deployment(state) for state in states]
+    sa = get_state(_scope_id())
+    sb = get_compare_state(_scope_id())
+    mode = sa.mode
+    states = [sa] + ([sb] if sb else [])
+    deployments = [resolve_deployment(state) for state in states]
 
-        if mode == "processingpareto":
-            batch_sizes = get_processing_pareto_bs(states)
-            datasets = _annotate_chart_spec(sa, chart_processing_pareto(sa, batch_sizes))
-            if sb:
-                datasets += _annotate_chart_spec(
-                    sb, chart_processing_pareto(sb, batch_sizes, " (B)")
-                )
-            return jsonify(
-                {"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]}
-            )
-
-        if mode == "asrquality":
-            datasets = chart_asr_quality(sa)
-            if sb:
-                datasets += chart_asr_quality(sb, " (B)")
-            return jsonify({"type": "scatter", "datasets": datasets, "mode": mode})
-
-        if mode == "realtime":
-            batch_sizes = get_realtime_bs(states, deployments=deployments)
-            datasets = chart_realtime_capacity(sa, batch_sizes)
-            if sb:
-                datasets += chart_realtime_capacity(sb, batch_sizes, " (B)")
-            return jsonify(
-                {"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]}
-            )
-
-        if mode == "embedquality":
-            datasets = chart_embedding_quality(sa)
-            if sb:
-                datasets += chart_embedding_quality(sb, " (B)")
-            return jsonify(
-                {
-                    "type": "scatter",
-                    "datasets": datasets,
-                    "mode": mode,
-                    **embedding_quality_axis_range(datasets),
-                }
-            )
-
-        batch_sizes = get_decode_bs(states, deployments=deployments)
-        datasets = _annotate_chart_spec(
-            sa, chart_user_pareto(sa, batch_sizes, deployment=deployments[0])
-        )
+    if mode == "processingpareto":
+        batch_sizes = get_processing_pareto_bs(states)
+        datasets = _annotate_chart_spec(sa, chart_processing_pareto(sa, batch_sizes))
         if sb:
-            datasets += _annotate_chart_spec(
-                sb,
-                chart_user_pareto(sb, batch_sizes, " (B)", deployment=deployments[1]),
-            )
+            datasets += _annotate_chart_spec(sb, chart_processing_pareto(sb, batch_sizes, " (B)"))
         return jsonify(
             {"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]}
         )
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
+
+    if mode == "asrquality":
+        datasets = chart_asr_quality(sa)
+        if sb:
+            datasets += chart_asr_quality(sb, " (B)")
+        return jsonify({"type": "scatter", "datasets": datasets, "mode": mode})
+
+    if mode == "realtime":
+        batch_sizes = get_realtime_bs(states, deployments=deployments)
+        datasets = chart_realtime_capacity(sa, batch_sizes)
+        if sb:
+            datasets += chart_realtime_capacity(sb, batch_sizes, " (B)")
+        return jsonify(
+            {"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]}
+        )
+
+    if mode == "embedquality":
+        datasets = chart_embedding_quality(sa)
+        if sb:
+            datasets += chart_embedding_quality(sb, " (B)")
+        return jsonify(
+            {
+                "type": "scatter",
+                "datasets": datasets,
+                "mode": mode,
+                **embedding_quality_axis_range(datasets),
+            }
+        )
+
+    batch_sizes = get_decode_bs(states, deployments=deployments)
+    datasets = _annotate_chart_spec(
+        sa, chart_user_pareto(sa, batch_sizes, deployment=deployments[0])
+    )
+    if sb:
+        datasets += _annotate_chart_spec(
+            sb,
+            chart_user_pareto(sb, batch_sizes, " (B)", deployment=deployments[1]),
+        )
+    return jsonify({"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]})
 
 
-@app.route("/api/projection-report")
+@api_bp.route("/api/projection-report")
 def projection_report():
-    try:
-        sa = get_state(_scope_id())
-        sb = get_compare_state(_scope_id())
-        return jsonify({"text": _format_projection_report(sa, sb)})
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    except Exception:
-        app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
-        return jsonify({"error": "Unexpected server error."}), 500
+    sa = get_state(_scope_id())
+    sb = get_compare_state(_scope_id())
+    return jsonify({"text": _format_projection_report(sa, sb)})
 
 
-@app.route("/picker/gpu")
+@api_bp.route("/picker/gpu")
 def picker_gpu():
     return render_template(
         "partials/gpu_picker.html",
@@ -2278,7 +1709,7 @@ def picker_gpu():
     )
 
 
-@app.route("/picker/model")
+@api_bp.route("/picker/model")
 def picker_model():
     kind_groups = models_by_kind()
     valid_kind_keys = {kind_key for kind_key, _ in MODEL_KINDS}
@@ -2296,7 +1727,7 @@ def picker_model():
     )
 
 
-@app.route("/picker/project")
+@api_bp.route("/picker/project")
 def picker_project():
     panel = request.args.get("panel", "A")
     s = _state(panel) or get_state(_scope_id())
@@ -2305,27 +1736,31 @@ def picker_project():
     return render_template("partials/project_picker.html", panel=panel, **context)
 
 
-@app.route("/healthz", methods=["GET"])
+@api_bp.route("/healthz", methods=["GET"])
 def healthz():
-    storage_ok = True if not TRACKING_ENABLED else SNAPSHOT_STORE.healthcheck()
+    storage_ok = (
+        True
+        if not current_app.config["TRACKING_ENABLED"]
+        else current_app.extensions["snapshot_store"].healthcheck()
+    )
     return jsonify({"status": "ok" if storage_ok else "degraded", "storage": storage_ok}), (
         200 if storage_ok else 503
     )
 
 
-@app.route("/session/reset", methods=["POST"])
+@scenarios_bp.route("/session/reset", methods=["POST"])
 def session_reset():
     state = reset_state(_scope_id(), blank=True)
     return _tracked_htmx_response("session_reset", state)
 
 
-@app.route("/session/data", methods=["DELETE", "POST"])
+@scenarios_bp.route("/session/data", methods=["DELETE", "POST"])
 def session_data_delete():
     visitor_id = _visitor_id()
     visitor_lock = get_scope_lock(f"visitor:{visitor_id}")
     with visitor_lock:
         states_deleted = delete_visitor_states(visitor_id)
-        snapshots_deleted = SNAPSHOT_STORE.delete_visitor(visitor_id)
+        snapshots_deleted = current_app.extensions["snapshot_store"].delete_visitor(visitor_id)
     g.suppress_identity_cookie = True
     response = jsonify(
         {
@@ -2338,12 +1773,12 @@ def session_data_delete():
         VISITOR_COOKIE,
         httponly=True,
         samesite="Lax",
-        secure=app.config["SESSION_COOKIE_SECURE"] or request.is_secure,
+        secure=current_app.config["SESSION_COOKIE_SECURE"] or request.is_secure,
     )
     return response
 
 
-@app.route("/scenario/export", methods=["GET"])
+@scenarios_bp.route("/scenario/export", methods=["GET"])
 def scenario_export():
     payload = serialize_scenario(get_state(_scope_id()), get_compare_state(_scope_id()))
     body = json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
@@ -2353,7 +1788,7 @@ def scenario_export():
     return response
 
 
-@app.route("/scenario/import", methods=["POST"])
+@scenarios_bp.route("/scenario/import", methods=["POST"])
 def scenario_import():
     raw = request.form.get("json", "")
     if not raw.strip():
@@ -2367,25 +1802,21 @@ def scenario_import():
     return _tracked_htmx_response("scenario_import", state_a)
 
 
-@app.route("/admin", methods=["GET"])
+@admin_bp.route("/admin", methods=["GET"])
 def admin():
     configuration_error = _admin_configuration_error()
     if configuration_error:
         return configuration_error, 503
     if not _is_admin_authenticated():
         return render_template("admin_login.html", error=None)
-    try:
-        page = _bounded_int(request.args.get("page", 1), name="page", lo=1, hi=1_000_000)
-        page_size = min(
-            _bounded_int(
-                request.args.get("per_page", ADMIN_PAGE_SIZE), name="per_page", lo=1, hi=500
-            ),
-            ADMIN_PAGE_SIZE,
-        )
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    total_snapshots = SNAPSHOT_STORE.count_snapshots()
-    all_snapshots = SNAPSHOT_STORE.list_snapshots(limit=page_size, offset=(page - 1) * page_size)
+    page = _bounded_int(request.args.get("page", 1), name="page", lo=1, hi=1_000_000)
+    page_size = min(
+        _bounded_int(request.args.get("per_page", ADMIN_PAGE_SIZE), name="per_page", lo=1, hi=500),
+        ADMIN_PAGE_SIZE,
+    )
+    store = current_app.extensions["snapshot_store"]
+    total_snapshots = store.count_snapshots()
+    all_snapshots = store.list_snapshots(limit=page_size, offset=(page - 1) * page_size)
     visitor_map = defaultdict(list)
     for s in all_snapshots:
         visitor_map[s["visitor_id"]].append(s)
@@ -2405,7 +1836,7 @@ def admin():
     )
 
 
-@app.route("/admin/login", methods=["POST"])
+@admin_bp.route("/admin/login", methods=["POST"])
 def admin_login():
     password = _admin_password()
     configuration_error = _admin_configuration_error()
@@ -2415,16 +1846,15 @@ def admin_login():
         return render_template("admin_login.html", error="Invalid password."), 401
 
     session[ADMIN_SESSION_KEY] = True
-    return redirect(url_for("admin"))
+    return redirect(url_for("admin.admin"))
 
 
-@app.route("/admin/logout", methods=["POST"])
+@admin_bp.route("/admin/logout", methods=["POST"])
 def admin_logout():
     session.pop(ADMIN_SESSION_KEY, None)
-    return redirect(url_for("admin"))
+    return redirect(url_for("admin.admin"))
 
 
-@app.template_filter("fmt_num")
 def fmt_num(n):
     if n >= 1e9:
         return f"{n / 1e9:.1f}B"
@@ -2435,7 +1865,6 @@ def fmt_num(n):
     return str(int(n))
 
 
-@app.template_filter("fmt_money")
 def fmt_money(value):
     value = float(value or 0.0)
     sign = "-" if value < 0 else ""
@@ -2453,9 +1882,77 @@ def fmt_money(value):
     return f"{sign}${value:,.3f}"
 
 
-@app.template_filter("log2int")
 def log2int(n):
     return int(math.log2(n)) if n > 0 else 0
+
+
+def _handle_validation_error(error: ValueError):
+    if isinstance(error, json.JSONDecodeError):
+        message = f"Invalid JSON: {error.msg}"
+    else:
+        message = str(error)
+    return jsonify({"error": message}), 400
+
+
+def _handle_internal_error(error: Exception):
+    if isinstance(error, HTTPException):
+        return error
+    current_app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
+    return jsonify({"error": "Unexpected server error."}), 500
+
+
+def create_app(config: dict | None = None) -> Flask:
+    """Build a configured application without constructing it during import."""
+    _enforce_single_worker()
+    application = Flask(__name__)
+    configured_secret = os.environ.get("PLANNER_SECRET_KEY", "").strip()
+    application.config.update(
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Lax",
+        SESSION_COOKIE_SECURE=_env_bool("PLANNER_SECURE_COOKIES", False),
+        MAX_CONTENT_LENGTH=_env_positive_int("PLANNER_MAX_REQUEST_BYTES", 2 * 1024 * 1024),
+        PLANNER_SECRET_CONFIGURED=bool(configured_secret),
+        TRACKING_ENABLED=TRACKING_ENABLED,
+        MAX_TABS_PER_VISITOR=MAX_TABS_PER_VISITOR,
+        REQUEST_RATE_LIMIT=REQUEST_RATE_LIMIT,
+        ADMIN_LOGIN_RATE_LIMIT=ADMIN_LOGIN_RATE_LIMIT,
+        RATE_LIMIT_MAX_IDENTITIES=RATE_LIMIT_MAX_IDENTITIES,
+    )
+    if config:
+        application.config.update(config)
+    explicit_secret = str(application.config.get("SECRET_KEY") or configured_secret).strip()
+    application.secret_key = explicit_secret or secrets.token_urlsafe(48)
+    application.extensions["snapshot_store"] = application.config.get(
+        "SNAPSHOT_STORE", SNAPSHOT_STORE
+    )
+    if explicit_secret:
+        application.config["PLANNER_SECRET_CONFIGURED"] = True
+    else:
+        application.logger.warning(
+            "PLANNER_SECRET_KEY is unset; generated an ephemeral key for this process. "
+            "Sessions and admin logins will not survive a restart. Set it before deploying."
+        )
+
+    if _env_bool("PLANNER_BEHIND_PROXY", False):
+        application.wsgi_app = ProxyFix(application.wsgi_app, x_for=1, x_proto=1)
+
+    for blueprint in (
+        planner_bp,
+        use_cases_bp,
+        scenarios_bp,
+        api_bp,
+        admin_bp,
+        econ_bp,
+    ):
+        application.register_blueprint(blueprint)
+
+    register_middleware(application)
+    application.register_error_handler(ValueError, _handle_validation_error)
+    application.register_error_handler(Exception, _handle_internal_error)
+    application.add_template_filter(fmt_num)
+    application.add_template_filter(fmt_money)
+    application.add_template_filter(log2int)
+    return application
 
 
 if __name__ == "__main__":
@@ -2463,4 +1960,4 @@ if __name__ == "__main__":
     # Keep this aligned with .env.example, compose.yaml, the Dockerfile, and README.
     port = int(os.environ.get("PORT") or os.environ.get("FLASK_RUN_PORT") or "5014")
     debug = _env_bool("FLASK_DEBUG", _env_bool("DEBUG", False))
-    app.run(host=host, port=port, debug=debug)
+    create_app().run(host=host, port=port, debug=debug)

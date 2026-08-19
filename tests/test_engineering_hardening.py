@@ -10,7 +10,10 @@ from collections import deque
 from pathlib import Path
 from unittest.mock import patch
 
+from app_factory import create_test_app
+
 import app as app_module
+import web.middleware as middleware
 from tracking import SnapshotStore
 
 
@@ -18,20 +21,14 @@ class EngineeringHardeningTests(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
         self.store = SnapshotStore(Path(self.tempdir.name) / "snapshots.sqlite3")
-        self.original_store = app_module.SNAPSHOT_STORE
-        self.original_tracking = app_module.TRACKING_ENABLED
-        app_module.SNAPSHOT_STORE = self.store
-        app_module.TRACKING_ENABLED = False
-        app_module.app.config.update(TESTING=True)
-        self.client = app_module.app.test_client()
+        self.app = create_test_app(SNAPSHOT_STORE=self.store)
+        self.client = self.app.test_client()
         self.visitor_id = str(uuid.uuid4())
         self.tab_id = str(uuid.uuid4())
         self.client.set_cookie(app_module.VISITOR_COOKIE, self.visitor_id)
         self.headers = {"X-Tab-ID": self.tab_id}
 
     def tearDown(self):
-        app_module.SNAPSHOT_STORE = self.original_store
-        app_module.TRACKING_ENABLED = self.original_tracking
         self.tempdir.cleanup()
 
     def test_arbitrary_setting_key_is_rejected_without_corrupting_state(self):
@@ -100,7 +97,7 @@ class EngineeringHardeningTests(unittest.TestCase):
         )
 
     def test_delete_session_data_removes_state_snapshots_and_cookie(self):
-        app_module.TRACKING_ENABLED = True
+        self.app.config["TRACKING_ENABLED"] = True
         self.assertEqual(self.client.get("/session/sync", headers=self.headers).status_code, 200)
         self.assertEqual(self.store.count_snapshots(self.visitor_id), 1)
 
@@ -111,40 +108,37 @@ class EngineeringHardeningTests(unittest.TestCase):
         self.assertIn("planner_vid=;", response.headers.get("Set-Cookie", ""))
 
     def test_healthz_uses_transactional_store(self):
-        app_module.TRACKING_ENABLED = True
+        self.app.config["TRACKING_ENABLED"] = True
         response = self.client.get("/healthz")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["status"], "ok")
 
     def test_per_visitor_active_tab_cap_is_enforced(self):
-        with patch.object(app_module, "MAX_TABS_PER_VISITOR", 1):
-            self.assertEqual(
-                self.client.get("/session/sync", headers=self.headers).status_code, 200
-            )
-            other = {"X-Tab-ID": str(uuid.uuid4())}
-            self.assertEqual(self.client.get("/session/sync", headers=other).status_code, 429)
+        self.app.config["MAX_TABS_PER_VISITOR"] = 1
+        self.assertEqual(self.client.get("/session/sync", headers=self.headers).status_code, 200)
+        other = {"X-Tab-ID": str(uuid.uuid4())}
+        self.assertEqual(self.client.get("/session/sync", headers=other).status_code, 429)
 
     def test_admin_is_disabled_without_explicit_secret(self):
-        self.assertNotEqual(app_module.app.secret_key, "vllm-planner-dev-key")
+        app = app_module.create_app({"TESTING": True, "TRACKING_ENABLED": False, "SECRET_KEY": ""})
+        self.assertNotEqual(app.secret_key, "vllm-planner-dev-key")
         with patch.dict("os.environ", {"PLANNER_ADMIN_PASSWORD": "strong"}):
-            with patch.object(app_module, "_configured_secret", ""):
-                response = self.client.get("/admin")
+            response = app.test_client().get("/admin")
         self.assertEqual(response.status_code, 503)
         self.assertIn(b"PLANNER_SECRET_KEY", response.data)
 
     def test_admin_rejects_invalid_pagination(self):
         with patch.dict("os.environ", {"PLANNER_ADMIN_PASSWORD": "strong"}):
-            with patch.object(app_module, "_configured_secret", "strong-secret"):
-                with self.client.session_transaction() as session:
-                    session[app_module.ADMIN_SESSION_KEY] = True
-                response = self.client.get("/admin?page=not-a-number")
+            with self.client.session_transaction() as session:
+                session[app_module.ADMIN_SESSION_KEY] = True
+            response = self.client.get("/admin?page=not-a-number")
         self.assertEqual(response.status_code, 400)
 
     def test_multi_worker_startup_is_refused(self):
         repo_root = Path(app_module.__file__).resolve().parent
         env = dict(os.environ, WEB_CONCURRENCY="2")
         refused = subprocess.run(
-            [sys.executable, "-c", "import app"],
+            [sys.executable, "-c", "import app; app.create_app()"],
             cwd=repo_root,
             env=env,
             capture_output=True,
@@ -155,7 +149,7 @@ class EngineeringHardeningTests(unittest.TestCase):
         self.assertIn("WEB_CONCURRENCY", refused.stderr)
 
         allowed = subprocess.run(
-            [sys.executable, "-c", "import app"],
+            [sys.executable, "-c", "import app; app.create_app()"],
             cwd=repo_root,
             env=dict(os.environ, WEB_CONCURRENCY="1"),
             capture_output=True,
@@ -167,9 +161,9 @@ class EngineeringHardeningTests(unittest.TestCase):
         repo_root = Path(app_module.__file__).resolve().parent
         script = (
             "import app; "
-            "app.app.test_client().post('/admin/login', data={'password':'x'}, "
+            "app.create_app({'TESTING':True}).test_client().post('/admin/login', data={'password':'x'}, "
             "headers={'X-Forwarded-For':'203.0.113.7'}); "
-            "print(sorted(str(k) for k in app._rate_windows))"
+            "import web.middleware as m; print(sorted(str(k) for k in m._rate_windows))"
         )
         result = subprocess.run(
             [sys.executable, "-c", script],
@@ -186,9 +180,9 @@ class EngineeringHardeningTests(unittest.TestCase):
         repo_root = Path(app_module.__file__).resolve().parent
         script = (
             "import app; "
-            "app.app.test_client().post('/admin/login', data={'password':'x'}, "
+            "app.create_app({'TESTING':True}).test_client().post('/admin/login', data={'password':'x'}, "
             "headers={'X-Forwarded-For':'203.0.113.7'}); "
-            "print(sorted(str(k) for k in app._rate_windows))"
+            "import web.middleware as m; print(sorted(str(k) for k in m._rate_windows))"
         )
         env = dict(os.environ)
         env.pop("PLANNER_BEHIND_PROXY", None)
@@ -204,51 +198,53 @@ class EngineeringHardeningTests(unittest.TestCase):
         self.assertNotIn("203.0.113.7", result.stdout)
 
     def test_expired_rate_windows_are_swept(self):
-        original = dict(app_module._rate_windows)
-        original_sweep = app_module._rate_last_sweep
+        original = dict(middleware._rate_windows)
+        original_sweep = middleware._rate_last_sweep
         try:
             now = time.monotonic()
-            app_module._rate_windows.clear()
+            middleware._rate_windows.clear()
             for i in range(50):
                 # Last seen well outside the 60s window.
-                app_module._rate_windows[("mutation", f"198.51.100.{i}")] = deque(
-                    [now - app_module.RATE_WINDOW_SECONDS - 5.0]
+                middleware._rate_windows[("mutation", f"198.51.100.{i}")] = deque(
+                    [now - middleware.RATE_WINDOW_SECONDS - 5.0]
                 )
-            app_module._rate_windows[("mutation", "203.0.113.1")] = deque([now])
+            middleware._rate_windows[("mutation", "203.0.113.1")] = deque([now])
 
-            app_module._sweep_rate_windows(now)
+            with self.app.app_context():
+                middleware._sweep_rate_windows(now)
 
-            self.assertEqual(list(app_module._rate_windows), [("mutation", "203.0.113.1")])
+            self.assertEqual(list(middleware._rate_windows), [("mutation", "203.0.113.1")])
         finally:
-            app_module._rate_windows.clear()
-            app_module._rate_windows.update(original)
-            app_module._rate_last_sweep = original_sweep
+            middleware._rate_windows.clear()
+            middleware._rate_windows.update(original)
+            middleware._rate_last_sweep = original_sweep
 
     def test_active_rate_windows_are_capped(self):
-        original = dict(app_module._rate_windows)
-        original_cap = app_module.RATE_LIMIT_MAX_IDENTITIES
-        original_sweep = app_module._rate_last_sweep
+        original = dict(middleware._rate_windows)
+        original_cap = self.app.config["RATE_LIMIT_MAX_IDENTITIES"]
+        original_sweep = middleware._rate_last_sweep
         try:
             now = time.monotonic()
-            app_module._rate_windows.clear()
-            app_module.RATE_LIMIT_MAX_IDENTITIES = 10
+            middleware._rate_windows.clear()
+            self.app.config["RATE_LIMIT_MAX_IDENTITIES"] = 10
             # All still active, so expiry alone cannot get under the cap.
             for i in range(40):
-                app_module._rate_windows[("mutation", f"198.51.100.{i}")] = deque(
+                middleware._rate_windows[("mutation", f"198.51.100.{i}")] = deque(
                     [now - (40 - i) * 0.1]
                 )
 
-            app_module._sweep_rate_windows(now)
+            with self.app.app_context():
+                middleware._sweep_rate_windows(now)
 
-            self.assertEqual(len(app_module._rate_windows), 10)
+            self.assertEqual(len(middleware._rate_windows), 10)
             # The survivors are the most recently active.
-            self.assertIn(("mutation", "198.51.100.39"), app_module._rate_windows)
-            self.assertNotIn(("mutation", "198.51.100.0"), app_module._rate_windows)
+            self.assertIn(("mutation", "198.51.100.39"), middleware._rate_windows)
+            self.assertNotIn(("mutation", "198.51.100.0"), middleware._rate_windows)
         finally:
-            app_module.RATE_LIMIT_MAX_IDENTITIES = original_cap
-            app_module._rate_windows.clear()
-            app_module._rate_windows.update(original)
-            app_module._rate_last_sweep = original_sweep
+            self.app.config["RATE_LIMIT_MAX_IDENTITIES"] = original_cap
+            middleware._rate_windows.clear()
+            middleware._rate_windows.update(original)
+            middleware._rate_last_sweep = original_sweep
 
     def test_security_headers_are_set_on_every_response(self):
         for path in ("/", "/static/app.js", "/healthz"):
@@ -273,9 +269,9 @@ class EngineeringHardeningTests(unittest.TestCase):
         self.assertIn("PORT=5014", (repo_root / ".env.example").read_text(encoding="utf-8"))
 
     def test_visitor_cookie_is_samesite_lax_and_httponly(self):
-        self.assertEqual(app_module.app.config["SESSION_COOKIE_SAMESITE"], "Lax")
-        self.assertTrue(app_module.app.config["SESSION_COOKIE_HTTPONLY"])
-        response = app_module.app.test_client().get("/")
+        self.assertEqual(self.app.config["SESSION_COOKIE_SAMESITE"], "Lax")
+        self.assertTrue(self.app.config["SESSION_COOKIE_HTTPONLY"])
+        response = self.app.test_client().get("/")
         cookie = response.headers.get("Set-Cookie", "")
         self.assertIn(app_module.VISITOR_COOKIE, cookie)
         self.assertIn("SameSite=Lax", cookie)

@@ -5,7 +5,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import app as app_module
+from app_factory import create_test_app
+
 import cloud_policy
 from engine.economics import _cloud_price_per_m_in_preset
 from state import normalize_corpo_cloud
@@ -130,7 +131,7 @@ class CloudPolicyTests(unittest.TestCase):
             )
         )
 
-        response = app_module.app.test_client().get("/")
+        response = create_test_app().test_client().get("/")
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Negotiated gateway", response.data)

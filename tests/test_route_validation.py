@@ -11,25 +11,20 @@ import unittest
 import uuid
 from unittest.mock import patch
 
+from app_factory import create_test_app
+
 import app as app_module
 import state as state_module
 
 
 class RouteValidationTests(unittest.TestCase):
     def setUp(self):
-        self.original_tracking = app_module.TRACKING_ENABLED
-        self.original_testing = app_module.app.config["TESTING"]
-        app_module.TRACKING_ENABLED = False
-        app_module.app.config.update(TESTING=True)
-        self.client = app_module.app.test_client()
+        self.app = create_test_app()
+        self.client = self.app.test_client()
         self.headers = {"X-Tab-ID": str(uuid.uuid4())}
         self.client.get("/", headers=self.headers)
         scope = next(iter(state_module._states))
         self.gpu_uid = state_module.get_state(scope).gpus[0].uid
-
-    def tearDown(self):
-        app_module.TRACKING_ENABLED = self.original_tracking
-        app_module.app.config.update(TESTING=self.original_testing)
 
     def test_missing_and_malformed_numeric_fields_are_400(self):
         cases = [

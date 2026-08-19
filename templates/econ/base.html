@@ -21,7 +21,7 @@
     {% for slug, v in variants.items() %}
     <a href="{{ url_for('econ.variant', slug=slug) }}" class="{{ 'on' if variant == slug }}" title="{{ v.desc }}">{{ loop.index }}. {{ v.title }}</a>
     {% endfor %}
-    <a href="{{ url_for('index') }}">← Calculator</a>
+    <a href="{{ url_for('planner.index') }}">← Calculator</a>
   </nav>
 </div>
 
@@ -29,7 +29,7 @@
 <div class="estimate-warning" role="note" style="margin-bottom:10px;">
   <div>
     <strong>Economics incomplete.</strong>
-    <span class="T">TCO is unset, so internal spend, margin, internal token prices, value multiple, and expansion recommendations are suppressed. <a href="{{ url_for('index') }}#main-content">Set TCO in the cluster card</a>.</span>
+    <span class="T">TCO is unset, so internal spend, margin, internal token prices, value multiple, and expansion recommendations are suppressed. <a href="{{ url_for('planner.index') }}#main-content">Set TCO in the cluster card</a>.</span>
   </div>
 </div>
 {% endif %}

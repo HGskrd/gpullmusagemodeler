@@ -1,6 +1,8 @@
 import unittest
 import uuid
 
+from app_factory import create_test_app
+
 import app as app_module
 from data import (
     MODEL_DOMAIN_QUALITY_ANCHORS,
@@ -249,7 +251,8 @@ class DomainQualityPlannerTests(unittest.TestCase):
             "cloud_reduced_day": 2.0,
             "destroyed_reduced_day": 3.0,
         }
-        with app_module.app.test_request_context("/econ/swaps"):
+        app = create_test_app()
+        with app.test_request_context("/econ/swaps"):
             html = app_module.render_template(
                 "partials/econ/swaps.html",
                 swap_recs=[rec],
@@ -262,21 +265,15 @@ class DomainQualityPlannerTests(unittest.TestCase):
         self.assertIn("Coding 100%", html)
 
     def test_economics_routes_render_domain_aware_swap_output(self):
-        original_tracking = app_module.TRACKING_ENABLED
-        app_module.TRACKING_ENABLED = False
-        app_module.app.config.update(TESTING=True)
-        client = app_module.app.test_client()
+        client = create_test_app().test_client()
         client.set_cookie(app_module.VISITOR_COOKIE, str(uuid.uuid4()))
         headers = {"X-Tab-ID": str(uuid.uuid4())}
-        try:
-            for path in ("/econ/", "/econ/flow", "/econ/dashboard", "/econ/brief", "/econ/supply"):
-                with self.subTest(path=path):
-                    self.assertEqual(client.get(path, headers=headers).status_code, 200)
-            swaps = client.get("/econ/swaps?panel=A&view=cards", headers=headers)
-            self.assertEqual(swaps.status_code, 200)
-            self.assertIn("portfolio fit", swaps.get_data(as_text=True))
-        finally:
-            app_module.TRACKING_ENABLED = original_tracking
+        for path in ("/econ/", "/econ/flow", "/econ/dashboard", "/econ/brief", "/econ/supply"):
+            with self.subTest(path=path):
+                self.assertEqual(client.get(path, headers=headers).status_code, 200)
+        swaps = client.get("/econ/swaps?panel=A&view=cards", headers=headers)
+        self.assertEqual(swaps.status_code, 200)
+        self.assertIn("portfolio fit", swaps.get_data(as_text=True))
 
 
 if __name__ == "__main__":

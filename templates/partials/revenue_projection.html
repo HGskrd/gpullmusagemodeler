@@ -21,13 +21,13 @@
 
   <div class="compare-container">
     <div class="cp">
-      {% with ep=econ_payload(A), state=A, panel="A", label="Config A" if B else "" %}
+      {% with ep=ECON_A, state=A, panel="A", label="Config A" if B else "" %}
         {% include "partials/econ/section.html" %}
       {% endwith %}
     </div>
     {% if B %}
     <div class="cp">
-      {% with ep=econ_payload(B), state=B, panel="B", label="Config B" %}
+      {% with ep=ECON_B, state=B, panel="B", label="Config B" %}
         {% include "partials/econ/section.html" %}
       {% endwith %}
     </div>

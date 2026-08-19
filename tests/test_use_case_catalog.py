@@ -1,6 +1,8 @@
 import copy
 import unittest
 
+from app_factory import create_test_app
+
 import app as app_module
 from data import MODELS, PROJECT_PRESETS, effective_quality, required_quality
 from state import _normalize_use_case_def
@@ -79,8 +81,7 @@ class UseCaseCatalogTests(unittest.TestCase):
         self.assertEqual(app_module.use_case_detail_for(collision), {})
 
     def test_use_case_page_renders_evidence_and_new_presets(self):
-        app_module.app.config.update(TESTING=True)
-        response = app_module.app.test_client().get("/use-cases")
+        response = create_test_app().test_client().get("/use-cases")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Evidence &amp; assumptions", response.data)
         self.assertIn(b"Invoice &amp; claims extraction", response.data)

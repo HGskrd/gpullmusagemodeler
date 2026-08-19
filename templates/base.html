@@ -23,9 +23,9 @@
       {% include "partials/compare_controls.html" %}
     </div>
     <nav class="app-tabs" aria-label="Primary">
-      <a href="{{ url_for('index') }}" class="on">Calculator</a>
-      <a href="{{ url_for('explainer') }}" title="What this calculator does and how to use it">User guide</a>
-      <a href="{{ url_for('use_cases') }}" title="Detailed explanation of the built-in use-case presets">Use cases</a>
+      <a href="{{ url_for('planner.index') }}" class="on">Calculator</a>
+      <a href="{{ url_for('planner.explainer') }}" title="What this calculator does and how to use it">User guide</a>
+      <a href="{{ url_for('use_cases.use_cases') }}" title="Detailed explanation of the built-in use-case presets">Use cases</a>
     </nav>
   </div>
 </div>

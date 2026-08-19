@@ -3,6 +3,7 @@ import unittest
 import uuid
 from unittest.mock import patch
 
+from app_factory import create_test_app
 from characterization_support import (
     FIXTURE_DIR,
     canonical_json,
@@ -53,16 +54,11 @@ class GoldenOutputTests(unittest.TestCase):
 
 class PartialRenderSmokeTests(unittest.TestCase):
     def setUp(self):
-        self.original_tracking = app_module.TRACKING_ENABLED
-        app_module.TRACKING_ENABLED = False
-        app_module.app.config.update(TESTING=True)
-        self.client = app_module.app.test_client()
-
-    def tearDown(self):
-        app_module.TRACKING_ENABLED = self.original_tracking
+        self.app = create_test_app()
+        self.client = self.app.test_client()
 
     def test_every_partial_renders_through_a_flask_request(self):
-        environment = app_module.app.jinja_env
+        environment = self.app.jinja_env
         expected = {name for name in environment.list_templates() if name.startswith("partials/")}
         seen: set[str] = set()
         loader = environment.loader
@@ -75,7 +71,7 @@ class PartialRenderSmokeTests(unittest.TestCase):
         environment.cache.clear()
         tab_id = f"characterization-{uuid.uuid4().hex}"
         headers = {"X-Tab-ID": tab_id}
-        original_healthz = app_module.app.view_functions["healthz"]
+        original_healthz = self.app.view_functions["api.healthz"]
         with patch.object(loader, "get_source", side_effect=tracking_get_source):
             try:
                 responses = [
@@ -103,7 +99,7 @@ class PartialRenderSmokeTests(unittest.TestCase):
                         **app_module._template_context(),
                     )
 
-                app_module.app.view_functions["healthz"] = render_task_partial
+                self.app.view_functions["api.healthz"] = render_task_partial
                 environment.cache.clear()
                 responses.append(self.client.get("/healthz"))
 
@@ -119,11 +115,11 @@ class PartialRenderSmokeTests(unittest.TestCase):
                         **app_module._template_context(),
                     )
 
-                app_module.app.view_functions["healthz"] = render_distribution_partial
+                self.app.view_functions["api.healthz"] = render_distribution_partial
                 environment.cache.clear()
                 responses.append(self.client.get("/healthz"))
             finally:
-                app_module.app.view_functions["healthz"] = original_healthz
+                self.app.view_functions["api.healthz"] = original_healthz
 
         self.assertTrue(all(response.status_code == 200 for response in responses))
         self.assertTrue(expected <= seen, expected - seen)
