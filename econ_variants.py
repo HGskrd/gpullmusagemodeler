@@ -8,7 +8,7 @@ explorations; the same partials render inside the calculator via HTMX.
 
 import json
 
-from flask import Blueprint, abort, g, render_template, request
+from flask import Blueprint, abort, current_app, g, render_template, request
 
 import cloud_policy
 from data import quality_to_aa_intelligence
@@ -17,6 +17,7 @@ from engine.economics import (
     compute_revenue_projection,
 )
 from state import get_compare_state, get_state
+from web.cache import FingerprintCache, scenario_fingerprint
 
 econ_bp = Blueprint("econ", __name__, url_prefix="/econ")
 
@@ -254,10 +255,19 @@ def swaps():
     state = _scoped_state("B" if panel == "B" else "A")
     if state is None:
         return ""
-    p = compute_revenue_projection(state)
+    cache: FingerprintCache = current_app.extensions["swap_recommendation_cache"]
+    fingerprint = scenario_fingerprint(state)
+    cached = cache.get(fingerprint)
+    if cached is None:
+        p = compute_revenue_projection(state)
+        cached = cache.put(
+            fingerprint,
+            {"projection": p, "swap_recs": compute_swap_recs(state, p)},
+        )
+    p = cached["projection"]
     return render_template(
         "partials/econ/swaps.html",
-        swap_recs=compute_swap_recs(state, p),
+        swap_recs=cached["swap_recs"],
         gpu_recs=p["recommendations"],
         view=request.args.get("view", "table"),
         panel=panel,

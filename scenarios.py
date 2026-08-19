@@ -310,11 +310,16 @@ def _json_compatible(value: Any) -> Any:
 
 def serialize_scenario(state_a: PlannerState, state_b: Optional[PlannerState]) -> dict[str, Any]:
     """Return a versioned, complete A/B planner scenario."""
+    panel_a = _json_compatible(asdict(state_a))
+    panel_a.pop("revision", None)
+    panel_b = _json_compatible(asdict(state_b)) if state_b is not None else None
+    if panel_b is not None:
+        panel_b.pop("revision", None)
     return {
         "type": "gpullm-scenario",
         "version": 1,
-        "panel_a": _json_compatible(asdict(state_a)),
-        "panel_b": _json_compatible(asdict(state_b)) if state_b is not None else None,
+        "panel_a": panel_a,
+        "panel_b": panel_b,
     }
 
 
@@ -509,6 +514,9 @@ def deserialize_planner_state(payload: Any) -> PlannerState:
     # Ignore the legacy user-controlled panel rate and derive the portfolio
     # value from the imported use-case priors.
     _sync_aggregate_distribution(state)
+    # Construction/normalization writes are not user mutations. New imported
+    # state starts at zero; replace_scope_states advances it past the old state.
+    state.revision = 0
     return state
 
 

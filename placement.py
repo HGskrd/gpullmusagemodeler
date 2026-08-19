@@ -280,9 +280,19 @@ def _retune_model(state: PlannerState, am: ModelAssignment, preserve_existing: b
 
 
 def retune_models(state: PlannerState, preserve_existing: bool = True):
+    before = [
+        (am.uid, am.gpu_count, am.tp, am.pp, am.dp, am.prefill_tp, am.prefill_pp, am.prefill_dp)
+        for am in state.models
+    ]
     for am in state.models:
         if am.gpu_count > 0:
             _retune_model(state, am, preserve_existing=preserve_existing)
+    after = [
+        (am.uid, am.gpu_count, am.tp, am.pp, am.dp, am.prefill_tp, am.prefill_pp, am.prefill_dp)
+        for am in state.models
+    ]
+    if after != before:
+        state.touch()
 
 
 def _assignment_memories(state: PlannerState, am: ModelAssignment, gpu: GPU):

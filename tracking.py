@@ -40,7 +40,11 @@ def _json_dump(value) -> str:
 
 
 def _serialize_state(state: Optional[PlannerState]) -> Optional[dict]:
-    return asdict(state) if state is not None else None
+    if state is None:
+        return None
+    payload = asdict(state)
+    payload.pop("revision", None)
+    return payload
 
 
 def _gpu_summary(state: Optional[PlannerState]) -> str:

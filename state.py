@@ -10,8 +10,9 @@ import threading
 import time
 import weakref
 from dataclasses import dataclass, field
+from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Concatenate, Optional, ParamSpec, TypeVar
 
 import cloud_policy
 from calc import (
@@ -412,6 +413,25 @@ class PlannerState:
     projection_night_discount: float = 0.30
     projection_batch_eligible: float = 0.35
     projection_elasticity: float = 2.0
+    # Monotonic process-local version used to invalidate derived presentation
+    # caches. It is intentionally omitted from exported scenario JSON.
+    revision: int = field(default=0, compare=False)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Bump the revision when a public top-level setting actually changes."""
+        if name == "revision" or name.startswith("_") or not hasattr(self, "revision"):
+            object.__setattr__(self, name, value)
+            return
+        previous = getattr(self, name, None)
+        object.__setattr__(self, name, value)
+        if previous != value:
+            self.touch()
+
+    def touch(self) -> int:
+        """Invalidate values derived from nested/list state mutations."""
+        next_revision = int(getattr(self, "revision", 0)) + 1
+        object.__setattr__(self, "revision", next_revision)
+        return next_revision
 
     def __post_init__(self):
         self.mode = normalize_plot_mode(self.mode)
@@ -497,6 +517,28 @@ class PlannerState:
 
     def find_project(self, uid: int) -> Optional[Project]:
         return next((p for p in self.projects if p.uid == uid), None)
+
+
+_MutationArgs = ParamSpec("_MutationArgs")
+_MutationResult = TypeVar("_MutationResult")
+
+
+def bumps_revision(
+    function: Callable[Concatenate[PlannerState, _MutationArgs], _MutationResult],
+) -> Callable[Concatenate[PlannerState, _MutationArgs], _MutationResult]:
+    """Ensure mutators of nested dataclasses and lists invalidate state caches."""
+
+    @wraps(function)
+    def wrapped(
+        state: PlannerState, *args: _MutationArgs.args, **kwargs: _MutationArgs.kwargs
+    ) -> _MutationResult:
+        before = state.revision
+        result = function(state, *args, **kwargs)
+        if state.revision == before:
+            state.touch()
+        return result
+
+    return wrapped
 
 
 DEFAULT_SCENARIO_PATH = Path(__file__).with_name("default_scenario.json")
@@ -920,6 +962,7 @@ def _add_project_from_preset(state: PlannerState, preset_key: str) -> Optional[P
     return proj
 
 
+@bumps_revision
 def add_project(state: PlannerState, preset_key: Optional[str] = None) -> Project:
     if preset_key:
         proj = _add_project_from_preset(state, preset_key)
@@ -953,6 +996,7 @@ def add_project(state: PlannerState, preset_key: Optional[str] = None) -> Projec
     return proj
 
 
+@bumps_revision
 def set_project_kind(state: PlannerState, project_uid: int, kind_key: str):
     proj = state.find_project(project_uid)
     if proj is None:
@@ -967,11 +1011,13 @@ def set_project_kind(state: PlannerState, project_uid: int, kind_key: str):
     _sync_aggregate_distribution(state)
 
 
+@bumps_revision
 def remove_project(state: PlannerState, project_uid: int):
     state.projects = [p for p in state.projects if p.uid != project_uid]
     _sync_aggregate_distribution(state)
 
 
+@bumps_revision
 def set_project_field(state: PlannerState, project_uid: int, field_name: str, value: float):
     proj = state.find_project(project_uid)
     if proj is None:
@@ -989,6 +1035,7 @@ def set_project_field(state: PlannerState, project_uid: int, field_name: str, va
         _sync_aggregate_distribution(state)
 
 
+@bumps_revision
 def set_project_scale_value(state: PlannerState, project_uid: int, value: float):
     proj = state.find_project(project_uid)
     if proj is None:
@@ -1005,6 +1052,7 @@ def set_project_scale_value(state: PlannerState, project_uid: int, value: float)
     _sync_aggregate_distribution(state)
 
 
+@bumps_revision
 def set_project_dist_preset(state: PlannerState, project_uid: int, kind: str, preset_key: str):
     proj = state.find_project(project_uid)
     if proj is None or preset_key not in DIST_PRESETS:
@@ -1061,6 +1109,7 @@ def _sync_aggregate_distribution(state: "PlannerState"):
     state.prefix_hit_rate = prefix_weighted / prompt_tokens if prompt_tokens > 0 else 0.0
 
 
+@bumps_revision
 def set_project_name(state: PlannerState, project_uid: int, name: str):
     proj = state.find_project(project_uid)
     if proj is None:
@@ -1068,6 +1117,7 @@ def set_project_name(state: PlannerState, project_uid: int, name: str):
     proj.name = (name or "").strip()[:60] or proj.name
 
 
+@bumps_revision
 def set_project_batch_eligible(state: PlannerState, project_uid: int, value: bool):
     proj = state.find_project(project_uid)
     if proj is None:
@@ -1075,6 +1125,7 @@ def set_project_batch_eligible(state: PlannerState, project_uid: int, value: boo
     proj.batch_eligible = bool(value)
 
 
+@bumps_revision
 def set_project_capability(state: PlannerState, project_uid: int, capability: str, required: bool):
     proj = state.find_project(project_uid)
     if proj is None or capability not in ALLOWED_CAPABILITIES:
@@ -1097,6 +1148,7 @@ def _sync_projects_from_use_case_defs(state: PlannerState):
     _sync_aggregate_distribution(state)
 
 
+@bumps_revision
 def add_use_case_def(state: PlannerState) -> dict[str, Any]:
     key = _unique_use_case_key(state, "new_use_case")
     item = _normalize_use_case_def(
@@ -1129,6 +1181,7 @@ def add_use_case_def(state: PlannerState) -> dict[str, Any]:
     return item
 
 
+@bumps_revision
 def remove_use_case_def(state: PlannerState, key: str):
     get_use_case_defs(state)
     state.use_case_defs = [d for d in state.use_case_defs if d["key"] != key]
@@ -1165,6 +1218,7 @@ def _set_use_case_scale_kind_field(item: dict[str, Any], field_name: str, value:
     )
 
 
+@bumps_revision
 def set_use_case_def_field(state: PlannerState, key: str, field_name: str, value: Any):
     item = _find_use_case_def(state, key)
     if item is None:
@@ -1234,6 +1288,7 @@ def set_use_case_def_field(state: PlannerState, key: str, field_name: str, value
     _sync_projects_from_use_case_defs(state)
 
 
+@bumps_revision
 def set_use_case_def_capability(state: PlannerState, key: str, capability: str, required: bool):
     item = _find_use_case_def(state, key)
     if item is None or capability not in ALLOWED_CAPABILITIES:
@@ -1322,6 +1377,7 @@ def normalize_projects(state: PlannerState):
     _sync_aggregate_distribution(state)
 
 
+@bumps_revision
 def add_gpu(state: PlannerState, gpu_type: str, count: int = 8):
     count = normalize_gpu_count(gpu_type, count)
     existing = next((g for g in state.gpus if g.gpu_type == gpu_type), None)
@@ -1338,11 +1394,13 @@ def add_gpu(state: PlannerState, gpu_type: str, count: int = 8):
         )
 
 
+@bumps_revision
 def remove_gpu(state: PlannerState, gpu_uid: int):
     state.models = [m for m in state.models if m.gpu_uid != gpu_uid]
     state.gpus = [g for g in state.gpus if g.uid != gpu_uid]
 
 
+@bumps_revision
 def change_gpu_qty(state: PlannerState, gpu_uid: int, delta: int) -> list[ModelAssignment]:
     gp = state.find_gpu(gpu_uid)
     if gp is None:
@@ -1368,6 +1426,7 @@ def change_gpu_qty(state: PlannerState, gpu_uid: int, delta: int) -> list[ModelA
     return changed
 
 
+@bumps_revision
 def add_model_assignment(
     state: PlannerState,
     model_key: str,
@@ -1382,6 +1441,7 @@ def add_model_assignment(
     return am
 
 
+@bumps_revision
 def auto_exclude_model(state: PlannerState, model_uid: int):
     am = state.find_model(model_uid)
     if am is None:
@@ -1393,16 +1453,19 @@ def auto_exclude_model(state: PlannerState, model_uid: int):
     state.auto_excluded.append(model_key)
 
 
+@bumps_revision
 def auto_reallow_model(state: PlannerState, model_key: str):
     if model_key not in state.auto_excluded:
         return
     state.auto_excluded = [k for k in state.auto_excluded if k != model_key]
 
 
+@bumps_revision
 def remove_model(state: PlannerState, model_uid: int):
     state.models = [m for m in state.models if m.uid != model_uid]
 
 
+@bumps_revision
 def set_model_prec(state: PlannerState, model_uid: int, prec: str):
     am = state.find_model(model_uid)
     if am is None:
@@ -1411,6 +1474,7 @@ def set_model_prec(state: PlannerState, model_uid: int, prec: str):
     return am
 
 
+@bumps_revision
 def set_model_spec(state: PlannerState, model_uid: int, method: str, spec_k: int):
     am = state.find_model(model_uid)
     if am is None:
@@ -1472,6 +1536,7 @@ def set_model_spec(state: PlannerState, model_uid: int, method: str, spec_k: int
     return am
 
 
+@bumps_revision
 def set_model_gpu_count(state: PlannerState, model_uid: int, count: int):
     am = state.find_model(model_uid)
     if am is None:
@@ -1488,6 +1553,7 @@ def set_model_gpu_count(state: PlannerState, model_uid: int, count: int):
     return am
 
 
+@bumps_revision
 def set_model_strat(
     state: PlannerState, model_uid: int, tp: int, pp: int, dp: int, phase: str = "decode"
 ):
@@ -1539,6 +1605,7 @@ def set_model_strat(
         am.dp = dp
 
 
+@bumps_revision
 def set_model_gpu_pool(state: PlannerState, model_uid: int, gpu_uid: int):
     am = state.find_model(model_uid)
     if am is None:
@@ -1551,6 +1618,7 @@ def set_model_gpu_pool(state: PlannerState, model_uid: int, gpu_uid: int):
     return am
 
 
+@bumps_revision
 def set_dist_preset(state: PlannerState, kind: str, preset_key: str):
     if kind == "embedding_doc":
         preset = EMBEDDING_DOC_PRESETS.get(preset_key)
@@ -1573,6 +1641,7 @@ def set_dist_preset(state: PlannerState, kind: str, preset_key: str):
         state.out_pre = preset_key
 
 
+@bumps_revision
 def set_dist_value(state: PlannerState, kind: str, index: int, value: int):
     value = min(max(int(value), 0), 1_000_000)
     if kind == "embedding_doc":
@@ -1591,10 +1660,12 @@ def set_dist_value(state: PlannerState, kind: str, index: int, value: int):
         state.out_pre = ""
 
 
+@bumps_revision
 def set_spec_acceptance(state: PlannerState, value: float):
     state.spec_acceptance = min(max(value, 0.0), 0.99)
 
 
+@bumps_revision
 def set_projection_choice(state: PlannerState, key: str, value: str):
     if key == "projection_day_shape":
         state.projection_day_shape = normalize_day_shape(value)
@@ -1602,6 +1673,7 @@ def set_projection_choice(state: PlannerState, key: str, value: str):
         state.corpo_cloud = normalize_corpo_cloud(value)
 
 
+@bumps_revision
 def set_projection_pct(state: PlannerState, key: str, value: float):
     bounds = PROJECTION_PCT_BOUNDS.get(key)
     if not bounds:
@@ -1610,11 +1682,13 @@ def set_projection_pct(state: PlannerState, key: str, value: float):
     setattr(state, key, min(max(value, lo), hi))
 
 
+@bumps_revision
 def set_projection_toggle(state: PlannerState, key: str, value: bool):
     if key == "projection_night_batching":
         state.projection_night_batching = bool(value)
 
 
+@bumps_revision
 def set_gpu_cost(state: PlannerState, gpu_uid: int, cost: float):
     gp = state.find_gpu(gpu_uid)
     if gp is None:
@@ -1677,7 +1751,14 @@ def _prune_states_locked(now: float, preserve: Optional[str] = None) -> None:
 
 def reset_state(session_id: str, *, blank: bool = False) -> PlannerState:
     with _state_guard:
+        previous_revision = max(
+            getattr(_states.get(session_id), "revision", -1),
+            getattr(_compare_states.get(session_id), "revision", -1),
+        )
         state, compare = (PlannerState(), None) if blank else create_default_scenario()
+        state.revision = max(state.revision, previous_revision + 1)
+        if compare is not None:
+            compare.revision = max(compare.revision, previous_revision + 1)
         _states[session_id] = state
         if compare is None:
             _compare_states.pop(session_id, None)
@@ -1746,6 +1827,7 @@ def duplicate_compare_state(session_id: str) -> PlannerState:
     # Clone the current primary configuration so panel B starts from panel A.
     with _state_guard:
         _compare_states[session_id] = copy.deepcopy(get_state(session_id))
+        _compare_states[session_id].touch()
         _state_last_seen[session_id] = time.monotonic()
         return _compare_states[session_id]
 
@@ -1759,6 +1841,14 @@ def replace_scope_states(
     session_id: str, state_a: PlannerState, state_b: Optional[PlannerState]
 ) -> None:
     with _state_guard:
+        previous_revision = max(
+            getattr(_states.get(session_id), "revision", -1),
+            getattr(_compare_states.get(session_id), "revision", -1),
+        )
+        next_revision = previous_revision + 1
+        state_a.revision = max(state_a.revision, next_revision)
+        if state_b is not None:
+            state_b.revision = max(state_b.revision, next_revision)
         _states[session_id] = state_a
         if state_b is None:
             _compare_states.pop(session_id, None)

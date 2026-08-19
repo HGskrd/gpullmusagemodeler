@@ -159,6 +159,7 @@ from viewmodels import (
 )
 from web.admin import admin_bp
 from web.api import api_bp
+from web.cache import FingerprintCache, ScopedRevisionCache, combined_revision
 from web.middleware import (
     VISITOR_COOKIE,
     _scope_id,
@@ -1635,10 +1636,7 @@ def _annotate_chart_spec(state: PlannerState, datasets: list[dict]) -> list[dict
     return datasets
 
 
-@api_bp.route("/api/chart-data")
-def chart_data():
-    sa = get_state(_scope_id())
-    sb = get_compare_state(_scope_id())
+def _build_chart_payload(sa: PlannerState, sb: PlannerState | None) -> dict:
     mode = sa.mode
     states = [sa] + ([sb] if sb else [])
     deployments = [resolve_deployment(state) for state in states]
@@ -1648,37 +1646,31 @@ def chart_data():
         datasets = _annotate_chart_spec(sa, chart_processing_pareto(sa, batch_sizes))
         if sb:
             datasets += _annotate_chart_spec(sb, chart_processing_pareto(sb, batch_sizes, " (B)"))
-        return jsonify(
-            {"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]}
-        )
+        return {"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]}
 
     if mode == "asrquality":
         datasets = chart_asr_quality(sa)
         if sb:
             datasets += chart_asr_quality(sb, " (B)")
-        return jsonify({"type": "scatter", "datasets": datasets, "mode": mode})
+        return {"type": "scatter", "datasets": datasets, "mode": mode}
 
     if mode == "realtime":
         batch_sizes = get_realtime_bs(states, deployments=deployments)
         datasets = chart_realtime_capacity(sa, batch_sizes)
         if sb:
             datasets += chart_realtime_capacity(sb, batch_sizes, " (B)")
-        return jsonify(
-            {"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]}
-        )
+        return {"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]}
 
     if mode == "embedquality":
         datasets = chart_embedding_quality(sa)
         if sb:
             datasets += chart_embedding_quality(sb, " (B)")
-        return jsonify(
-            {
-                "type": "scatter",
-                "datasets": datasets,
-                "mode": mode,
-                **embedding_quality_axis_range(datasets),
-            }
-        )
+        return {
+            "type": "scatter",
+            "datasets": datasets,
+            "mode": mode,
+            **embedding_quality_axis_range(datasets),
+        }
 
     batch_sizes = get_decode_bs(states, deployments=deployments)
     datasets = _annotate_chart_spec(
@@ -1689,7 +1681,27 @@ def chart_data():
             sb,
             chart_user_pareto(sb, batch_sizes, " (B)", deployment=deployments[1]),
         )
-    return jsonify({"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]})
+    return {"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]}
+
+
+@api_bp.route("/api/chart-data")
+def chart_data():
+    scope_id = _scope_id()
+    sa = get_state(scope_id)
+    sb = get_compare_state(scope_id)
+    cache_key = (combined_revision(sa, sb), "AB", sa.mode)
+    cache: ScopedRevisionCache = current_app.extensions["chart_json_cache"]
+    cached = cache.get(scope_id, cache_key)
+    if cached is None:
+        response = jsonify(_build_chart_payload(sa, sb))
+        cached = cache.put(scope_id, cache_key, response.get_data())
+    else:
+        response = current_app.response_class(cached.body, mimetype="application/json")
+    # A weak validator is correct for both identity and middleware-gzipped
+    # representations of the same JSON payload.
+    response.set_etag(cached.etag, weak=True)
+    response.make_conditional(request)
+    return response
 
 
 @api_bp.route("/api/projection-report")
@@ -1917,6 +1929,8 @@ def create_app(config: dict | None = None) -> Flask:
         REQUEST_RATE_LIMIT=REQUEST_RATE_LIMIT,
         ADMIN_LOGIN_RATE_LIMIT=ADMIN_LOGIN_RATE_LIMIT,
         RATE_LIMIT_MAX_IDENTITIES=RATE_LIMIT_MAX_IDENTITIES,
+        CHART_CACHE_MAX_SCOPES=_env_positive_int("PLANNER_CHART_CACHE_MAX_SCOPES", 5000),
+        SWAP_CACHE_MAX_ENTRIES=_env_positive_int("PLANNER_SWAP_CACHE_MAX_ENTRIES", 256),
     )
     if config:
         application.config.update(config)
@@ -1924,6 +1938,12 @@ def create_app(config: dict | None = None) -> Flask:
     application.secret_key = explicit_secret or secrets.token_urlsafe(48)
     application.extensions["snapshot_store"] = application.config.get(
         "SNAPSHOT_STORE", SNAPSHOT_STORE
+    )
+    application.extensions["chart_json_cache"] = ScopedRevisionCache(
+        max_scopes=application.config["CHART_CACHE_MAX_SCOPES"]
+    )
+    application.extensions["swap_recommendation_cache"] = FingerprintCache(
+        max_entries=application.config["SWAP_CACHE_MAX_ENTRIES"]
     )
     if explicit_secret:
         application.config["PLANNER_SECRET_CONFIGURED"] = True
