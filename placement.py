@@ -5,18 +5,6 @@ from __future__ import annotations
 import math
 from typing import Optional
 
-from data import (
-    EMBEDDING_DOC_BUCKETS,
-    INPUT_BUCKETS,
-    MODELS,
-    PRECISIONS,
-    GPU,
-    Model,
-    effective_quality,
-    model_profile_quality,
-    model_profile_success_rate,
-    required_quality,
-)
 from calc import (
     avg_dist,
     compute_decode,
@@ -27,6 +15,18 @@ from calc import (
     effective_prefill_length,
     resolve_spec_runtime,
     valid_strategies,
+)
+from data import (
+    EMBEDDING_DOC_BUCKETS,
+    GPU,
+    INPUT_BUCKETS,
+    MODELS,
+    PRECISIONS,
+    Model,
+    effective_quality,
+    model_profile_quality,
+    model_profile_success_rate,
+    required_quality,
 )
 from state import (
     DEFAULT_AUTO_MODEL_STRATEGY,
@@ -93,16 +93,27 @@ def _probe_batch_sizes(dp: int) -> list[int]:
     return sorted(values)
 
 
-def _preferred_strategy(state: PlannerState, am: ModelAssignment, gpu: GPU, phase: str) -> tuple[int, int, int]:
+def _preferred_strategy(
+    state: PlannerState, am: ModelAssignment, gpu: GPU, phase: str
+) -> tuple[int, int, int]:
     model = MODELS[am.model_key]
     spec = resolve_spec_runtime(model, am.spec_method, am.spec_k, state.spec_acceptance, am.prec)
-    candidates = valid_strategies(model, am.gpu_count, gpu, state.mu, state.profiled_non_kv_gb, am.prec, spec)
+    candidates = valid_strategies(
+        model, am.gpu_count, gpu, state.mu, state.profiled_non_kv_gb, am.prec, spec
+    )
     if not candidates:
-        return default_strategy(model, am.gpu_count, gpu, state.mu, state.profiled_non_kv_gb, am.prec, spec)
+        return default_strategy(
+            model, am.gpu_count, gpu, state.mu, state.profiled_non_kv_gb, am.prec, spec
+        )
 
     best = candidates[0]
-    best_score = None
-    probe_prefill_len = max(1, effective_prefill_length(max(state.task_il, avg_dist(state.in_dist, INPUT_BUCKETS)), state.prefix_hit_rate))
+    best_score: tuple[float, ...] | None = None
+    probe_prefill_len = max(
+        1,
+        effective_prefill_length(
+            max(state.task_il, avg_dist(state.in_dist, INPUT_BUCKETS)), state.prefix_hit_rate
+        ),
+    )
     is_embedding = getattr(model, "embedding_profile", None) is not None
     for tp, pp, dp in candidates:
         mem = compute_memory(
@@ -123,7 +134,7 @@ def _preferred_strategy(state: PlannerState, am: ModelAssignment, gpu: GPU, phas
 
         for bs in _probe_batch_sizes(dp):
             if is_embedding:
-                result = compute_embedding_distribution(
+                embedding_result = compute_embedding_distribution(
                     model,
                     (tp, pp, dp),
                     bs,
@@ -135,11 +146,11 @@ def _preferred_strategy(state: PlannerState, am: ModelAssignment, gpu: GPU, phas
                     am.prec,
                     state.prefill_efficiency,
                 )
-                if result is None:
+                if embedding_result is None:
                     continue
-                metric = (result.tps, result.rps)
+                metric = (embedding_result.tps, embedding_result.rps)
             elif phase == "prefill":
-                result = compute_prefill(
+                prefill_result = compute_prefill(
                     model,
                     tp,
                     pp,
@@ -153,11 +164,11 @@ def _preferred_strategy(state: PlannerState, am: ModelAssignment, gpu: GPU, phas
                     state.prefill_efficiency,
                     spec,
                 )
-                if result is None:
+                if prefill_result is None:
                     continue
-                metric = (result.tps, result.rps)
+                metric = (prefill_result.tps, prefill_result.rps)
             else:
-                result = compute_decode(
+                decode_result = compute_decode(
                     model,
                     tp,
                     pp,
@@ -172,16 +183,16 @@ def _preferred_strategy(state: PlannerState, am: ModelAssignment, gpu: GPU, phas
                     state.decode_efficiency,
                     spec,
                 )
-                if result is None:
+                if decode_result is None:
                     continue
-                metric = (result.tps, -result.lat)
+                metric = (decode_result.tps, -decode_result.lat)
 
             if metric[0] > peak_tps or (metric[0] == peak_tps and metric[1] > aux):
                 peak_tps = metric[0]
                 aux = metric[1]
 
         if peak_tps < 0:
-            score = (local_tp, min(tp, gpu.node_size), dp, -pp, kv_headroom)
+            score: tuple[float, ...] = (local_tp, min(tp, gpu.node_size), dp, -pp, kv_headroom)
         else:
             score = (peak_tps, aux, local_tp, min(tp, gpu.node_size), dp, -pp, kv_headroom)
 
@@ -260,10 +271,11 @@ def _retune_model(state: PlannerState, am: ModelAssignment, preserve_existing: b
         am.prec,
         spec,
     )
-    if (
-        (am.prefill_tp, am.prefill_pp, am.prefill_dp) not in prefill_valid
-        or (am.prefill_tp, am.prefill_pp, am.prefill_dp) != (am.tp, am.pp, am.dp)
-    ):
+    if (am.prefill_tp, am.prefill_pp, am.prefill_dp) not in prefill_valid or (
+        am.prefill_tp,
+        am.prefill_pp,
+        am.prefill_dp,
+    ) != (am.tp, am.pp, am.dp):
         am.prefill_tp, am.prefill_pp, am.prefill_dp = am.tp, am.pp, am.dp
 
 
@@ -320,36 +332,49 @@ def get_deployed(state: PlannerState, phase: str = "decode") -> list[ModelAssign
 
 
 def _model_serves_project(model: Model, project: Project) -> bool:
-    if getattr(model, "is_realtime_only", False) or getattr(model, "embedding_profile", None) is not None:
+    if (
+        getattr(model, "is_realtime_only", False)
+        or getattr(model, "embedding_profile", None) is not None
+    ):
         return False
     domain = getattr(project, "quality_domain", "general")
     weights = getattr(project, "quality_weights", None)
     return (
         project.requires <= model.capabilities
-        and model_profile_quality(model, weights, domain) + 1e-9 >= float(getattr(project, "quality_floor", 0.0))
-        and model_profile_success_rate(model, project.difficulty, weights, domain) + 1e-9 >= project.min_success_rate
+        and model_profile_quality(model, weights, domain) + 1e-9
+        >= float(getattr(project, "quality_floor", 0.0))
+        and model_profile_success_rate(model, project.difficulty, weights, domain) + 1e-9
+        >= project.min_success_rate
     )
 
 
 def _active_project_demand(project: Project) -> float:
-    return max(0.0, float(project.tokens_day or 0.0)) + 0.25 * max(0.0, float(project.latent_jobs_day or 0.0))
+    return max(0.0, float(project.tokens_day or 0.0)) + 0.25 * max(
+        0.0, float(project.latent_jobs_day or 0.0)
+    )
 
 
-def _best_available_placement(state: PlannerState, model: Model) -> Optional[tuple[GpuPool, int, str]]:
+def _best_available_placement(
+    state: PlannerState, model: Model
+) -> Optional[tuple[GpuPool, int, str]]:
     placements: list[tuple[tuple[int, int, float, int, int, int], GpuPool, str]] = []
     for pool_order, gp in enumerate(state.gpus):
         avail = state.free_gpu_for_pool(gp.uid)
         if avail <= 0:
             continue
         for prec in PRECISIONS:
-            need = _min_gpu_count_for_pool(model, gp.gpu, state.mu, state.profiled_non_kv_gb, prec, avail)
+            need = _min_gpu_count_for_pool(
+                model, gp.gpu, state.mu, state.profiled_non_kv_gb, prec, avail
+            )
             if math.isinf(need):
                 continue
-            placements.append((
-                (int(need), PRECISIONS.index(prec), -gp.gpu.mem, -avail, gp.uid, pool_order),
-                gp,
-                prec,
-            ))
+            placements.append(
+                (
+                    (int(need), PRECISIONS.index(prec), -gp.gpu.mem, -avail, gp.uid, pool_order),
+                    gp,
+                    prec,
+                )
+            )
     if not placements:
         return None
     key, gp, prec = min(placements, key=lambda placement: placement[0])
@@ -368,7 +393,9 @@ def _best_available_placement_on_pool(
 
     placements: list[tuple[int, int, str]] = []
     for prec in PRECISIONS:
-        need = _min_gpu_count_for_pool(model, gp.gpu, state.mu, state.profiled_non_kv_gb, prec, avail)
+        need = _min_gpu_count_for_pool(
+            model, gp.gpu, state.mu, state.profiled_non_kv_gb, prec, avail
+        )
         if not math.isinf(need):
             placements.append((int(need), PRECISIONS.index(prec), prec))
     if not placements:
@@ -380,7 +407,11 @@ def _best_available_placement_on_pool(
 
 def _auto_assignment_demand(state: PlannerState, am: ModelAssignment) -> float:
     model = MODELS[am.model_key]
-    demand = sum(_active_project_demand(project) for project in state.projects if _model_serves_project(model, project))
+    demand = sum(
+        _active_project_demand(project)
+        for project in state.projects
+        if _model_serves_project(model, project)
+    )
     return demand or model.quality * 1e6
 
 
@@ -412,15 +443,19 @@ def _auto_weighted_success(model: Model, projects: list[Project]) -> float:
     total = sum(_active_project_demand(project) for project in served)
     if total <= 0:
         return 0.0
-    return sum(
-        _active_project_demand(project) * model_profile_success_rate(
-            model,
-            project.difficulty,
-            getattr(project, "quality_weights", None),
-            getattr(project, "quality_domain", "general"),
+    return (
+        sum(
+            _active_project_demand(project)
+            * model_profile_success_rate(
+                model,
+                project.difficulty,
+                getattr(project, "quality_weights", None),
+                getattr(project, "quality_domain", "general"),
+            )
+            for project in served
         )
-        for project in served
-    ) / total
+        / total
+    )
 
 
 def _auto_quality_margin(model: Model, projects: list[Project]) -> float:
@@ -433,13 +468,16 @@ def _auto_quality_margin(model: Model, projects: list[Project]) -> float:
             project.difficulty,
             getattr(project, "quality_weights", None),
             getattr(project, "quality_domain", "general"),
-        ) - float(project.min_success_rate)
+        )
+        - float(project.min_success_rate)
         for project in served
     )
 
 
 def _auto_covered_demand(model: Model, projects: list[Project]) -> float:
-    return sum(_active_project_demand(project) for project in _auto_served_projects(model, projects))
+    return sum(
+        _active_project_demand(project) for project in _auto_served_projects(model, projects)
+    )
 
 
 def _auto_portfolio_quality(model: Model, projects: list[Project]) -> float:
@@ -574,11 +612,13 @@ def _seed_empty_auto_pools(state: PlannerState, projects: list[Project], strateg
             if placement is None:
                 continue
             gpu_count, prec = placement
-            candidates.append((
-                _auto_candidate_key(model, projects, gpu_count, prec, strategy),
-                model,
-                prec,
-            ))
+            candidates.append(
+                (
+                    _auto_candidate_key(model, projects, gpu_count, prec, strategy),
+                    model,
+                    prec,
+                )
+            )
 
         if not candidates:
             continue
@@ -594,7 +634,9 @@ def _seed_empty_auto_pools(state: PlannerState, projects: list[Project], strateg
 def _auto_assignment_growth_key(state: PlannerState, am: ModelAssignment, strategy: str) -> tuple:
     model = MODELS[am.model_key]
     demand = _auto_assignment_demand(state, am)
-    served_projects = [project for project in state.projects if _model_serves_project(model, project)]
+    served_projects = [
+        project for project in state.projects if _model_serves_project(model, project)
+    ]
     if strategy == "coverage":
         return (-len(served_projects), -demand, am.gpu_count, am.uid)
     if strategy == "quality":
@@ -614,8 +656,12 @@ def _grow_auto_assignments(state: PlannerState, strategy: str):
             for am in candidates:
                 next_count = am.gpu_count + 1
                 model = MODELS[am.model_key]
-                spec = resolve_spec_runtime(model, am.spec_method, am.spec_k, state.spec_acceptance, am.prec)
-                if not valid_strategies(model, next_count, gp.gpu, state.mu, state.profiled_non_kv_gb, am.prec, spec):
+                spec = resolve_spec_runtime(
+                    model, am.spec_method, am.spec_k, state.spec_acceptance, am.prec
+                )
+                if not valid_strategies(
+                    model, next_count, gp.gpu, state.mu, state.profiled_non_kv_gb, am.prec, spec
+                ):
                     continue
                 am.gpu_count = next_count
                 _retune_model(state, am)
@@ -629,23 +675,55 @@ def auto_select_models(state: PlannerState, strategy: Optional[str] = None):
     if not state.gpus:
         raise ValueError("Add a GPU pool before auto-selecting models.")
 
-    strategy = normalize_auto_strategy(strategy or getattr(state, "auto_strategy", DEFAULT_AUTO_MODEL_STRATEGY))
+    strategy = normalize_auto_strategy(
+        strategy or getattr(state, "auto_strategy", DEFAULT_AUTO_MODEL_STRATEGY)
+    )
     state.auto_strategy = strategy
     original_models = list(state.models)
     state.models = []
     projects = [project for project in state.projects if _active_project_demand(project) > 0]
     if not projects:
         projects = [
-            Project(_next_uid(), "Balanced chat", 0.30, 1.0, 1.0, min_success_rate=0.90, quality_floor=0.55),
-            Project(_next_uid(), "Coding / reasoning", 0.55, 1.0, 4.0, requires=frozenset({"tools", "ctx_128k"}), min_success_rate=0.85, quality_floor=0.70),
-            Project(_next_uid(), "Frontier reasoning", 0.90, 1.0, 20.0, requires=frozenset({"tools", "reasoning"}), min_success_rate=0.95, quality_floor=0.90),
+            Project(
+                _next_uid(),
+                "Balanced chat",
+                0.30,
+                1.0,
+                1.0,
+                min_success_rate=0.90,
+                quality_floor=0.55,
+            ),
+            Project(
+                _next_uid(),
+                "Coding / reasoning",
+                0.55,
+                1.0,
+                4.0,
+                requires=frozenset({"tools", "ctx_128k"}),
+                min_success_rate=0.85,
+                quality_floor=0.70,
+            ),
+            Project(
+                _next_uid(),
+                "Frontier reasoning",
+                0.90,
+                1.0,
+                20.0,
+                requires=frozenset({"tools", "reasoning"}),
+                min_success_rate=0.95,
+                quality_floor=0.90,
+            ),
         ]
 
     selected_keys: set[str] = set()
     ordered_projects = sorted(
         projects,
         key=lambda project: (
-            -required_quality(project.difficulty, project.min_success_rate, quality_floor=getattr(project, "quality_floor", 0.0)),
+            -required_quality(
+                project.difficulty,
+                project.min_success_rate,
+                quality_floor=getattr(project, "quality_floor", 0.0),
+            ),
             -_active_project_demand(project),
             -len(project.requires),
         ),
@@ -658,17 +736,30 @@ def auto_select_models(state: PlannerState, strategy: Optional[str] = None):
             continue
         candidates = []
         for model in MODELS.values():
-            if model.hidden or model.key in selected_keys or model.key in state.auto_excluded or not _model_serves_project(model, project):
+            if (
+                model.hidden
+                or model.key in selected_keys
+                or model.key in state.auto_excluded
+                or not _model_serves_project(model, project)
+            ):
                 continue
             placement = _best_available_placement(state, model)
             if placement is None:
                 continue
             _, gpu_count, prec = placement
-            candidates.append((
-                _auto_candidate_key(model, projects if strategy == "coverage" else [project], gpu_count, prec, strategy),
-                model,
-                placement,
-            ))
+            candidates.append(
+                (
+                    _auto_candidate_key(
+                        model,
+                        projects if strategy == "coverage" else [project],
+                        gpu_count,
+                        prec,
+                        strategy,
+                    ),
+                    model,
+                    placement,
+                )
+            )
         if not candidates:
             continue
 

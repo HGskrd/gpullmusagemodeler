@@ -50,7 +50,12 @@ _POLICY: CloudPolicy | None = None
 
 
 def _validate_price(key: str, field_name: str, value) -> float:
-    if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value) or value < 0:
+    if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not math.isfinite(value)
+        or value < 0
+    ):
         raise ValueError(
             f"cloud policy: price override {key}.{field_name} must be a finite number >= 0, got {value!r}"
         )
@@ -71,9 +76,13 @@ def validate_policy(raw: dict) -> CloudPolicy:
             raise ValueError("cloud policy: allowed_models must be a list of model keys")
         unknown = sorted(set(allowed) - set(CLOUD_MODELS))
         if unknown:
-            raise ValueError(f"cloud policy: allowed_models references unknown catalog keys {unknown}")
+            raise ValueError(
+                f"cloud policy: allowed_models references unknown catalog keys {unknown}"
+            )
         if not allowed:
-            raise ValueError("cloud policy: allowed_models is empty; omit it to allow the whole catalog")
+            raise ValueError(
+                "cloud policy: allowed_models is empty; omit it to allow the whole catalog"
+            )
         allowed = frozenset(allowed)
 
     raw_overrides = raw.get("price_overrides")
@@ -111,15 +120,29 @@ def validate_policy(raw: dict) -> CloudPolicy:
         if not isinstance(preset_key, str) or not preset_key.strip():
             raise ValueError("cloud policy: corpo preset keys must be non-empty strings")
         if preset_key in CORPO_CLOUD_PRESETS:
-            raise ValueError(f"cloud policy: corpo preset {preset_key!r} collides with a built-in preset")
-        if not isinstance(preset, dict) or not isinstance(preset.get("label"), str) or not preset["label"].strip():
+            raise ValueError(
+                f"cloud policy: corpo preset {preset_key!r} collides with a built-in preset"
+            )
+        if (
+            not isinstance(preset, dict)
+            or not isinstance(preset.get("label"), str)
+            or not preset["label"].strip()
+        ):
             raise ValueError(f"cloud policy: corpo preset {preset_key!r} needs a non-empty label")
         models = preset.get("models")
-        if not isinstance(models, list) or not models or not all(isinstance(k, str) for k in models):
-            raise ValueError(f"cloud policy: corpo preset {preset_key!r} needs a non-empty models list")
+        if (
+            not isinstance(models, list)
+            or not models
+            or not all(isinstance(k, str) for k in models)
+        ):
+            raise ValueError(
+                f"cloud policy: corpo preset {preset_key!r} needs a non-empty models list"
+            )
         unknown = sorted(set(models) - set(CLOUD_MODELS))
         if unknown:
-            raise ValueError(f"cloud policy: corpo preset {preset_key!r} references unknown catalog keys {unknown}")
+            raise ValueError(
+                f"cloud policy: corpo preset {preset_key!r} references unknown catalog keys {unknown}"
+            )
         if allowed is not None:
             blocked = sorted(set(models) - set(allowed))
             if blocked:
@@ -148,7 +171,9 @@ def configure_from_env() -> CloudPolicy | None:
         with open(path, "r", encoding="utf-8") as fh:
             raw = json.load(fh)
     except OSError as exc:
-        raise RuntimeError(f"{POLICY_ENV_VAR}={path}: cannot read cloud policy file: {exc}") from exc
+        raise RuntimeError(
+            f"{POLICY_ENV_VAR}={path}: cannot read cloud policy file: {exc}"
+        ) from exc
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"{POLICY_ENV_VAR}={path}: invalid JSON: {exc}") from exc
     try:
@@ -193,11 +218,7 @@ def corpo_presets() -> dict:
 
 def effective_catalog() -> dict[str, dict]:
     """All policy-allowed catalog entries with negotiated prices applied."""
-    return {
-        key: entry
-        for key in CLOUD_MODELS
-        if (entry := effective_entry(key)) is not None
-    }
+    return {key: entry for key in CLOUD_MODELS if (entry := effective_entry(key)) is not None}
 
 
 def effective_corpo_models(preset_name: str) -> list[tuple[str, dict]]:

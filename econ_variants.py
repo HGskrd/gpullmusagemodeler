@@ -51,9 +51,20 @@ def _scoped_state(panel: str = "A"):
 
 # JSON-safe field subset for chart payloads (full rows contain dataclasses).
 _PROJECT_JSON_KEYS = (
-    "name", "tokens_day", "served_pct", "spilled_pct", "leaked_pct", "destroyed_pct",
-    "value_served", "value_spilled", "value_leaked", "value_destroyed",
-    "wtp_per_m", "cloud_pm", "cloud_blocked", "cheapest_effective_pm",
+    "name",
+    "tokens_day",
+    "served_pct",
+    "spilled_pct",
+    "leaked_pct",
+    "destroyed_pct",
+    "value_served",
+    "value_spilled",
+    "value_leaked",
+    "value_destroyed",
+    "wtp_per_m",
+    "cloud_pm",
+    "cloud_blocked",
+    "cheapest_effective_pm",
 )
 
 
@@ -73,23 +84,42 @@ def _chart_payload(p: dict, model_tokens: list[dict]) -> dict:
     m_links = [
         {"source": "Total opportunity", "target": "Served on-prem", "value": p["value_served_day"]},
         {"source": "Total opportunity", "target": "Paid to cloud", "value": p["value_cloud_day"]},
-        {"source": "Total opportunity", "target": "Destroyed (shelved)", "value": p["value_destroyed_day"]},
+        {
+            "source": "Total opportunity",
+            "target": "Destroyed (shelved)",
+            "value": p["value_destroyed_day"],
+        },
     ]
     if p["value_spilled_day"] > 0:
         m_nodes.append({"name": "Spilled (capacity)", "depth": 2, "c": "spilled"})
-        m_links.append({"source": "Paid to cloud", "target": "Spilled (capacity)", "value": p["value_spilled_day"]})
+        m_links.append(
+            {
+                "source": "Paid to cloud",
+                "target": "Spilled (capacity)",
+                "value": p["value_spilled_day"],
+            }
+        )
     if p["value_leaked_day"] > 0:
         m_nodes.append({"name": "Leaked (fit/price)", "depth": 2, "c": "leaked"})
-        m_links.append({"source": "Paid to cloud", "target": "Leaked (fit/price)", "value": p["value_leaked_day"]})
+        m_links.append(
+            {
+                "source": "Paid to cloud",
+                "target": "Leaked (fit/price)",
+                "value": p["value_leaked_day"],
+            }
+        )
     if p["cost_day"] > 0 and p["value_served_day"] > 0:
         if margin > 0:
             m_nodes.append({"name": "Net margin", "depth": 2, "c": "margin"})
             m_links.append({"source": "Served on-prem", "target": "Net margin", "value": margin})
         m_nodes.append({"name": "Covers cluster cost", "depth": 2, "c": "cost"})
-        m_links.append({
-            "source": "Served on-prem", "target": "Covers cluster cost",
-            "value": p["value_served_day"] - margin if margin > 0 else p["value_served_day"],
-        })
+        m_links.append(
+            {
+                "source": "Served on-prem",
+                "target": "Covers cluster cost",
+                "value": p["value_served_day"] - margin if margin > 0 else p["value_served_day"],
+            }
+        )
 
     t_nodes = [
         {"name": "Active demand", "depth": 0, "c": "total"},
@@ -102,12 +132,18 @@ def _chart_payload(p: dict, model_tokens: list[dict]) -> dict:
         {"source": "Active demand", "target": "Served on-prem", "value": f["served_tokens"]},
         {"source": "Active demand", "target": "Spilled (capacity)", "value": f["spilled_tokens"]},
         {"source": "Active demand", "target": "Leaked (fit/price)", "value": f["leaked_tokens"]},
-        {"source": "Active demand", "target": "Destroyed (shelved)", "value": f["destroyed_tokens"]},
+        {
+            "source": "Active demand",
+            "target": "Destroyed (shelved)",
+            "value": f["destroyed_tokens"],
+        },
     ]
     for mt in model_tokens:
         if mt["tokens"] > 0:
             t_nodes.append({"name": mt["name"], "depth": 2, "color": mt["color"]})
-            t_links.append({"source": "Served on-prem", "target": mt["name"], "value": mt["tokens"]})
+            t_links.append(
+                {"source": "Served on-prem", "target": mt["name"], "value": mt["tokens"]}
+            )
 
     a_nodes: list[dict] = []
     a_links: list[dict] = []
@@ -129,13 +165,17 @@ def _chart_payload(p: dict, model_tokens: list[dict]) -> dict:
         "tokens": {"nodes": t_nodes, "links": t_links},
         "bridge": {
             "money": {
-                "total": p["value_opportunity_day"], "cloud": p["value_cloud_day"],
-                "captured": p["value_served_day"], "destroyed": p["value_destroyed_day"],
+                "total": p["value_opportunity_day"],
+                "cloud": p["value_cloud_day"],
+                "captured": p["value_served_day"],
+                "destroyed": p["value_destroyed_day"],
                 "totalName": "Opportunity",
             },
             "tokens": {
-                "total": f["total_tokens"], "cloud": f["spilled_tokens"] + f["leaked_tokens"],
-                "captured": f["served_tokens"], "destroyed": f["destroyed_tokens"],
+                "total": f["total_tokens"],
+                "cloud": f["spilled_tokens"] + f["leaked_tokens"],
+                "captured": f["served_tokens"],
+                "destroyed": f["destroyed_tokens"],
                 "totalName": "Active demand",
             },
         },
@@ -149,7 +189,10 @@ def compute_swap_recs(state, p: dict) -> list[dict]:
     if p["cost_day"] <= 0 or not p["has_supply"]:
         return []
     return _marginal_model_swap_recommendations(
-        state, p["margin_day"], p["value_cloud_day"], p["value_destroyed_day"],
+        state,
+        p["margin_day"],
+        p["value_cloud_day"],
+        p["value_destroyed_day"],
         p["fates"]["served_tokens"],
     )
 

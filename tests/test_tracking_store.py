@@ -25,12 +25,20 @@ class SnapshotStoreTests(unittest.TestCase):
             state_a = create_default_state()
             state_b = create_default_state()
             store.record_snapshot(
-                visitor_id="visitor", tab_id="tab", reason="open", path="/",
-                state_a=state_a, state_b=state_b,
+                visitor_id="visitor",
+                tab_id="tab",
+                reason="open",
+                path="/",
+                state_a=state_a,
+                state_b=state_b,
             )
             store.record_snapshot(
-                visitor_id="visitor", tab_id="tab", reason="same", path="/mode",
-                state_a=state_a, state_b=state_b,
+                visitor_id="visitor",
+                tab_id="tab",
+                reason="same",
+                path="/mode",
+                state_a=state_a,
+                state_b=state_b,
             )
 
             rows = store.list_snapshots()
@@ -45,15 +53,39 @@ class SnapshotStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             legacy = Path(directory) / "planner_snapshots.json"
             panel = asdict(create_default_state())
-            legacy.write_text(json.dumps({
-                "version": 1,
-                "visitors": {"v": {"tabs": {"t": {"snapshots": [{
-                    "snapshot_id": "legacy-id", "created_at": "2026-01-01T00:00:00+00:00",
-                    "last_seen": "2026-01-01T00:00:00+00:00", "reason": "open", "path": "/",
-                    "state_hash": "hash", "panel_a": panel, "panel_b": None,
-                    "summary": {"mode": panel["mode"], "compare_enabled": False},
-                }]}}}},
-            }, default=_default), encoding="utf-8")
+            legacy.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "visitors": {
+                            "v": {
+                                "tabs": {
+                                    "t": {
+                                        "snapshots": [
+                                            {
+                                                "snapshot_id": "legacy-id",
+                                                "created_at": "2026-01-01T00:00:00+00:00",
+                                                "last_seen": "2026-01-01T00:00:00+00:00",
+                                                "reason": "open",
+                                                "path": "/",
+                                                "state_hash": "hash",
+                                                "panel_a": panel,
+                                                "panel_b": None,
+                                                "summary": {
+                                                    "mode": panel["mode"],
+                                                    "compare_enabled": False,
+                                                },
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        },
+                    },
+                    default=_default,
+                ),
+                encoding="utf-8",
+            )
 
             store = SnapshotStore(legacy)
             rows = store.list_snapshots()
@@ -82,9 +114,12 @@ class SnapshotStoreTests(unittest.TestCase):
             self.assertEqual(store.max_per_tab, 250)
 
     def test_zero_retention_still_means_unlimited(self):
-        with tempfile.TemporaryDirectory() as directory, patch.dict(
-            os.environ,
-            {"PLANNER_SNAPSHOT_RETENTION_DAYS": "0", "PLANNER_SNAPSHOT_MAX_PER_TAB": "0"},
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(
+                os.environ,
+                {"PLANNER_SNAPSHOT_RETENTION_DAYS": "0", "PLANNER_SNAPSHOT_MAX_PER_TAB": "0"},
+            ),
         ):
             store = SnapshotStore(Path(directory) / "snapshots.sqlite3")
             self.assertEqual(store.retention_days, 0)
@@ -97,12 +132,18 @@ class SnapshotStoreTests(unittest.TestCase):
             custom_def = {"key": "custom-uc", "label": "Custom", "wtp_per_m": 5.0}
             state.use_case_defs = list(state.use_case_defs) + [custom_def]
             store.record_snapshot(
-                visitor_id="visitor", tab_id="tab", reason="edit", path="/",
-                state_a=state, state_b=None,
+                visitor_id="visitor",
+                tab_id="tab",
+                reason="edit",
+                path="/",
+                state_a=state,
+                state_b=None,
             )
 
             with sqlite3.connect(store.path) as connection:
-                raw = json.loads(connection.execute("SELECT panel_a_json FROM snapshots").fetchone()[0])
+                raw = json.loads(
+                    connection.execute("SELECT panel_a_json FROM snapshots").fetchone()[0]
+                )
             stored_keys = {entry["key"] for entry in raw["use_case_defs"]}
             preset_keys = {preset["key"] for preset in PROJECT_PRESETS}
             self.assertEqual(stored_keys, {"custom-uc"})
@@ -113,16 +154,21 @@ class SnapshotStoreTests(unittest.TestCase):
             self.assertEqual(restored_keys, preset_keys | {"custom-uc"})
 
     def test_pagination_and_configured_per_tab_retention(self):
-        with tempfile.TemporaryDirectory() as directory, patch.dict(
-            os.environ, {"PLANNER_SNAPSHOT_MAX_PER_TAB": "2"}
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(os.environ, {"PLANNER_SNAPSHOT_MAX_PER_TAB": "2"}),
         ):
             store = SnapshotStore(Path(directory) / "snapshots.sqlite3")
             state = create_default_state()
             for index in range(3):
                 state.task_il += 1
                 store.record_snapshot(
-                    visitor_id="v", tab_id="t", reason=str(index), path="/",
-                    state_a=state, state_b=None,
+                    visitor_id="v",
+                    tab_id="t",
+                    reason=str(index),
+                    path="/",
+                    state_a=state,
+                    state_b=None,
                 )
             self.assertEqual(store.count_snapshots(), 2)
             self.assertEqual(len(store.list_snapshots(limit=1, offset=1)), 1)

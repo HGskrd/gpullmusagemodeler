@@ -36,7 +36,8 @@ class EngineeringHardeningTests(unittest.TestCase):
 
     def test_arbitrary_setting_key_is_rejected_without_corrupting_state(self):
         response = self.client.post(
-            "/settings/int", data={"key": "projects", "value": "1", "tab_id": self.tab_id},
+            "/settings/int",
+            data={"key": "projects", "value": "1", "tab_id": self.tab_id},
             headers=self.headers,
         )
         self.assertEqual(response.status_code, 400)
@@ -44,7 +45,9 @@ class EngineeringHardeningTests(unittest.TestCase):
 
     def test_invalid_numeric_and_distribution_inputs_return_400(self):
         response = self.client.post(
-            "/settings/non-kv", data={"value": "NaN", "tab_id": self.tab_id}, headers=self.headers,
+            "/settings/non-kv",
+            data={"value": "NaN", "tab_id": self.tab_id},
+            headers=self.headers,
         )
         self.assertEqual(response.status_code, 400)
         response = self.client.post(
@@ -75,20 +78,26 @@ class EngineeringHardeningTests(unittest.TestCase):
         self.assertAlmostEqual(payload["panel_a"]["projects"][0]["prefix_hit_rate"], 0.10)
         self.assertAlmostEqual(payload["panel_b"]["projects"][0]["prefix_hit_rate"], 0.10)
 
-        reset = self.client.post("/session/reset", data={"tab_id": self.tab_id}, headers=self.headers)
+        reset = self.client.post(
+            "/session/reset", data={"tab_id": self.tab_id}, headers=self.headers
+        )
         self.assertEqual(reset.status_code, 200)
         blank = self.client.get("/scenario/export", headers=self.headers).get_json()
         self.assertEqual(blank["panel_a"]["models"], [])
         self.assertIsNone(blank["panel_b"])
 
         restored = self.client.post(
-            "/scenario/import", data={"json": json.dumps(payload), "tab_id": self.tab_id}, headers=self.headers,
+            "/scenario/import",
+            data={"json": json.dumps(payload), "tab_id": self.tab_id},
+            headers=self.headers,
         )
         self.assertEqual(restored.status_code, 200)
         roundtrip = self.client.get("/scenario/export", headers=self.headers).get_json()
         self.assertEqual(len(roundtrip["panel_a"]["gpus"]), len(payload["panel_a"]["gpus"]))
         self.assertEqual(len(roundtrip["panel_a"]["models"]), len(payload["panel_a"]["models"]))
-        self.assertEqual(roundtrip["panel_a"]["models"][0]["tp"], payload["panel_a"]["models"][0]["tp"])
+        self.assertEqual(
+            roundtrip["panel_a"]["models"][0]["tp"], payload["panel_a"]["models"][0]["tp"]
+        )
 
     def test_delete_session_data_removes_state_snapshots_and_cookie(self):
         app_module.TRACKING_ENABLED = True
@@ -109,7 +118,9 @@ class EngineeringHardeningTests(unittest.TestCase):
 
     def test_per_visitor_active_tab_cap_is_enforced(self):
         with patch.object(app_module, "MAX_TABS_PER_VISITOR", 1):
-            self.assertEqual(self.client.get("/session/sync", headers=self.headers).status_code, 200)
+            self.assertEqual(
+                self.client.get("/session/sync", headers=self.headers).status_code, 200
+            )
             other = {"X-Tab-ID": str(uuid.uuid4())}
             self.assertEqual(self.client.get("/session/sync", headers=other).status_code, 429)
 
@@ -133,17 +144,22 @@ class EngineeringHardeningTests(unittest.TestCase):
         repo_root = Path(app_module.__file__).resolve().parent
         env = dict(os.environ, WEB_CONCURRENCY="2")
         refused = subprocess.run(
-            [sys.executable, "-c", "import app"], cwd=repo_root, env=env,
-            capture_output=True, text=True,
+            [sys.executable, "-c", "import app"],
+            cwd=repo_root,
+            env=env,
+            capture_output=True,
+            text=True,
         )
         self.assertNotEqual(refused.returncode, 0)
         self.assertIn("RuntimeError", refused.stderr)
         self.assertIn("WEB_CONCURRENCY", refused.stderr)
 
         allowed = subprocess.run(
-            [sys.executable, "-c", "import app"], cwd=repo_root,
+            [sys.executable, "-c", "import app"],
+            cwd=repo_root,
             env=dict(os.environ, WEB_CONCURRENCY="1"),
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         self.assertEqual(allowed.returncode, 0, allowed.stderr)
 
@@ -156,9 +172,11 @@ class EngineeringHardeningTests(unittest.TestCase):
             "print(sorted(str(k) for k in app._rate_windows))"
         )
         result = subprocess.run(
-            [sys.executable, "-c", script], cwd=repo_root,
+            [sys.executable, "-c", script],
+            cwd=repo_root,
             env=dict(os.environ, PLANNER_BEHIND_PROXY="true"),
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("203.0.113.7", result.stdout)
@@ -175,8 +193,11 @@ class EngineeringHardeningTests(unittest.TestCase):
         env = dict(os.environ)
         env.pop("PLANNER_BEHIND_PROXY", None)
         result = subprocess.run(
-            [sys.executable, "-c", script], cwd=repo_root, env=env,
-            capture_output=True, text=True,
+            [sys.executable, "-c", script],
+            cwd=repo_root,
+            env=env,
+            capture_output=True,
+            text=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("127.0.0.1", result.stdout)
@@ -197,9 +218,7 @@ class EngineeringHardeningTests(unittest.TestCase):
 
             app_module._sweep_rate_windows(now)
 
-            self.assertEqual(
-                list(app_module._rate_windows), [("mutation", "203.0.113.1")]
-            )
+            self.assertEqual(list(app_module._rate_windows), [("mutation", "203.0.113.1")])
         finally:
             app_module._rate_windows.clear()
             app_module._rate_windows.update(original)
@@ -289,12 +308,19 @@ class EngineeringHardeningTests(unittest.TestCase):
     def test_cloud_only_use_case_shows_money_paid_to_cloud(self):
         from state import PlannerState, Project, replace_scope_states
 
-        state = PlannerState(projects=[
-            Project(
-                1, "Cloud-only workload", 0.1, 1_000_000, 100.0,
-                min_success_rate=0.5, prefix_hit_rate=0.25,
-            )
-        ])
+        state = PlannerState(
+            projects=[
+                Project(
+                    1,
+                    "Cloud-only workload",
+                    0.1,
+                    1_000_000,
+                    100.0,
+                    min_success_rate=0.5,
+                    prefix_hit_rate=0.25,
+                )
+            ]
+        )
         replace_scope_states(f"{self.visitor_id}:{self.tab_id}", state, None)
 
         response = self.client.get("/", headers=self.headers)
@@ -303,6 +329,7 @@ class EngineeringHardeningTests(unittest.TestCase):
         self.assertIn("Cloud spend lost / day", html)
         # The KPI tile and the per-use-case table both surface the cloud outflow.
         from calc import compute_revenue_projection
+
         projection = compute_revenue_projection(state)
         self.assertGreater(projection["value_cloud_day"], 0)
         self.assertIn(app_module.fmt_money(projection["value_cloud_day"]), html)

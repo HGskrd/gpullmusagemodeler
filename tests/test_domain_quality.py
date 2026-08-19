@@ -8,25 +8,25 @@ from calc import (
     compute_revenue_projection,
 )
 from data import (
-    MODELS,
     MODEL_DOMAIN_QUALITY_ANCHORS,
+    MODELS,
     QUALITY_DOMAINS,
     effective_quality,
-    model_profile_quality,
     model_domain_anchor,
+    model_profile_quality,
     normalize_quality_domain,
     normalize_quality_weights,
     swebench_pro_to_coding_quality,
 )
-from scenarios import deserialize_scenario, serialize_scenario
 from placement import _model_serves_project
+from scenarios import deserialize_scenario, serialize_scenario
 from state import (
     GpuPool,
     ModelAssignment,
     PlannerState,
     Project,
-    create_default_state,
     _normalize_use_case_def,
+    create_default_state,
 )
 
 
@@ -66,7 +66,9 @@ class DomainQualityCatalogTests(unittest.TestCase):
 
         unanchored = MODELS["l8"]
         self.assertIsNone(model_domain_anchor(unanchored, "long_context"))
-        self.assertEqual(effective_quality(unanchored, "long_context"), effective_quality(unanchored))
+        self.assertEqual(
+            effective_quality(unanchored, "long_context"), effective_quality(unanchored)
+        )
 
     def test_representative_anchors_change_only_the_requested_domain(self):
         model = MODELS["k25"]
@@ -136,11 +138,10 @@ class DomainQualityPlannerTests(unittest.TestCase):
     def test_equal_value_routing_protects_harder_coding_work_before_generic_chat(self):
         state = create_default_state()
         state.gpus = [GpuPool(1, "H100", 6, cost_per_gpu_hour=1.32)]
-        state.models = [
-            ModelAssignment(2, "laguna-s-2-1", 1, 6, 2, 1, "bf16", pp=3)
-        ]
+        state.models = [ModelAssignment(2, "laguna-s-2-1", 1, 6, 2, 1, "bf16", pp=3)]
         state.projects = [
-            project for project in state.projects
+            project
+            for project in state.projects
             if project.kind_key in {"chatbot", "coding", "meeting_notes"}
         ]
 
@@ -154,7 +155,10 @@ class DomainQualityPlannerTests(unittest.TestCase):
             "Coding 70% · Reasoning 20% · Long context 10%",
         )
         self.assertEqual(
-            [component["domain"] for component in rows["coding"]["per_model_served"][0]["quality_components"]],
+            [
+                component["domain"]
+                for component in rows["coding"]["per_model_served"][0]["quality_components"]
+            ],
             ["coding", "reasoning", "long_context"],
         )
 
@@ -186,7 +190,9 @@ class DomainQualityPlannerTests(unittest.TestCase):
         self.assertEqual(row["quality_domain"], "coding")
         self.assertEqual(row["quality_domain_label"], "Coding")
         self.assertEqual(served["quality_anchor"], "SWE-bench Verified")
-        self.assertAlmostEqual(served["effective_quality"], effective_quality(MODELS["q27"], "coding"))
+        self.assertAlmostEqual(
+            served["effective_quality"], effective_quality(MODELS["q27"], "coding")
+        )
         self.assertNotEqual(served["effective_quality"], effective_quality(MODELS["q27"]))
 
     def test_portfolio_quality_and_shortlist_follow_active_domain(self):
@@ -199,7 +205,10 @@ class DomainQualityPlannerTests(unittest.TestCase):
 
         shortlist = _swap_candidate_shortlist(MODELS["ds3"], state, "llm", 3)
         self.assertTrue(
-            any(model_domain_anchor(candidate, "coding") is not None for _, candidate, _ in shortlist)
+            any(
+                model_domain_anchor(candidate, "coding") is not None
+                for _, candidate, _ in shortlist
+            )
         )
         strongest_anchored_quality = max(
             effective_quality(model, "coding")
@@ -211,7 +220,9 @@ class DomainQualityPlannerTests(unittest.TestCase):
                 and model_domain_anchor(model, "coding") is not None
             )
         )
-        self.assertTrue(any(abs(score - strongest_anchored_quality) < 1e-9 for _, _, score in shortlist))
+        self.assertTrue(
+            any(abs(score - strongest_anchored_quality) < 1e-9 for _, _, score in shortlist)
+        )
 
     def test_scenario_round_trip_preserves_domain_and_legacy_defaults_general(self):
         state = self._state("reasoning")

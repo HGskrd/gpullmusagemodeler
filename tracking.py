@@ -60,7 +60,13 @@ def _model_summary(state: Optional[PlannerState]) -> str:
 
 def _state_summary(state: Optional[PlannerState]) -> dict:
     if state is None:
-        return {"mode": None, "gpu_summary": "", "model_summary": "", "gpu_pool_count": 0, "model_count": 0}
+        return {
+            "mode": None,
+            "gpu_summary": "",
+            "model_summary": "",
+            "gpu_pool_count": 0,
+            "model_count": 0,
+        }
     return {
         "mode": state.mode,
         "gpu_summary": _gpu_summary(state),
@@ -107,7 +113,11 @@ def _slim_panel_state(panel: Optional[dict]) -> Optional[dict]:
         return panel
     kept = []
     for entry in defs:
-        forms = _BUILTIN_USE_CASE_FORMS.get(str(entry.get("key", ""))) if isinstance(entry, dict) else None
+        forms = (
+            _BUILTIN_USE_CASE_FORMS.get(str(entry.get("key", "")))
+            if isinstance(entry, dict)
+            else None
+        )
         if forms and _json_dump(entry) in forms:
             continue
         kept.append(entry)
@@ -159,7 +169,9 @@ class SnapshotStore:
             self.legacy_path = path
         else:
             self.path = path
-            self.legacy_path = Path(legacy_path) if legacy_path else path.with_name("planner_snapshots.json")
+            self.legacy_path = (
+                Path(legacy_path) if legacy_path else path.with_name("planner_snapshots.json")
+            )
         self.retention_days = _env_nonnegative_int("PLANNER_SNAPSHOT_RETENTION_DAYS", 90)
         self.max_per_tab = _env_nonnegative_int("PLANNER_SNAPSHOT_MAX_PER_TAB", 250)
         self._lock = threading.RLock()
@@ -263,12 +275,17 @@ class SnapshotStore:
                     if not isinstance(panel_a, dict):
                         continue
                     panel_b = snapshot.get("panel_b")
-                    summary = snapshot.get("summary") if isinstance(snapshot.get("summary"), dict) else {}
+                    summary = (
+                        snapshot.get("summary") if isinstance(snapshot.get("summary"), dict) else {}
+                    )
                     created_at = str(snapshot.get("created_at") or _utc_now())
                     last_seen = str(snapshot.get("last_seen") or created_at)
-                    state_hash = str(snapshot.get("state_hash") or hashlib.sha256(
-                        _json_dump({"panel_a": panel_a, "panel_b": panel_b}).encode("utf-8")
-                    ).hexdigest())
+                    state_hash = str(
+                        snapshot.get("state_hash")
+                        or hashlib.sha256(
+                            _json_dump({"panel_a": panel_a, "panel_b": panel_b}).encode("utf-8")
+                        ).hexdigest()
+                    )
                     connection.execute(
                         """
                         INSERT OR IGNORE INTO snapshots(
@@ -278,9 +295,15 @@ class SnapshotStore:
                         """,
                         (
                             str(snapshot.get("snapshot_id") or uuid.uuid4()),
-                            str(visitor_id), str(tab_id), created_at, last_seen,
-                            str(snapshot.get("reason") or "legacy"), str(snapshot.get("path") or "/"),
-                            state_hash, _json_dump(summary), _json_dump(panel_a),
+                            str(visitor_id),
+                            str(tab_id),
+                            created_at,
+                            last_seen,
+                            str(snapshot.get("reason") or "legacy"),
+                            str(snapshot.get("path") or "/"),
+                            state_hash,
+                            _json_dump(summary),
+                            _json_dump(panel_a),
                             _json_dump(panel_b) if panel_b is not None else None,
                         ),
                     )
@@ -293,7 +316,9 @@ class SnapshotStore:
     def _apply_retention(self, connection: sqlite3.Connection, visitor_id: str, tab_id: str) -> int:
         deleted = 0
         if self.retention_days > 0:
-            cutoff = (datetime.now(timezone.utc) - timedelta(days=self.retention_days)).isoformat(timespec="seconds")
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=self.retention_days)).isoformat(
+                timespec="seconds"
+            )
             cursor = connection.execute("DELETE FROM snapshots WHERE last_seen < ?", (cutoff,))
             deleted += max(0, cursor.rowcount)
         if self.max_per_tab > 0:
@@ -312,8 +337,14 @@ class SnapshotStore:
         return deleted
 
     def record_snapshot(
-        self, *, visitor_id: str, tab_id: str, reason: str, path: str,
-        state_a: PlannerState, state_b: Optional[PlannerState],
+        self,
+        *,
+        visitor_id: str,
+        tab_id: str,
+        reason: str,
+        path: str,
+        state_a: PlannerState,
+        state_b: Optional[PlannerState],
     ) -> None:
         self._ensure_initialized()
         now = _utc_now()
@@ -321,7 +352,9 @@ class SnapshotStore:
         panel_b = _serialize_state(state_b)
         # Hash the full payload so dedup stays consistent with rows written
         # before payload slimming; only the stored JSON is slimmed.
-        state_hash = hashlib.sha256(_json_dump({"panel_a": panel_a, "panel_b": panel_b}).encode("utf-8")).hexdigest()
+        state_hash = hashlib.sha256(
+            _json_dump({"panel_a": panel_a, "panel_b": panel_b}).encode("utf-8")
+        ).hexdigest()
         stored_a = _slim_panel_state(panel_a)
         stored_b = _slim_panel_state(panel_b)
         summary_a = _state_summary(state_a)
@@ -354,8 +387,17 @@ class SnapshotStore:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        str(uuid.uuid4()), visitor_id, tab_id, now, now, reason, path, state_hash,
-                        _json_dump(summary), _json_dump(stored_a), _json_dump(stored_b) if stored_b is not None else None,
+                        str(uuid.uuid4()),
+                        visitor_id,
+                        tab_id,
+                        now,
+                        now,
+                        reason,
+                        path,
+                        state_hash,
+                        _json_dump(summary),
+                        _json_dump(stored_a),
+                        _json_dump(stored_b) if stored_b is not None else None,
                     ),
                 )
             retention_deleted = self._apply_retention(connection, visitor_id, tab_id)
@@ -378,11 +420,17 @@ class SnapshotStore:
             "path": row["path"],
             "summary": json.loads(row["summary_json"]),
             "panel_a": _restore_panel_state(json.loads(row["panel_a_json"])),
-            "panel_b": _restore_panel_state(json.loads(row["panel_b_json"])) if row["panel_b_json"] else None,
+            "panel_b": _restore_panel_state(json.loads(row["panel_b_json"]))
+            if row["panel_b_json"]
+            else None,
         }
 
     def list_snapshots(
-        self, *, limit: Optional[int] = None, offset: int = 0, visitor_id: Optional[str] = None,
+        self,
+        *,
+        limit: Optional[int] = None,
+        offset: int = 0,
+        visitor_id: Optional[str] = None,
     ) -> list[dict]:
         self._ensure_initialized()
         clauses, params = [], []

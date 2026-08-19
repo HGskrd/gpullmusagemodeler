@@ -1,8 +1,8 @@
 """Flask application for the GPU/LLM Usage Modeler."""
 
 import gzip
-import json
 import hmac
+import json
 import math
 import os
 import re
@@ -13,66 +13,74 @@ import uuid
 from collections import defaultdict, deque
 from pathlib import Path
 
-from flask import Flask, g, jsonify, make_response, redirect, render_template, request, session, url_for
+from flask import (
+    Flask,
+    g,
+    jsonify,
+    make_response,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import safe_join
 
-from data import (
-    GPUS,
-    MODELS,
-    DIST_PRESETS,
-    EMBEDDING_DOC_BUCKETS,
-    EMBEDDING_DOC_PRESETS,
-    TASK_PRESETS,
-    INPUT_BUCKETS,
-    OUTPUT_BUCKETS,
-    BATCH_SIZES,
-    DAY_SHAPES,
-    PROJECT_PRESETS,
-    MODEL_CAPABILITIES,
-    CAPABILITY_LABELS,
-    QUALITY_DOMAIN_LABELS,
-    MODEL_DOMAIN_QUALITY_ANCHORS,
-    SCALE_MODELS,
-    COUNTRIES,
-    CARBON_INTENSITY_HOURLY,
-    PRECISIONS,
-    PRECISION_LABELS,
-    PRECISION_DESCRIPTIONS,
-    MODEL_KINDS,
-    models_by_category,
-    models_by_kind,
-    gpu_cards_by_vendor,
-    gpus_by_vendor,
-    required_quality,
-    effective_quality,
-    quality_weights_label,
-    success_rate,
-    aa_intelligence_to_quality,
-    quality_to_aa_intelligence,
-)
 import cloud_policy
-from econ_variants import econ_bp, econ_payload
-
 from calc import (
     avg_dist,
+    chart_asr_quality,
     chart_embedding_quality,
-    embedding_quality_axis_range,
     chart_processing_pareto,
     chart_realtime_capacity,
-    chart_asr_quality,
     chart_user_pareto,
     compute_revenue_projection,
+    dist_percentile,
+    effective_prefill_length,
+    embedding_quality_axis_range,
     get_decode_bs,
     get_processing_pareto_bs,
     get_realtime_bs,
-    dist_percentile,
-    effective_prefill_length,
     normalize_dist,
     resolve_spec_runtime,
     strategy_label,
     valid_strategies,
 )
+from data import (
+    BATCH_SIZES,
+    CAPABILITY_LABELS,
+    COUNTRIES,
+    DAY_SHAPES,
+    DIST_PRESETS,
+    EMBEDDING_DOC_BUCKETS,
+    EMBEDDING_DOC_PRESETS,
+    GPUS,
+    INPUT_BUCKETS,
+    MODEL_CAPABILITIES,
+    MODEL_DOMAIN_QUALITY_ANCHORS,
+    MODEL_KINDS,
+    MODELS,
+    OUTPUT_BUCKETS,
+    PRECISION_DESCRIPTIONS,
+    PRECISION_LABELS,
+    PRECISIONS,
+    PROJECT_PRESETS,
+    QUALITY_DOMAIN_LABELS,
+    SCALE_MODELS,
+    TASK_PRESETS,
+    aa_intelligence_to_quality,
+    effective_quality,
+    gpu_cards_by_vendor,
+    gpus_by_vendor,
+    models_by_category,
+    models_by_kind,
+    quality_to_aa_intelligence,
+    quality_weights_label,
+    required_quality,
+    success_rate,
+)
+from econ_variants import econ_bp, econ_payload
 from placement import (
     auto_select_models,
     retune_models,
@@ -88,8 +96,9 @@ from scenarios import (
 from state import (
     AUTO_MODEL_STRATEGIES,
     AUTO_MODEL_STRATEGY_LABELS,
-    PlannerState,
     VISIBLE_PLOT_MODES,
+    PlannerState,
+    _normalize_use_case_def,
     add_gpu,
     add_model,
     add_models,
@@ -101,22 +110,22 @@ from state import (
     change_gpu_qty,
     clear_compare_state,
     create_default_scenario,
-    duplicate_compare_state,
     delete_visitor_states,
-    get_scope_lock,
+    duplicate_compare_state,
+    format_scale_value,
     get_compare_state,
+    get_scope_lock,
     get_state,
     get_use_case_defs,
+    normalize_auto_strategy,
+    normalize_plot_mode,
+    project_scale_config,
     remove_gpu,
     remove_model,
     remove_project,
     remove_use_case_def,
-    normalize_plot_mode,
-    normalize_auto_strategy,
     replace_scope_states,
     reset_state,
-    project_scale_config,
-    format_scale_value,
     scale_decimals,
     set_dist_preset,
     set_dist_value,
@@ -133,12 +142,11 @@ from state import (
     set_project_kind,
     set_project_name,
     set_project_scale_value,
-    set_use_case_def_capability,
-    set_use_case_def_field,
     set_projection_choice,
     set_projection_pct,
     set_projection_toggle,
-    _normalize_use_case_def,
+    set_use_case_def_capability,
+    set_use_case_def_field,
 )
 from tracking import SnapshotStore
 from use_case_evidence import (
@@ -150,7 +158,6 @@ from viewmodels import (
     get_model_info,
     get_model_infos,
 )
-
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -164,7 +171,7 @@ def _load_dotenv(path: Path) -> None:
         if not line or line.startswith("#"):
             continue
         if line.startswith("export "):
-            line = line[len("export "):].strip()
+            line = line[len("export ") :].strip()
         if "=" not in line:
             continue
 
@@ -531,10 +538,7 @@ def _visitor_id() -> str:
 
 
 def _tab_id(optional: bool = False) -> str | None:
-    tab_id = (
-        request.headers.get("X-Tab-ID")
-        or request.form.get(TAB_PARAM)
-    )
+    tab_id = request.headers.get("X-Tab-ID") or request.form.get(TAB_PARAM)
     if tab_id and _TAB_ID_RE.fullmatch(tab_id):
         return tab_id
     return None if optional else "default"
@@ -596,7 +600,12 @@ def _rate_limit(bucket: str, limit: int) -> bool:
 
 
 _UNSCOPED_ENDPOINTS = {
-    "static", "explainer", "admin", "admin_login", "admin_logout", "healthz",
+    "static",
+    "explainer",
+    "admin",
+    "admin_login",
+    "admin_logout",
+    "healthz",
     "session_data_delete",
 }
 
@@ -605,7 +614,9 @@ _UNSCOPED_ENDPOINTS = {
 def _protect_and_lock_request_scope():
     if request.endpoint == "admin_login" and not _rate_limit("admin-login", ADMIN_LOGIN_RATE_LIMIT):
         return jsonify({"error": "Too many login attempts. Try again later."}), 429
-    if request.method not in {"GET", "HEAD", "OPTIONS"} and not _rate_limit("mutation", REQUEST_RATE_LIMIT):
+    if request.method not in {"GET", "HEAD", "OPTIONS"} and not _rate_limit(
+        "mutation", REQUEST_RATE_LIMIT
+    ):
         return jsonify({"error": "Too many updates. Try again shortly."}), 429
     if request.endpoint and request.endpoint not in _UNSCOPED_ENDPOINTS:
         visitor_id = _visitor_id()
@@ -649,18 +660,20 @@ def _set_identity_cookie(response):
 # base.html) and styles (~250 inline style attributes across the templates);
 # the rest of the policy still blocks external script origins, plugin content,
 # framing, <base> hijacking, and cross-origin form posts.
-CONTENT_SECURITY_POLICY = "; ".join((
-    "default-src 'self'",
-    "script-src 'self' 'unsafe-inline'",
-    "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data:",
-    "font-src 'self'",
-    "connect-src 'self'",
-    "form-action 'self'",
-    "base-uri 'self'",
-    "frame-ancestors 'none'",
-    "object-src 'none'",
-))
+CONTENT_SECURITY_POLICY = "; ".join(
+    (
+        "default-src 'self'",
+        "script-src 'self' 'unsafe-inline'",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data:",
+        "font-src 'self'",
+        "connect-src 'self'",
+        "form-action 'self'",
+        "base-uri 'self'",
+        "frame-ancestors 'none'",
+        "object-src 'none'",
+    )
+)
 
 
 @app.after_request
@@ -686,10 +699,11 @@ def _compress_large_text_responses(response):
         return response
 
     content_type = response.mimetype or ""
-    compressible = (
-        content_type.startswith("text/")
-        or content_type in {"application/json", "application/javascript", "image/svg+xml"}
-    )
+    compressible = content_type.startswith("text/") or content_type in {
+        "application/json",
+        "application/javascript",
+        "image/svg+xml",
+    }
     if not compressible:
         return response
 
@@ -875,7 +889,9 @@ def _template_context() -> dict:
     }
 
 
-def _record_snapshot(reason: str, state_a: PlannerState, state_b: PlannerState | None, path: str | None = None):
+def _record_snapshot(
+    reason: str, state_a: PlannerState, state_b: PlannerState | None, path: str | None = None
+):
     if not TRACKING_ENABLED:
         return
     SNAPSHOT_STORE.record_snapshot(
@@ -893,7 +909,9 @@ def _htmx_response(state_a=None):
     # which is panel B for compare-side edits.
     sa = get_state(_scope_id())
     sb = get_compare_state(_scope_id())
-    resp = make_response(render_template("partials/htmx_response.html", A=sa, B=sb, **_template_context()))
+    resp = make_response(
+        render_template("partials/htmx_response.html", A=sa, B=sb, **_template_context())
+    )
     resp.headers["HX-Trigger"] = "refreshChart"
     return resp
 
@@ -904,7 +922,9 @@ def _tracked_htmx_response(reason: str, state_a: PlannerState | None = None):
     sa = get_state(_scope_id())
     sb = get_compare_state(_scope_id())
     _record_snapshot(reason, sa, sb)
-    resp = make_response(render_template("partials/htmx_response.html", A=sa, B=sb, **_template_context()))
+    resp = make_response(
+        render_template("partials/htmx_response.html", A=sa, B=sb, **_template_context())
+    )
     resp.headers["HX-Trigger"] = "refreshChart"
     return resp
 
@@ -963,9 +983,13 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
         f"- Empirical prefix-token reuse (portfolio average): {state.prefix_hit_rate * 100:.0f}%",
     ]
     if state.spec_acceptance > 0:
-        lines.append(f"- Speculative acceptance override: {state.spec_acceptance * 100:.0f}% per-token alpha for all drafters")
+        lines.append(
+            f"- Speculative acceptance override: {state.spec_acceptance * 100:.0f}% per-token alpha for all drafters"
+        )
     gateway = cloud_policy.corpo_presets().get(getattr(state, "corpo_cloud", ""), {})
-    lines.append(f"- Cloud gateway: {gateway.get('label', getattr(state, 'corpo_cloud', 'current'))}")
+    lines.append(
+        f"- Cloud gateway: {gateway.get('label', getattr(state, 'corpo_cloud', 'current'))}"
+    )
     if state.auto_excluded:
         excluded = [MODELS[key].name if key in MODELS else key for key in state.auto_excluded]
         lines.append(f"- Excluded from auto: {', '.join(excluded)}")
@@ -980,7 +1004,9 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
         for gp in state.gpus:
             g = gp.gpu
             free = state.free_gpu_for_pool(gp.uid)
-            cost = f"${gp.cost_per_gpu_hour:.2f}/GPU-hr" if gp.cost_per_gpu_hour > 0 else "TCO not set"
+            cost = (
+                f"${gp.cost_per_gpu_hour:.2f}/GPU-hr" if gp.cost_per_gpu_hour > 0 else "TCO not set"
+            )
             lines.append(
                 f"  - {g.name}: {gp.count} GPUs ({free} free), {g.bw_tbs:.1f} TB/s, {g.vendor_label}, {cost}"
             )
@@ -1013,8 +1039,10 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
             if spec_info is not None:
                 spec = spec_info
                 auto_label = (
-                    f"Auto selected k={spec['k']}" if am.spec_k == 0 and spec["active"]
-                    else f"Auto kept spec off (best candidate k={spec['k']})" if am.spec_k == 0
+                    f"Auto selected k={spec['k']}"
+                    if am.spec_k == 0 and spec["active"]
+                    else f"Auto kept spec off (best candidate k={spec['k']})"
+                    if am.spec_k == 0
                     else f"manual k={spec['k']}"
                 )
                 lines.append(
@@ -1026,23 +1054,31 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
                     f"Source: {spec['profile'].source}."
                 )
 
-    lines.extend([
-        "",
-        "Economic Impact",
-        f"- Owner revenue: {fmt_money(p['value_served_day'])}/day captured on your GPUs",
-        f"- Owner margin: {fmt_money(p['margin_day'])}/day after {fmt_money(p['cost_day'])}/day cluster cost" if p["cost_day"] > 0 else "- Owner margin: set TCO $/GPU-hr to see",
-        f"- Demand: {fmt_num(f['total_tokens'])} tokens/day across {len(state.projects)} use cases",
-        f"  baseline {fmt_num(p['baseline_tokens_day'])} + latent active {fmt_num(p['latent_active_tokens_day'])}",
-        f"- Served internally: {_fmt_pct(f['served_pct'])} ({fmt_num(f['served_tokens'])} tok)",
-        f"- Spilled to cloud: {_fmt_pct(f['spilled_pct'])} ({fmt_num(f['spilled_tokens'])} tok)",
-        f"- Leaked to cloud: {_fmt_pct(f['leaked_pct'])} ({fmt_num(f['leaked_tokens'])} tok)",
-        f"- Cloud spend lost from on-prem: {fmt_money(p['value_cloud_day'])}/day",
-        f"- Destroyed: {_fmt_pct(f['destroyed_pct'])} ({fmt_num(f['destroyed_tokens'])} tok)",
-        f"- Token coverage: {_fmt_pct(p['token_coverage'] * 100)}",
-        f"- Value capture: {_fmt_pct(p['value_capture_rate'] * 100)}",
-        f"- Revenue multiple: {p['revenue_multiple']:.2f}x" if p["cost_day"] > 0 else "- Revenue multiple: set TCO $/GPU-hr to see",
-        f"- CO2: {p['co2_kg_day_total']:.1f} kg/day" if p["co2_kg_day_total"] > 0 else "- CO2: set GPU TDP data to see",
-    ])
+    lines.extend(
+        [
+            "",
+            "Economic Impact",
+            f"- Owner revenue: {fmt_money(p['value_served_day'])}/day captured on your GPUs",
+            f"- Owner margin: {fmt_money(p['margin_day'])}/day after {fmt_money(p['cost_day'])}/day cluster cost"
+            if p["cost_day"] > 0
+            else "- Owner margin: set TCO $/GPU-hr to see",
+            f"- Demand: {fmt_num(f['total_tokens'])} tokens/day across {len(state.projects)} use cases",
+            f"  baseline {fmt_num(p['baseline_tokens_day'])} + latent active {fmt_num(p['latent_active_tokens_day'])}",
+            f"- Served internally: {_fmt_pct(f['served_pct'])} ({fmt_num(f['served_tokens'])} tok)",
+            f"- Spilled to cloud: {_fmt_pct(f['spilled_pct'])} ({fmt_num(f['spilled_tokens'])} tok)",
+            f"- Leaked to cloud: {_fmt_pct(f['leaked_pct'])} ({fmt_num(f['leaked_tokens'])} tok)",
+            f"- Cloud spend lost from on-prem: {fmt_money(p['value_cloud_day'])}/day",
+            f"- Destroyed: {_fmt_pct(f['destroyed_pct'])} ({fmt_num(f['destroyed_tokens'])} tok)",
+            f"- Token coverage: {_fmt_pct(p['token_coverage'] * 100)}",
+            f"- Value capture: {_fmt_pct(p['value_capture_rate'] * 100)}",
+            f"- Revenue multiple: {p['revenue_multiple']:.2f}x"
+            if p["cost_day"] > 0
+            else "- Revenue multiple: set TCO $/GPU-hr to see",
+            f"- CO2: {p['co2_kg_day_total']:.1f} kg/day"
+            if p["co2_kg_day_total"] > 0
+            else "- CO2: set GPU TDP data to see",
+        ]
+    )
 
     if p.get("recommendations"):
         lines.extend(["", "Best Next GPU"])
@@ -1073,7 +1109,11 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
         lines.extend(["", "Per Use Case"])
         for row in p["projects"]:
             proj = row["project"]
-            cloud = "Cloud ref: blocked" if row["cloud_blocked"] else f"Cloud ref: {row['cloud_label']} at ${row['cloud_pm']:.2f}/M"
+            cloud = (
+                "Cloud ref: blocked"
+                if row["cloud_blocked"]
+                else f"Cloud ref: {row['cloud_label']} at ${row['cloud_pm']:.2f}/M"
+            )
             fate = (
                 f"{_fmt_pct(row['served_pct'])} served, "
                 f"{_fmt_pct(row['spilled_pct'] + row['leaked_pct'])} to cloud, "
@@ -1088,12 +1128,16 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
             )
             parts = []
             if row["any_served"]:
-                parts.extend([
-                    f"{fmt_money(row['value_served'])}/day served",
-                    f"margin {fmt_money(row['margin_day'])}/day",
-                ])
+                parts.extend(
+                    [
+                        f"{fmt_money(row['value_served'])}/day served",
+                        f"margin {fmt_money(row['margin_day'])}/day",
+                    ]
+                )
             if row["value_spilled"] + row["value_leaked"] > 0:
-                parts.append(f"{fmt_money(row['value_spilled'] + row['value_leaked'])}/day paid to cloud")
+                parts.append(
+                    f"{fmt_money(row['value_spilled'] + row['value_leaked'])}/day paid to cloud"
+                )
             if row["value_destroyed"] > 0:
                 parts.append(f"{fmt_money(row['value_destroyed'])}/day destroyed")
             if parts:
@@ -1108,7 +1152,11 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
     if p["models"]:
         lines.extend(["", "Supply"])
         for m in p["models"]:
-            status = m.get("status") or ("SATURATED" if m["saturated"] else ("IDLE" if m["runnable"] and m["utilization"] < 0.05 else "OK"))
+            status = m.get("status") or (
+                "SATURATED"
+                if m["saturated"]
+                else ("IDLE" if m["runnable"] and m["utilization"] < 0.05 else "OK")
+            )
             price = f"${m['internal_pm']:.2f}/M" if m["runnable"] and m["internal_pm"] > 0 else "-"
             lines.append(
                 f"- {m['name']}: Q {m['effective_quality'] * 100:.0f}% effective, {m['gpu_count']} GPUs, "
@@ -1122,14 +1170,18 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
 def _format_projection_report(state_a: PlannerState, state_b: PlannerState | None) -> str:
     title = "GPU/LLM Usage Modeler report"
     parts = [title, "=" * len(title), ""]
-    parts.append(_format_projection_report_for_state(state_a, "Config A" if state_b else "Current Config"))
+    parts.append(
+        _format_projection_report_for_state(state_a, "Config A" if state_b else "Current Config")
+    )
     if state_b:
         parts.extend(["", "", _format_projection_report_for_state(state_b, "Config B")])
-    parts.extend([
-        "",
-        "Notes",
-        "Roofline estimates; continuous-batching approximation; separate prefill/decode efficiency knobs; KV capacity anchored to requested accelerator memory minus weights and profiled non-KV runtime memory.",
-    ])
+    parts.extend(
+        [
+            "",
+            "Notes",
+            "Roofline estimates; continuous-batching approximation; separate prefill/decode efficiency knobs; KV capacity anchored to requested accelerator memory minus weights and profiled non-KV runtime memory.",
+        ]
+    )
     return "\n".join(parts).strip() + "\n"
 
 
@@ -1215,7 +1267,9 @@ def use_case_definition_set():
         field_name = request.form.get("field", "")
         raw_value = request.form.get("value", "")
         if field_name == "capability":
-            set_use_case_def_capability(s, key, request.form.get("cap", ""), raw_value in ("on", "true", "1"))
+            set_use_case_def_capability(
+                s, key, request.form.get("cap", ""), raw_value in ("on", "true", "1")
+            )
         elif field_name == "batch_eligible":
             set_use_case_def_field(s, key, "batch_eligible", raw_value in ("on", "true", "1"))
         elif field_name == "tokens_day_m":
@@ -1236,18 +1290,40 @@ def use_case_definition_set():
                 s, key, f"quality_weight_{domain}", float(raw_value or 0.0) / 100.0
             )
         elif field_name == "difficulty_aa_index":
-            set_use_case_def_field(s, key, "difficulty", aa_intelligence_to_quality(float(raw_value or 0.0)))
+            set_use_case_def_field(
+                s, key, "difficulty", aa_intelligence_to_quality(float(raw_value or 0.0))
+            )
         elif field_name == "difficulty_elo":  # Legacy form payloads from pre-AA-index UI.
-            set_use_case_def_field(s, key, "difficulty", max(0.0, min(1.0, float(raw_value or 0.0) / 3000.0)))
+            set_use_case_def_field(
+                s, key, "difficulty", max(0.0, min(1.0, float(raw_value or 0.0) / 3000.0))
+            )
         elif field_name == "scale_value":
             set_use_case_def_field(s, key, "scale_value", float(raw_value or 0.0))
         elif field_name == "scale_token_multiplier":
             set_use_case_def_field(s, key, "scale_token_multiplier", float(raw_value or 0.0))
         elif field_name in {"scale_max", "scale_step"}:
             set_use_case_def_field(s, key, field_name, float(raw_value or 0.0))
-        elif field_name in {"name", "scale_hint", "scale_model", "scale_label", "scale_unit", "scale_formula", "quality_domain", "in_pre", "out_pre"}:
+        elif field_name in {
+            "name",
+            "scale_hint",
+            "scale_model",
+            "scale_label",
+            "scale_unit",
+            "scale_formula",
+            "quality_domain",
+            "in_pre",
+            "out_pre",
+        }:
             set_use_case_def_field(s, key, field_name, raw_value)
-        elif field_name in {"tokens_day", "wtp_per_m", "difficulty", "min_success_rate", "quality_floor", "latent_jobs_day", "unlock_price_per_m"}:
+        elif field_name in {
+            "tokens_day",
+            "wtp_per_m",
+            "difficulty",
+            "min_success_rate",
+            "quality_floor",
+            "latent_jobs_day",
+            "unlock_price_per_m",
+        }:
             set_use_case_def_field(s, key, field_name, float(raw_value or 0.0))
         return _use_case_library_response("use_case_def_set")
     except ValueError as e:
@@ -1309,11 +1385,11 @@ def gpu_add():
         gpu_type = request.form.get("gpu_type")
         if gpu_type not in GPUS:
             return jsonify({"error": "Invalid GPU type"}), 400
-        
+
         count = _form_int("count", 8)
         if count <= 0:
             return jsonify({"error": "Count must be positive"}), 400
-            
+
         add_gpu(s, gpu_type, count)
         return _tracked_htmx_response("gpu_add", s)
     except ValueError as error:
@@ -1393,7 +1469,7 @@ def model_add():
         model_key = request.form.get("model_key")
         if model_key not in MODELS or MODELS[model_key].hidden:
             return jsonify({"error": "Invalid model key"}), 400
-            
+
         add_model(s, model_key)
         return _htmx_response(s)
     except ValueError as e:
@@ -1411,7 +1487,9 @@ def model_add_many():
             return _htmx_response()
         model_keys = [key for key in request.form.getlist("model_key") if key]
         if not model_keys and request.form.get("model_keys"):
-            model_keys = [key.strip() for key in request.form.get("model_keys", "").split(",") if key.strip()]
+            model_keys = [
+                key.strip() for key in request.form.get("model_keys", "").split(",") if key.strip()
+            ]
         if not model_keys:
             return jsonify({"error": "No model keys supplied"}), 400
         invalid = [key for key in model_keys if key not in MODELS or MODELS[key].hidden]
@@ -1434,7 +1512,9 @@ def model_auto():
         if s is None:
             return _htmx_response()
         strategy = normalize_auto_strategy(
-            request.form.get("strategy") or request.form.get("auto_strategy") or getattr(s, "auto_strategy", None)
+            request.form.get("strategy")
+            or request.form.get("auto_strategy")
+            or getattr(s, "auto_strategy", None)
         )
         auto_select_models(s, strategy)
         return _tracked_htmx_response("model_auto", s)
@@ -1503,7 +1583,7 @@ def model_prec():
         prec = request.form.get("prec")
         if prec not in PRECISIONS:
             return jsonify({"error": "Invalid precision"}), 400
-            
+
         set_model_prec(s, uid, prec)
         return _htmx_response(s)
     except ValueError as error:
@@ -1528,10 +1608,18 @@ def model_spec():
         am = s.find_model(uid)
         if am is not None and method != "off" and spec_k > 0:
             model = MODELS.get(am.model_key)
-            profile = next(
-                (p for p in getattr(model, "available_spec_profiles", ()) if p.method == method),
-                None,
-            ) if model is not None else None
+            profile = (
+                next(
+                    (
+                        p
+                        for p in getattr(model, "available_spec_profiles", ())
+                        if p.method == method
+                    ),
+                    None,
+                )
+                if model is not None
+                else None
+            )
             supported_ks = tuple(getattr(profile, "supported_ks", ()) or ())
             if supported_ks and spec_k not in supported_ks:
                 if method != am.spec_method:
@@ -1540,9 +1628,11 @@ def model_spec():
                     # rejecting an otherwise valid method change.
                     spec_k = 0
                 else:
-                    return jsonify({
-                        "error": f"k={spec_k} is unsupported for {profile.label}; choose one of {supported_ks} or Auto"
-                    }), 400
+                    return jsonify(
+                        {
+                            "error": f"k={spec_k} is unsupported for {profile.label}; choose one of {supported_ks} or Auto"
+                        }
+                    ), 400
         set_model_spec(s, uid, method, spec_k)
         return _htmx_response(s)
     except ValueError as error:
@@ -1562,7 +1652,7 @@ def model_count():
         count = _form_int("count")
         if count < 0:
             return jsonify({"error": "Count cannot be negative"}), 400
-            
+
         set_model_gpu_count(s, uid, count)
         return _htmx_response(s)
     except ValueError as error:
@@ -1583,23 +1673,25 @@ def model_strat():
         tp = _form_int("tp")
         pp = _form_int("pp", 1)
         dp = _form_int("dp")
-        
+
         # Validate the strategy before setting
         am = s.find_model(uid)
         if am is None:
             return jsonify({"error": "Model not found"}), 404
-            
+
         gp = s.find_gpu(am.gpu_uid)
         if gp is None:
             return jsonify({"error": "GPU not found"}), 404
-            
+
         model = MODELS[am.model_key]
         spec = resolve_spec_runtime(model, am.spec_method, am.spec_k, s.spec_acceptance, am.prec)
-        valid = valid_strategies(model, am.gpu_count, gp.gpu, s.mu, s.profiled_non_kv_gb, am.prec, spec)
+        valid = valid_strategies(
+            model, am.gpu_count, gp.gpu, s.mu, s.profiled_non_kv_gb, am.prec, spec
+        )
         strategy = (tp, pp, dp)
         if strategy not in valid:
             return jsonify({"error": "Invalid strategy for this model/GPU combination"}), 400
-            
+
         set_model_strat(s, uid, tp, pp, dp, phase)
         return _htmx_response(s)
     except ValueError as error:
@@ -1688,7 +1780,9 @@ def settings_non_kv():
         s = _request_state()
         if s is None:
             return _htmx_response()
-        value = _finite_float(request.form.get("value"), name="profiled non-KV memory", lo=0.0, hi=4096.0)
+        value = _finite_float(
+            request.form.get("value"), name="profiled non-KV memory", lo=0.0, hi=4096.0
+        )
         s.profiled_non_kv_gb = value
         retune_models(s, preserve_existing=False)
         return _tracked_htmx_response("settings_non_kv", s)
@@ -1881,7 +1975,9 @@ def project_set():
             set_project_field(s, uid, "difficulty", float(raw_value or 0.0) / 100.0)
         elif field_name == "difficulty_aa_index":
             # UI uses the same published source scale as the model anchors.
-            set_project_field(s, uid, "difficulty", aa_intelligence_to_quality(float(raw_value or 0.0)))
+            set_project_field(
+                s, uid, "difficulty", aa_intelligence_to_quality(float(raw_value or 0.0))
+            )
         elif field_name == "difficulty_elo":  # Legacy form payloads from pre-AA-index UI.
             elo = float(raw_value or 0.0)
             set_project_field(s, uid, "difficulty", max(0.0, min(1.0, elo / 3000.0)))
@@ -1901,7 +1997,15 @@ def project_set():
         elif field_name == "out_pre":
             set_project_dist_preset(s, uid, "out", raw_value)
             retune_models(s, preserve_existing=False)
-        elif field_name in ("tokens_day", "wtp_per_m", "difficulty", "min_success_rate", "quality_floor", "latent_jobs_day", "unlock_price_per_m"):
+        elif field_name in (
+            "tokens_day",
+            "wtp_per_m",
+            "difficulty",
+            "min_success_rate",
+            "quality_floor",
+            "latent_jobs_day",
+            "unlock_price_per_m",
+        ):
             set_project_field(s, uid, field_name, float(raw_value or 0.0))
             if field_name == "tokens_day":
                 retune_models(s, preserve_existing=False)
@@ -2061,8 +2165,10 @@ def _annotate_chart_spec(state: PlannerState, datasets: list[dict]) -> list[dict
         if am.gpu_count <= 0 or spec is None:
             continue
         k_label = (
-            f"Auto→{spec['k']}" if am.spec_k == 0 and spec["active"]
-            else "Auto→off" if am.spec_k == 0
+            f"Auto→{spec['k']}"
+            if am.spec_k == 0 and spec["active"]
+            else "Auto→off"
+            if am.spec_k == 0
             else str(spec["k"])
         )
         disclosures.append(
@@ -2089,8 +2195,12 @@ def chart_data():
             batch_sizes = get_processing_pareto_bs(states)
             datasets = _annotate_chart_spec(sa, chart_processing_pareto(sa, batch_sizes))
             if sb:
-                datasets += _annotate_chart_spec(sb, chart_processing_pareto(sb, batch_sizes, " (B)"))
-            return jsonify({"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]})
+                datasets += _annotate_chart_spec(
+                    sb, chart_processing_pareto(sb, batch_sizes, " (B)")
+                )
+            return jsonify(
+                {"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]}
+            )
 
         if mode == "asrquality":
             datasets = chart_asr_quality(sa)
@@ -2103,19 +2213,30 @@ def chart_data():
             datasets = chart_realtime_capacity(sa, batch_sizes)
             if sb:
                 datasets += chart_realtime_capacity(sb, batch_sizes, " (B)")
-            return jsonify({"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]})
+            return jsonify(
+                {"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]}
+            )
 
         if mode == "embedquality":
             datasets = chart_embedding_quality(sa)
             if sb:
                 datasets += chart_embedding_quality(sb, " (B)")
-            return jsonify({"type": "scatter", "datasets": datasets, "mode": mode, **embedding_quality_axis_range(datasets)})
+            return jsonify(
+                {
+                    "type": "scatter",
+                    "datasets": datasets,
+                    "mode": mode,
+                    **embedding_quality_axis_range(datasets),
+                }
+            )
 
         batch_sizes = get_decode_bs(states)
         datasets = _annotate_chart_spec(sa, chart_user_pareto(sa, batch_sizes))
         if sb:
             datasets += _annotate_chart_spec(sb, chart_user_pareto(sb, batch_sizes, " (B)"))
-        return jsonify({"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]})
+        return jsonify(
+            {"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]}
+        )
     except ValueError as error:
         return jsonify({"error": str(error)}), 400
     except Exception:
@@ -2138,7 +2259,12 @@ def projection_report():
 
 @app.route("/picker/gpu")
 def picker_gpu():
-    return render_template("partials/gpu_picker.html", panel=request.args.get("panel", "A"), gpu_cards_by_vendor=gpu_cards_by_vendor(), GPUS=GPUS)
+    return render_template(
+        "partials/gpu_picker.html",
+        panel=request.args.get("panel", "A"),
+        gpu_cards_by_vendor=gpu_cards_by_vendor(),
+        GPUS=GPUS,
+    )
 
 
 @app.route("/picker/model")
@@ -2147,7 +2273,9 @@ def picker_model():
     valid_kind_keys = {kind_key for kind_key, _ in MODEL_KINDS}
     active_kind = request.args.get("kind")
     if active_kind not in valid_kind_keys or not kind_groups.get(active_kind):
-        active_kind = next((kind_key for kind_key, _ in MODEL_KINDS if kind_groups.get(kind_key)), None)
+        active_kind = next(
+            (kind_key for kind_key, _ in MODEL_KINDS if kind_groups.get(kind_key)), None
+        )
     return render_template(
         "partials/model_picker.html",
         panel=request.args.get("panel", "A"),
@@ -2169,7 +2297,9 @@ def picker_project():
 @app.route("/healthz", methods=["GET"])
 def healthz():
     storage_ok = True if not TRACKING_ENABLED else SNAPSHOT_STORE.healthcheck()
-    return jsonify({"status": "ok" if storage_ok else "degraded", "storage": storage_ok}), (200 if storage_ok else 503)
+    return jsonify({"status": "ok" if storage_ok else "degraded", "storage": storage_ok}), (
+        200 if storage_ok else 503
+    )
 
 
 @app.route("/session/reset", methods=["POST"])
@@ -2186,11 +2316,13 @@ def session_data_delete():
         states_deleted = delete_visitor_states(visitor_id)
         snapshots_deleted = SNAPSHOT_STORE.delete_visitor(visitor_id)
     g.suppress_identity_cookie = True
-    response = jsonify({
-        "deleted": True,
-        "snapshots_deleted": snapshots_deleted,
-        "states_deleted": states_deleted,
-    })
+    response = jsonify(
+        {
+            "deleted": True,
+            "snapshots_deleted": snapshots_deleted,
+            "states_deleted": states_deleted,
+        }
+    )
     response.delete_cookie(
         VISITOR_COOKIE,
         httponly=True,
@@ -2234,7 +2366,9 @@ def admin():
     try:
         page = _bounded_int(request.args.get("page", 1), name="page", lo=1, hi=1_000_000)
         page_size = min(
-            _bounded_int(request.args.get("per_page", ADMIN_PAGE_SIZE), name="per_page", lo=1, hi=500),
+            _bounded_int(
+                request.args.get("per_page", ADMIN_PAGE_SIZE), name="per_page", lo=1, hi=500
+            ),
             ADMIN_PAGE_SIZE,
         )
     except ValueError as error:
@@ -2250,8 +2384,13 @@ def admin():
         reverse=True,
     )
     return render_template(
-        "admin.html", visitors=visitors, total_snapshots=total_snapshots,
-        page=page, page_size=page_size, GPUS=GPUS, MODELS=MODELS,
+        "admin.html",
+        visitors=visitors,
+        total_snapshots=total_snapshots,
+        page=page,
+        page_size=page_size,
+        GPUS=GPUS,
+        MODELS=MODELS,
     )
 
 

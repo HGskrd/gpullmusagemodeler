@@ -3,7 +3,6 @@
 import math
 from dataclasses import dataclass, replace
 
-
 FP8_SPEEDUP_DEFAULT = 1.4
 FP8_SPEEDUP_OPTIONS = [1.0, 1.2, 1.4, 1.6]
 MIXED_NATIVE_BF16_WEIGHT_BPP = 1.35
@@ -41,9 +40,13 @@ class NumberFormatSpec:
 
 NUMBER_FORMAT_SPECS: dict[str, NumberFormatSpec] = {
     "BF16": NumberFormatSpec("BF16", "BF16", 2.0, "Brain floating point 16-bit tensor."),
-    "F32": NumberFormatSpec("F32", "FP32", 4.0, "Float32 tensor, usually tiny global scale auxiliaries."),
+    "F32": NumberFormatSpec(
+        "F32", "FP32", 4.0, "Float32 tensor, usually tiny global scale auxiliaries."
+    ),
     "F8_E4M3": NumberFormatSpec("F8_E4M3", "FP8 E4M3", 1.0, "FP8 E4M3 scale or activation tensor."),
-    "U8": NumberFormatSpec("U8", "Packed FP4", 1.0, "Unsigned byte storage for packed FP4 payloads."),
+    "U8": NumberFormatSpec(
+        "U8", "Packed FP4", 1.0, "Unsigned byte storage for packed FP4 payloads."
+    ),
 }
 
 
@@ -182,14 +185,20 @@ class GPU:
     bw: float  # bytes/s, published peak memory bandwidth shown in the UI
     bf16: float  # FLOP/s
     fp8: float  # FLOP/s
-    scale_up_p2p_bw_bidir: float  # bytes/s, per-GPU aggregate bidirectional peer BW for node_size topology
+    scale_up_p2p_bw_bidir: (
+        float  # bytes/s, per-GPU aggregate bidirectional peer BW for node_size topology
+    )
     node_size: int = 8
-    planner_bw: float | None = None  # bytes/s, optional sustained bandwidth proxy used by planner math
+    planner_bw: float | None = (
+        None  # bytes/s, optional sustained bandwidth proxy used by planner math
+    )
     fp4: float | None = None  # FLOP/s for native dense FP4/MXFP4/NVFP4 tensor paths, when available
     tdp_watts: float = 0.0  # published board TDP — used with a utilization factor for CO2 math
     min_count: int = 1  # minimum pool size when this profile is only sold as a system/rack
     count_multiple: int = 1  # pool sizes snap to this multiple for system/rack-only profiles
-    default_tco_per_gpu_hour: float = 0.0  # researched owned-hardware TCO, USD per committed GPU-hour
+    default_tco_per_gpu_hour: float = (
+        0.0  # researched owned-hardware TCO, USD per committed GPU-hour
+    )
 
     @property
     def mem_gb(self) -> float:
@@ -299,7 +308,9 @@ class SpeculativeProfile:
     draft_layers: int  # draft KV layers; 0 for ngram
     parallel_draft: bool  # True: whole block in one pass (DFlash); False: k autoregressive passes
     default_k: int  # default number of speculative tokens per cycle
-    acceptance_alpha: float  # per-token acceptance probability, fitted to measured acceptance length
+    acceptance_alpha: (
+        float  # per-token acceptance probability, fitted to measured acceptance length
+    )
     kv_overhead: float  # draft KV cache as a fraction of target KV bytes per token
     source: str
     note: str
@@ -332,15 +343,39 @@ def _mtp_profile(
 ) -> SpeculativeProfile:
     resident_params = resident_params or active_params
     return SpeculativeProfile(
-        label, "mtp", resident_params, draft_layers, False, default_k, alpha, 0.03, source, note,
-        exact_weight_bytes, active_params, supported_ks, acceptance_alpha_by_k,
+        label,
+        "mtp",
+        resident_params,
+        draft_layers,
+        False,
+        default_k,
+        alpha,
+        0.03,
+        source,
+        note,
+        exact_weight_bytes,
+        active_params,
+        supported_ks,
+        acceptance_alpha_by_k,
     )
 
 
-def _eagle3_profile(draft_params: float, alpha: float, default_k: int, source: str, note: str) -> SpeculativeProfile:
+def _eagle3_profile(
+    draft_params: float, alpha: float, default_k: int, source: str, note: str
+) -> SpeculativeProfile:
     return SpeculativeProfile(
-        "EAGLE-3 speculator", "eagle3", draft_params, 1, False, default_k, alpha, 0.05, source, note,
-        draft_params * 2.0, draft_params,
+        "EAGLE-3 speculator",
+        "eagle3",
+        draft_params,
+        1,
+        False,
+        default_k,
+        alpha,
+        0.05,
+        source,
+        note,
+        draft_params * 2.0,
+        draft_params,
     )
 
 
@@ -356,8 +391,20 @@ def _dflash_profile(
     acceptance_alpha_by_k: tuple[tuple[int, float], ...] = (),
 ) -> SpeculativeProfile:
     return SpeculativeProfile(
-        "DFlash block-diffusion speculator", "dflash", draft_params, draft_layers, True, default_k, alpha, 0.08, source, note,
-        exact_weight_bytes or draft_params * 2.0, draft_params, supported_ks, acceptance_alpha_by_k,
+        "DFlash block-diffusion speculator",
+        "dflash",
+        draft_params,
+        draft_layers,
+        True,
+        default_k,
+        alpha,
+        0.08,
+        source,
+        note,
+        exact_weight_bytes or draft_params * 2.0,
+        draft_params,
+        supported_ks,
+        acceptance_alpha_by_k,
     )
 
 
@@ -378,9 +425,20 @@ def _dspark_profile(
     equivalent to an ordinary full-attention KV cache.
     """
     return SpeculativeProfile(
-        "DSpark parallel speculator", "dspark", draft_params, draft_layers, True,
-        7, alpha, kv_overhead, source, note, exact_weight_bytes,
-        draft_params, (7,), ((7, alpha),),
+        "DSpark parallel speculator",
+        "dspark",
+        draft_params,
+        draft_layers,
+        True,
+        7,
+        alpha,
+        kv_overhead,
+        source,
+        note,
+        exact_weight_bytes,
+        draft_params,
+        (7,),
+        ((7, alpha),),
     )
 
 
@@ -402,10 +460,10 @@ NGRAM_SPECULATIVE_PROFILE = SpeculativeProfile(
 # Kept deliberately coarse — the planner isn't a model quality benchmark, it's a capacity model.
 MODEL_CAPABILITIES: tuple[str, ...] = ("tools", "ctx_128k", "images", "audio", "reasoning")
 CAPABILITY_LABELS = {
-    "tools":     "Tool use",
-    "ctx_128k":  "≥128k ctx",
-    "images":    "Image input",
-    "audio":     "Audio input",
+    "tools": "Tool use",
+    "ctx_128k": "≥128k ctx",
+    "images": "Image input",
+    "audio": "Audio input",
     "reasoning": "Thinking / reasoning",
 }
 # Tool use remains the common default. Long-context eligibility is derived from the
@@ -489,9 +547,17 @@ class Model:
 
     @property
     def capabilities(self) -> frozenset[str]:
-        base = self.capabilities_override if self.capabilities_override is not None else DEFAULT_MODEL_CAPABILITIES
+        base = (
+            self.capabilities_override
+            if self.capabilities_override is not None
+            else DEFAULT_MODEL_CAPABILITIES
+        )
         capabilities = (base | self.extra_capabilities) - {"ctx_128k"}
-        if not self.is_realtime_only and not self.is_embedding_model and self.max_context_tokens >= 131072:
+        if (
+            not self.is_realtime_only
+            and not self.is_embedding_model
+            and self.max_context_tokens >= 131072
+        ):
             capabilities = capabilities | {"ctx_128k"}
         return capabilities
 
@@ -606,13 +672,19 @@ class Model:
             return self.fp8_weight_bytes_per_param
         # Keep model-specific high-precision islands when a native FP8 catalog entry is
         # already above 1 B/param. This avoids pretending FP4 converts every tensor.
-        retained_bpp = max(0.0, self.fp8_weight_bytes_per_param - PRECISION_SPECS["fp8"].effective_weight_bytes_per_param)
+        retained_bpp = max(
+            0.0,
+            self.fp8_weight_bytes_per_param
+            - PRECISION_SPECS["fp8"].effective_weight_bytes_per_param,
+        )
         return PRECISION_SPECS[prec].effective_weight_bytes_per_param + retained_bpp
 
     def uses_mixed_weight_precision(self, prec: str) -> bool:
         if get_quantization_profile(self.key, prec) is not None:
             return True
-        return not math.isclose(self.weight_bytes_per_param(prec), bytes_per_param(prec), rel_tol=1e-9, abs_tol=1e-9)
+        return not math.isclose(
+            self.weight_bytes_per_param(prec), bytes_per_param(prec), rel_tol=1e-9, abs_tol=1e-9
+        )
 
     def weight_bytes(self, prec: str) -> float:
         return self.total_params * self.weight_bytes_per_param(prec)
@@ -740,12 +812,12 @@ def normalize_quality_weights(
     return normalized
 
 
-def quality_weights_label(weights: dict[str, float] | None, fallback_domain: str = "general") -> str:
+def quality_weights_label(
+    weights: dict[str, float] | None, fallback_domain: str = "general"
+) -> str:
     normalized = normalize_quality_weights(weights, fallback_domain)
     ranked = sorted(normalized.items(), key=lambda item: (-item[1], item[0]))
-    return " · ".join(
-        f"{QUALITY_DOMAIN_LABELS[domain]} {weight:.0%}" for domain, weight in ranked
-    )
+    return " · ".join(f"{QUALITY_DOMAIN_LABELS[domain]} {weight:.0%}" for domain, weight in ranked)
 
 
 def model_domain_anchor(model: Model, domain: str | None = None) -> DomainQualityAnchor | None:
@@ -775,7 +847,10 @@ def effective_quality(model: Model, domain: str | None = None) -> float:
     that domain; missing anchors preserve the legacy global result exactly.
     """
     confidence = model_quality_confidence(model, domain)
-    return min(max(model_quality(model, domain) - QUALITY_CONFIDENCE_PENALTY * (1.0 - confidence), 0.0), 1.0)
+    return min(
+        max(model_quality(model, domain) - QUALITY_CONFIDENCE_PENALTY * (1.0 - confidence), 0.0),
+        1.0,
+    )
 
 
 def model_profile_quality(
@@ -822,30 +897,150 @@ GPUS: dict[str, GPU] = {
     "H200": GPU("H200", "H200 141GB SXM", "nv", 141e9, 4.8e12, 989e12, 1979e12, 900e9, 8),
     "L40S": GPU("L40S", "L40S 48GB", "nv", 48e9, 864e9, 362.05e12, 733e12, 64e9, 8),
     "L4": GPU("L4", "L4 24GB", "nv", 24e9, 300e9, 121e12, 242.5e12, 64e9, 8),
-    "RTXPRO6000_BSE": GPU("RTXPRO6000_BSE", "RTX PRO 6000 Blackwell Server Edition 96GB", "nv", 96e9, 1.597e12, 1e15, 2e15, 128e9, 8),
-    "RTXPRO6000_BW_WS": GPU("RTXPRO6000_BW_WS", "RTX PRO 6000 Blackwell Workstation 96GB", "nv", 96e9, 1.792e12, 1e15, 2e15, 128e9, 4),
-    "RTXPRO5000_BW_72": GPU("RTXPRO5000_BW_72", "RTX PRO 5000 Blackwell 72GB", "nv", 72e9, 1.344e12, 535.5e12, 1071e12, 128e9, 4),
-    "RTX6000_ADA": GPU("RTX6000_ADA", "RTX 6000 Ada Generation 48GB", "nv", 48e9, 960e9, 364.25e12, 728.5e12, 64e9, 4),
-    "RTX5090": GPU("RTX5090", "GeForce RTX 5090 32GB", "nv", 32e9, 1.792e12, 838e12, 1676e12, 128e9, 1),
-    "RTX4090": GPU("RTX4090", "GeForce RTX 4090 24GB", "nv", 24e9, 1.008e12, 330.25e12, 660.5e12, 64e9, 1),
+    "RTXPRO6000_BSE": GPU(
+        "RTXPRO6000_BSE",
+        "RTX PRO 6000 Blackwell Server Edition 96GB",
+        "nv",
+        96e9,
+        1.597e12,
+        1e15,
+        2e15,
+        128e9,
+        8,
+    ),
+    "RTXPRO6000_BW_WS": GPU(
+        "RTXPRO6000_BW_WS",
+        "RTX PRO 6000 Blackwell Workstation 96GB",
+        "nv",
+        96e9,
+        1.792e12,
+        1e15,
+        2e15,
+        128e9,
+        4,
+    ),
+    "RTXPRO5000_BW_72": GPU(
+        "RTXPRO5000_BW_72",
+        "RTX PRO 5000 Blackwell 72GB",
+        "nv",
+        72e9,
+        1.344e12,
+        535.5e12,
+        1071e12,
+        128e9,
+        4,
+    ),
+    "RTX6000_ADA": GPU(
+        "RTX6000_ADA",
+        "RTX 6000 Ada Generation 48GB",
+        "nv",
+        48e9,
+        960e9,
+        364.25e12,
+        728.5e12,
+        64e9,
+        4,
+    ),
+    "RTX5090": GPU(
+        "RTX5090", "GeForce RTX 5090 32GB", "nv", 32e9, 1.792e12, 838e12, 1676e12, 128e9, 1
+    ),
+    "RTX4090": GPU(
+        "RTX4090", "GeForce RTX 4090 24GB", "nv", 24e9, 1.008e12, 330.25e12, 660.5e12, 64e9, 1
+    ),
     "RTX3090": GPU("RTX3090", "GeForce RTX 3090 24GB", "nv", 24e9, 936e9, 142e12, 142e12, 64e9, 1),
-    "DGX_SPARK": GPU("DGX_SPARK", "DGX Spark GB10 128GB", "nv", 128e9, 273e9, 125e12, 250e12, 25e9, 1),
-    "GB200": GPU("GB200", "GB200 NVL72 Grace Blackwell 186GB/GPU", "nv", 186e9, 8e12, 2.5e15, 5e15, 3.6e12, 72, min_count=72, count_multiple=72),
-    "B200": GPU("B200", "B200 180GB HGX/DGX", "nv", 180e9, 8e12, 2.25e15, 4.5e15, 1.8e12, 8, min_count=8, count_multiple=8),
-    "B300": GPU("B300", "B300 Blackwell Ultra 288GB HGX/DGX", "nv", 288e9, 8e12, 2.5e15, 5e15, 1.8e12, 8, min_count=8, count_multiple=8),
-    "GB300": GPU("GB300", "GB300 NVL72 Blackwell Ultra 288GB/GPU", "nv", 288e9, 8e12, 2.5e15, 5e15, 3.6e12, 72, min_count=72, count_multiple=72),
-    "DGX_STATION_GB300": GPU("DGX_STATION_GB300", "DGX Station GB300 Blackwell Ultra 252GB", "nv", 252e9, 7.1e12, 2.5e15, 5e15, 100e9, 2),
+    "DGX_SPARK": GPU(
+        "DGX_SPARK", "DGX Spark GB10 128GB", "nv", 128e9, 273e9, 125e12, 250e12, 25e9, 1
+    ),
+    "GB200": GPU(
+        "GB200",
+        "GB200 NVL72 Grace Blackwell 186GB/GPU",
+        "nv",
+        186e9,
+        8e12,
+        2.5e15,
+        5e15,
+        3.6e12,
+        72,
+        min_count=72,
+        count_multiple=72,
+    ),
+    "B200": GPU(
+        "B200",
+        "B200 180GB HGX/DGX",
+        "nv",
+        180e9,
+        8e12,
+        2.25e15,
+        4.5e15,
+        1.8e12,
+        8,
+        min_count=8,
+        count_multiple=8,
+    ),
+    "B300": GPU(
+        "B300",
+        "B300 Blackwell Ultra 288GB HGX/DGX",
+        "nv",
+        288e9,
+        8e12,
+        2.5e15,
+        5e15,
+        1.8e12,
+        8,
+        min_count=8,
+        count_multiple=8,
+    ),
+    "GB300": GPU(
+        "GB300",
+        "GB300 NVL72 Blackwell Ultra 288GB/GPU",
+        "nv",
+        288e9,
+        8e12,
+        2.5e15,
+        5e15,
+        3.6e12,
+        72,
+        min_count=72,
+        count_multiple=72,
+    ),
+    "DGX_STATION_GB300": GPU(
+        "DGX_STATION_GB300",
+        "DGX Station GB300 Blackwell Ultra 252GB",
+        "nv",
+        252e9,
+        7.1e12,
+        2.5e15,
+        5e15,
+        100e9,
+        2,
+    ),
     # NVIDIA labels every Rubin figure below preliminary and subject to change.
     # The profile models one GPU inside the rack-only 72-GPU NVLink 6 domain.
-    "RUBIN_NVL72": GPU("RUBIN_NVL72", "Vera Rubin NVL72 Preview 288GB/GPU", "nv", 288e9, 22e12, 4e15, 17.5e15, 3.6e12, 72, min_count=72, count_multiple=72),
+    "RUBIN_NVL72": GPU(
+        "RUBIN_NVL72",
+        "Vera Rubin NVL72 Preview 288GB/GPU",
+        "nv",
+        288e9,
+        22e12,
+        4e15,
+        17.5e15,
+        3.6e12,
+        72,
+        min_count=72,
+        count_multiple=72,
+    ),
     "A40": GPU("A40", "A40 48GB", "nv", 48e9, 696e9, 149.7e12, 149.7e12, 112.5e9, 2),
     "A30": GPU("A30", "A30 24GB", "nv", 24e9, 933e9, 165e12, 165e12, 200e9, 2),
     "A6000": GPU("A6000", "RTX A6000 48GB", "nv", 48e9, 768e9, 154.85e12, 154.85e12, 112.5e9, 2),
     "A4000": GPU("A4000", "RTX A4000 16GB", "nv", 16e9, 448e9, 76.7e12, 76.7e12, 64e9, 1),
-    "A2000_MOBILE": GPU("A2000_MOBILE", "RTX A2000 Laptop GPU 8GB", "nv", 8e9, 192e9, 37.5e12, 37.5e12, 64e9, 1),
+    "A2000_MOBILE": GPU(
+        "A2000_MOBILE", "RTX A2000 Laptop GPU 8GB", "nv", 8e9, 192e9, 37.5e12, 37.5e12, 64e9, 1
+    ),
     "T4": GPU("T4", "T4 16GB", "nv", 16e9, 320e9, 65e12, 65e12, 32e9, 8),
     "V100": GPU("V100", "V100 32GB SXM2", "nv", 32e9, 900e9, 125e12, 125e12, 300e9, 8),
-    "JETSON_AGX_THOR": GPU("JETSON_AGX_THOR", "Jetson AGX Thor 128GB", "nv", 128e9, 273e9, 258.75e12, 517.5e12, 25e9, 1),
+    "JETSON_AGX_THOR": GPU(
+        "JETSON_AGX_THOR", "Jetson AGX Thor 128GB", "nv", 128e9, 273e9, 258.75e12, 517.5e12, 25e9, 1
+    ),
     "MI250X": GPU("MI250X", "MI250X 128GB", "amd", 128e9, 3.2e12, 383e12, 383e12, 800e9, 8),
     "MI300X": GPU("MI300X", "MI300X 192GB", "amd", 192e9, 5.3e12, 1307e12, 2615e12, 896e9, 8),
     "MI325X": GPU("MI325X", "MI325X 256GB", "amd", 256e9, 6e12, 1307e12, 2615e12, 896e9, 8),
@@ -853,32 +1048,141 @@ GPUS: dict[str, GPU] = {
     "MI355X": GPU("MI355X", "MI355X 288GB", "amd", 288e9, 8e12, 2512e12, 5037e12, 1075.2e9, 8),
     # AMD now identifies the Helios accelerator as MI455X.  Keep MI400 below as
     # a hidden compatibility key so previously saved planner states still load.
-    "MI455X": GPU("MI455X", "Instinct MI455X 432GB", "amd", 432e9, 23.3e12, 5e15, 20.1e15, 3.6e12, 72),
-    "HELIOS_MI455X": GPU("HELIOS_MI455X", "AMD Helios Preview (72× MI455X) 432GB/GPU", "amd", 432e9, 23.3e12, 5e15, 20.1e15, 3.6e12, 72, min_count=72, count_multiple=72),
-    "MI400": GPU("MI400", "MI400 Series compatibility profile (MI455X) 432GB", "amd", 432e9, 23.3e12, 5e15, 20.1e15, 3.6e12, 72),
-    "RadeonProW7900": GPU("RadeonProW7900", "Radeon PRO W7900 48GB", "amd", 48e9, 864e9, 123e12, 123e12, 64e9, 1),
-    "RadeonAIProR9700": GPU("RadeonAIProR9700", "Radeon AI PRO R9700 32GB", "amd", 32e9, 640e9, 96e12, 96e12, 128e9, 1),
+    "MI455X": GPU(
+        "MI455X", "Instinct MI455X 432GB", "amd", 432e9, 23.3e12, 5e15, 20.1e15, 3.6e12, 72
+    ),
+    "HELIOS_MI455X": GPU(
+        "HELIOS_MI455X",
+        "AMD Helios Preview (72× MI455X) 432GB/GPU",
+        "amd",
+        432e9,
+        23.3e12,
+        5e15,
+        20.1e15,
+        3.6e12,
+        72,
+        min_count=72,
+        count_multiple=72,
+    ),
+    "MI400": GPU(
+        "MI400",
+        "MI400 Series compatibility profile (MI455X) 432GB",
+        "amd",
+        432e9,
+        23.3e12,
+        5e15,
+        20.1e15,
+        3.6e12,
+        72,
+    ),
+    "RadeonProW7900": GPU(
+        "RadeonProW7900", "Radeon PRO W7900 48GB", "amd", 48e9, 864e9, 123e12, 123e12, 64e9, 1
+    ),
+    "RadeonAIProR9700": GPU(
+        "RadeonAIProR9700", "Radeon AI PRO R9700 32GB", "amd", 32e9, 640e9, 96e12, 96e12, 128e9, 1
+    ),
     # Tenstorrent publishes BLOCKFP8, rather than IEEE FP8, peak performance.
     # BF16 is a conservative half-rate planner proxy until a native BF16 peak is published.
-    "TT_BLACKHOLE_P100A": GPU("TT_BLACKHOLE_P100A", "Tenstorrent Blackhole p100a 28GB", "tenstorrent", 28e9, 448e9, 332e12, 664e12, 64e9, 1),
-    "TT_BLACKHOLE_P150": GPU("TT_BLACKHOLE_P150", "Tenstorrent Blackhole p150 32GB", "tenstorrent", 32e9, 512e9, 332e12, 664e12, 800e9, 8),
-    "TT_GALAXY_BLACKHOLE": GPU("TT_GALAXY_BLACKHOLE", "Tenstorrent Galaxy Blackhole (32×) 32GB/ASIC", "tenstorrent", 32e9, 512e9, 359.375e12, 718.75e12, 1e12, 32, min_count=32, count_multiple=32),
-    "FURIOSA_RNGD": GPU("FURIOSA_RNGD", "FuriosaAI RNGD 48GB", "furiosa", 48e9, 1.5e12, 256e12, 512e12, 64e9, 1),
+    "TT_BLACKHOLE_P100A": GPU(
+        "TT_BLACKHOLE_P100A",
+        "Tenstorrent Blackhole p100a 28GB",
+        "tenstorrent",
+        28e9,
+        448e9,
+        332e12,
+        664e12,
+        64e9,
+        1,
+    ),
+    "TT_BLACKHOLE_P150": GPU(
+        "TT_BLACKHOLE_P150",
+        "Tenstorrent Blackhole p150 32GB",
+        "tenstorrent",
+        32e9,
+        512e9,
+        332e12,
+        664e12,
+        800e9,
+        8,
+    ),
+    "TT_GALAXY_BLACKHOLE": GPU(
+        "TT_GALAXY_BLACKHOLE",
+        "Tenstorrent Galaxy Blackhole (32×) 32GB/ASIC",
+        "tenstorrent",
+        32e9,
+        512e9,
+        359.375e12,
+        718.75e12,
+        1e12,
+        32,
+        min_count=32,
+        count_multiple=32,
+    ),
+    "FURIOSA_RNGD": GPU(
+        "FURIOSA_RNGD", "FuriosaAI RNGD 48GB", "furiosa", 48e9, 1.5e12, 256e12, 512e12, 64e9, 1
+    ),
     # Intel does not publish dense BF16/FP8 peak figures for these public pages, so the planner
     # uses transparent proxy rooflines derived from the nearest available official disclosures.
     "Gaudi2": GPU("Gaudi2", "Gaudi 2 96GB", "intel", 96e9, 2.45e12, 432e12, 865e12, 300e9, 8),
     "Gaudi3": GPU("Gaudi3", "Gaudi 3 128GB", "intel", 128e9, 3.7e12, 1.3e15, 2.6e15, 900e9, 4),
-    "CrescentIsland": GPU("CrescentIsland", "Crescent Island Preview 160GB", "intel", 160e9, 1.0e12, 183.5e12, 367e12, 128e9, 8),
-    "ArcProB70": GPU("ArcProB70", "Arc Pro B70 32GB", "intel", 32e9, 608e9, 183.5e12, 367e12, 128e9, 8),
-    "ArcProB60": GPU("ArcProB60", "Arc Pro B60 24GB", "intel", 24e9, 456e9, 98.5e12, 197e12, 64e9, 8),
+    "CrescentIsland": GPU(
+        "CrescentIsland",
+        "Crescent Island Preview 160GB",
+        "intel",
+        160e9,
+        1.0e12,
+        183.5e12,
+        367e12,
+        128e9,
+        8,
+    ),
+    "ArcProB70": GPU(
+        "ArcProB70", "Arc Pro B70 32GB", "intel", 32e9, 608e9, 183.5e12, 367e12, 128e9, 8
+    ),
+    "ArcProB60": GPU(
+        "ArcProB60", "Arc Pro B60 24GB", "intel", 24e9, 456e9, 98.5e12, 197e12, 64e9, 8
+    ),
     "ArcProB50": GPU("ArcProB50", "Arc Pro B50 16GB", "intel", 16e9, 224e9, 85e12, 170e12, 64e9, 8),
     # Apple publishes peak unified-memory bandwidth and GPU-core counts, but not dense BF16/FP8
     # tensor rooflines or sustained inference bandwidth. We therefore keep Apple's peak bandwidth
     # for display, while planner_bw + BF16/FP8 proxies are calibrated conservatively against
     # whatcani.run Apple-device decode/prefill scaling across MLX/GGUF runs.
-    "MAC_MINI_M4_PRO": GPU("MAC_MINI_M4_PRO", "Mac mini M4 Pro 64GB", "apple", 64e9, 273e9, 16e12, 16e12, 50e9, 1, 273e9),
-    "MAC_STUDIO_M4_MAX": GPU("MAC_STUDIO_M4_MAX", "Mac Studio M4 Max 128GB", "apple", 128e9, 546e9, 26e12, 26e12, 50e9, 1, 410e9),
-    "MAC_STUDIO_M3_ULTRA": GPU("MAC_STUDIO_M3_ULTRA", "Mac Studio M3 Ultra 512GB", "apple", 512e9, 819e9, 48e12, 48e12, 50e9, 1, 560e9),
+    "MAC_MINI_M4_PRO": GPU(
+        "MAC_MINI_M4_PRO",
+        "Mac mini M4 Pro 64GB",
+        "apple",
+        64e9,
+        273e9,
+        16e12,
+        16e12,
+        50e9,
+        1,
+        273e9,
+    ),
+    "MAC_STUDIO_M4_MAX": GPU(
+        "MAC_STUDIO_M4_MAX",
+        "Mac Studio M4 Max 128GB",
+        "apple",
+        128e9,
+        546e9,
+        26e12,
+        26e12,
+        50e9,
+        1,
+        410e9,
+    ),
+    "MAC_STUDIO_M3_ULTRA": GPU(
+        "MAC_STUDIO_M3_ULTRA",
+        "Mac Studio M3 Ultra 512GB",
+        "apple",
+        512e9,
+        819e9,
+        48e12,
+        48e12,
+        50e9,
+        1,
+        560e9,
+    ),
 }
 
 GPU_FP4_FLOPS = {
@@ -908,16 +1212,57 @@ for _k, _fp4 in GPU_FP4_FLOPS.items():
 # Published board TDPs (watts). Used with a utilization factor to estimate per-task energy.
 # Sources: vendor product pages; Mac figures use whole-system measured peak.
 GPU_TDP_WATTS = {
-    "A100": 400, "A100_40": 250, "A10": 150, "H100": 700, "H200": 700, "L40S": 350, "L4": 72,
-    "RTXPRO6000_BSE": 600, "RTXPRO6000_BW_WS": 600, "RTXPRO5000_BW_72": 300, "RTX6000_ADA": 300,
-    "RTX5090": 575, "RTX4090": 450, "RTX3090": 350, "DGX_SPARK": 140, "GB200": 1200, "B200": 1000, "B300": 1400,
-    "GB300": 1400, "DGX_STATION_GB300": 1600,
-    "A40": 300, "A30": 165, "A6000": 300, "A4000": 140, "A2000_MOBILE": 95, "T4": 70, "V100": 300, "JETSON_AGX_THOR": 130,
-    "MI250X": 560, "MI300X": 750, "MI325X": 1000, "MI350X": 1000, "MI355X": 1400, "MI455X": 1500, "HELIOS_MI455X": 1500, "MI400": 1500,
-    "RadeonProW7900": 295, "RadeonAIProR9700": 300,
-    "TT_BLACKHOLE_P100A": 300, "TT_BLACKHOLE_P150": 300, "TT_GALAXY_BLACKHOLE": 350, "FURIOSA_RNGD": 180,
-    "Gaudi2": 600, "Gaudi3": 900, "CrescentIsland": 300, "ArcProB70": 230, "ArcProB60": 200, "ArcProB50": 70,
-    "MAC_MINI_M4_PRO": 140, "MAC_STUDIO_M4_MAX": 270, "MAC_STUDIO_M3_ULTRA": 480,
+    "A100": 400,
+    "A100_40": 250,
+    "A10": 150,
+    "H100": 700,
+    "H200": 700,
+    "L40S": 350,
+    "L4": 72,
+    "RTXPRO6000_BSE": 600,
+    "RTXPRO6000_BW_WS": 600,
+    "RTXPRO5000_BW_72": 300,
+    "RTX6000_ADA": 300,
+    "RTX5090": 575,
+    "RTX4090": 450,
+    "RTX3090": 350,
+    "DGX_SPARK": 140,
+    "GB200": 1200,
+    "B200": 1000,
+    "B300": 1400,
+    "GB300": 1400,
+    "DGX_STATION_GB300": 1600,
+    "A40": 300,
+    "A30": 165,
+    "A6000": 300,
+    "A4000": 140,
+    "A2000_MOBILE": 95,
+    "T4": 70,
+    "V100": 300,
+    "JETSON_AGX_THOR": 130,
+    "MI250X": 560,
+    "MI300X": 750,
+    "MI325X": 1000,
+    "MI350X": 1000,
+    "MI355X": 1400,
+    "MI455X": 1500,
+    "HELIOS_MI455X": 1500,
+    "MI400": 1500,
+    "RadeonProW7900": 295,
+    "RadeonAIProR9700": 300,
+    "TT_BLACKHOLE_P100A": 300,
+    "TT_BLACKHOLE_P150": 300,
+    "TT_GALAXY_BLACKHOLE": 350,
+    "FURIOSA_RNGD": 180,
+    "Gaudi2": 600,
+    "Gaudi3": 900,
+    "CrescentIsland": 300,
+    "ArcProB70": 230,
+    "ArcProB60": 200,
+    "ArcProB50": 70,
+    "MAC_MINI_M4_PRO": 140,
+    "MAC_STUDIO_M4_MAX": 270,
+    "MAC_STUDIO_M3_ULTRA": 480,
 }
 for _k, _w in GPU_TDP_WATTS.items():
     if _k in GPUS:
@@ -957,7 +1302,6 @@ GPU_TCO_PRICE_USD: dict[str, float] = {
     "A30": 4_600.0,
     "T4": 542.0,  # current used-market typical price, not launch MSRP
     "V100": 699.0,  # current used-market typical price, not launch MSRP
-
     # NVIDIA workstation, desktop, and edge.
     "RTXPRO6000_BSE": 13_250.0,  # proxy from official workstation-edition marketplace price
     "RTXPRO6000_BW_WS": 13_250.0,
@@ -971,7 +1315,6 @@ GPU_TCO_PRICE_USD: dict[str, float] = {
     "A4000": 900.0,
     "A2000_MOBILE": 600.0,  # proxy: no standalone mobile-GPU price
     "JETSON_AGX_THOR": 3_499.0,
-
     # AMD.  MI455X uses the reported Helios rack midpoint divided by 72 GPUs.
     "MI250X": 1_732.0,  # current refurbished OAM market; EOL part
     "MI300X": 12_500.0,
@@ -983,7 +1326,6 @@ GPU_TCO_PRICE_USD: dict[str, float] = {
     "MI400": 5_250_000.0 / 72.0,
     "RadeonProW7900": 3_999.0,
     "RadeonAIProR9700": 1_299.0,
-
     # Specialist accelerators, Intel, and Apple.
     "TT_BLACKHOLE_P100A": 999.0,
     "TT_BLACKHOLE_P150": 1_399.0,
@@ -1000,21 +1342,23 @@ GPU_TCO_PRICE_USD: dict[str, float] = {
     "MAC_STUDIO_M3_ULTRA": 9_499.0,
 }
 
-GPU_TCO_COMPLETE_SYSTEMS = frozenset({
-    "DGX_SPARK",
-    "GB200",
-    "GB300",
-    "DGX_STATION_GB300",
-    "RUBIN_NVL72",
-    "JETSON_AGX_THOR",
-    "MI455X",
-    "HELIOS_MI455X",
-    "MI400",
-    "TT_GALAXY_BLACKHOLE",
-    "MAC_MINI_M4_PRO",
-    "MAC_STUDIO_M4_MAX",
-    "MAC_STUDIO_M3_ULTRA",
-})
+GPU_TCO_COMPLETE_SYSTEMS = frozenset(
+    {
+        "DGX_SPARK",
+        "GB200",
+        "GB300",
+        "DGX_STATION_GB300",
+        "RUBIN_NVL72",
+        "JETSON_AGX_THOR",
+        "MI455X",
+        "HELIOS_MI455X",
+        "MI400",
+        "TT_GALAXY_BLACKHOLE",
+        "MAC_MINI_M4_PRO",
+        "MAC_STUDIO_M4_MAX",
+        "MAC_STUDIO_M3_ULTRA",
+    }
+)
 
 # Rubin board power is intentionally unpublished in the performance catalog.  The
 # TCO default still needs an energy term, so use a conservative 2 kW per-GPU rack
@@ -1054,11 +1398,14 @@ GPU_TCO_PRICE_SOURCES = {
 
 def _researched_gpu_tco_per_hour(gpu_key: str) -> float:
     price = GPU_TCO_PRICE_USD[gpu_key]
-    allocated_capex = price if gpu_key in GPU_TCO_COMPLETE_SYSTEMS else price * GPU_TCO_BOARD_INFRA_UPLIFT
+    allocated_capex = (
+        price if gpu_key in GPU_TCO_COMPLETE_SYSTEMS else price * GPU_TCO_BOARD_INFRA_UPLIFT
+    )
     amortized = allocated_capex / GPU_TCO_USEFUL_LIFE_HOURS * GPU_TCO_FACILITY_OPS_UPLIFT
     power_watts = GPU_TCO_POWER_WATTS_OVERRIDE.get(gpu_key, GPUS[gpu_key].tdp_watts)
     energy = (
-        power_watts / 1000.0
+        power_watts
+        / 1000.0
         * GPU_TCO_AVG_POWER_UTILIZATION
         * GPU_TCO_PUE
         * GPU_TCO_ELECTRICITY_USD_PER_KWH
@@ -1066,10 +1413,7 @@ def _researched_gpu_tco_per_hour(gpu_key: str) -> float:
     return round(amortized + energy, 2)
 
 
-GPU_TCO_DEFAULTS: dict[str, float] = {
-    _key: _researched_gpu_tco_per_hour(_key)
-    for _key in GPUS
-}
+GPU_TCO_DEFAULTS: dict[str, float] = {_key: _researched_gpu_tco_per_hour(_key) for _key in GPUS}
 for _key, _tco in GPU_TCO_DEFAULTS.items():
     GPUS[_key].default_tco_per_gpu_hour = _tco
 
@@ -1141,9 +1485,7 @@ PREVIEW_ASSUMPTIONS: dict[str, dict[str, object]] = {
     "model:mistral-medium-3.5-preview": {
         "status": "API and model card live; full architecture configuration not public",
         "source": "https://docs.mistral.ai/models/model-cards/mistral-medium-3-5-26-04",
-        "assumptions": (
-            "128B dense architecture fields remain a capacity proxy",
-        ),
+        "assumptions": ("128B dense architecture fields remain a capacity proxy",),
     },
     "model:deepseek-v4-pro": {
         "status": "preview; final open checkpoint and architecture configuration not published",
@@ -2066,10 +2408,12 @@ PUBLISHED_ASR_WER: dict[str, dict[str, float]] = {
         "fr_mls": 5.12,
     },
 }
-ASR_WER_PLACEHOLDER: frozenset[str] = frozenset({
-    "kyutai-stt-1b-en-fr",
-    "fun-asr-nano-2512",
-})
+ASR_WER_PLACEHOLDER: frozenset[str] = frozenset(
+    {
+        "kyutai-stt-1b-en-fr",
+        "fun-asr-nano-2512",
+    }
+)
 
 # Backward-compatible aliases for older chart/import names.
 ASR_WER_BENCHMARKS = ASR_WER_LANGUAGES
@@ -2108,28 +2452,30 @@ EMBEDDING_QUALITY_SOURCES: dict[str, str] = {
     "nvidia-nemotron-3-embed-1b": "Placeholder: official 1B config and serving limit are published, but no catalog-comparable retrieval aggregate was isolated.",
 }
 PUBLISHED_EMBEDDING_QUALITY: dict[str, float] = {
-    "denseon":                 0.5620,
-    "lateon":                  0.5722,
-    "bge-m3":                  0.5288,
-    "mxbai-embed-large-v1":     0.5439,
-    "mxbai-embed-2d-large-v1":  0.5142,
-    "mxbai-embed-xsmall-v1":    0.4280,
+    "denseon": 0.5620,
+    "lateon": 0.5722,
+    "bge-m3": 0.5288,
+    "mxbai-embed-large-v1": 0.5439,
+    "mxbai-embed-2d-large-v1": 0.5142,
+    "mxbai-embed-xsmall-v1": 0.4280,
     "deepset-mxbai-embed-de-large-v1": 0.5170,
     "mxbai-edge-colbert-v0-17m": 0.4900,
     "mxbai-edge-colbert-v0-32m": 0.5210,
-    "modernbert-embed-base":   0.5289,
-    "kalm-mini-it-v15":        0.5165,
-    "pplx-embed-v1-0.6b":      0.6541,
-    "pplx-embed-v1-4b":        0.6966,
+    "modernbert-embed-base": 0.5289,
+    "kalm-mini-it-v15": 0.5165,
+    "pplx-embed-v1-0.6b": 0.6541,
+    "pplx-embed-v1-4b": 0.6966,
     "pplx-embed-v1-late-0.6b": 0.5661,
-    "cohere-embed-v4-0":       0.6000,
+    "cohere-embed-v4-0": 0.6000,
     "nvidia-nemotron-3-embed-8b": 0.7846,
     "nvidia-nemotron-3-embed-1b": 0.5000,
 }
-EMBEDDING_QUALITY_PLACEHOLDER: frozenset[str] = frozenset({
-    "cohere-embed-v4-0",
-    "nvidia-nemotron-3-embed-1b",
-})
+EMBEDDING_QUALITY_PLACEHOLDER: frozenset[str] = frozenset(
+    {
+        "cohere-embed-v4-0",
+        "nvidia-nemotron-3-embed-1b",
+    }
+)
 
 # Optional hover-detail metric. Keep separate from PUBLISHED_EMBEDDING_QUALITY
 # so models without decontaminated BEIR still remain visible in the plot.
@@ -2140,10 +2486,10 @@ EMBEDDING_DECONTAMINATED_BEIR_SOURCES: dict[str, str] = {
     "pplx-embed-v1-0.6b": "LightOn DenseOn/LateOn blog, Full Decontaminated BEIR Results, pplx-v1-0.6b row, average nDCG@10 over 12 datasets.",
 }
 PUBLISHED_EMBEDDING_DECONTAMINATED_BEIR: dict[str, float] = {
-    "denseon":                 0.5771,
-    "lateon":                  0.6036,
-    "modernbert-embed-base":   0.5442,
-    "pplx-embed-v1-0.6b":      0.5850,
+    "denseon": 0.5771,
+    "lateon": 0.6036,
+    "modernbert-embed-base": 0.5442,
+    "pplx-embed-v1-0.6b": 0.5850,
 }
 
 
@@ -2726,35 +3072,98 @@ MODELS: dict[str, Model] = {
         ),
     ),
     "cohere-embed-v4-0": _cohere_embed_v4_model(),
-
-    "l8": Model("l8", "Llama 3.1 8B", "Meta", "#22976B", 8e9, 8e9, False, 32, 32, 8, 128, False, speculative_profiles=(
-        _eagle3_profile(
-            1.0e9,
-            0.72,
-            3,
-            "https://huggingface.co/RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3",
-            "EAGLE-3 acceptance length ~2.5-3.2 on Llama-3.1-8B (SpecDecode-Bench, vLLM/H100): "
-            "1.9x at batch 1, ~1.2x at batch 128. Alpha fitted to that range.",
+    "l8": Model(
+        "l8",
+        "Llama 3.1 8B",
+        "Meta",
+        "#22976B",
+        8e9,
+        8e9,
+        False,
+        32,
+        32,
+        8,
+        128,
+        False,
+        speculative_profiles=(
+            _eagle3_profile(
+                1.0e9,
+                0.72,
+                3,
+                "https://huggingface.co/RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3",
+                "EAGLE-3 acceptance length ~2.5-3.2 on Llama-3.1-8B (SpecDecode-Bench, vLLM/H100): "
+                "1.9x at batch 1, ~1.2x at batch 128. Alpha fitted to that range.",
+            ),
         ),
-    )),
-    "l70": Model("l70", "Llama 3.1 70B", "Meta", "#2B7A78", 70.6e9, 70.6e9, False, 80, 64, 8, 128, False),
-
-    "ge2": Model("ge2", "Gemma 4 E2B", "Gemma", "#5D8C3C", 2e9, 2e9, False, 35, 8, 1, 256, False,
-        hidden_dim=1536, local_attention_layers=28, local_attention_window=512,
-        local_attention_heads=8, local_attention_head_dim=256, local_kv_heads=1,
-        local_kv_head_dim=256, global_kv_heads=1, global_head_dim=256,
-        attention_label="28 sliding 512 + 7 full attention", max_context_tokens=131072, speculative_profiles=(
-        _mtp_profile(0.40, 0.08e9, 1, "https://huggingface.co/google/gemma-4-E2B-it-assistant",
-                     "Gemma 4 assistant checkpoint served through vLLM's MTP path. No acceptance benchmark is published; "
-                     "alpha=.40 is an explicitly conservative planning prior, not a measured result.",
-                     draft_layers=4, supported_ks=(1,), label="Gemma 4 assistant MTP"),
-    )),
-    "ge4": Model("ge4", "Gemma 4 E4B", "Gemma", "#6FA84A", 4e9, 4e9, False, 34, 24, 8, 128, False, speculative_profiles=(
-        _mtp_profile(0.40, 0.0788e9, 1, "https://huggingface.co/google/gemma-4-E4B-it-assistant",
-                     "Gemma 4 assistant checkpoint served through vLLM's MTP path. No acceptance benchmark is published; "
-                     "alpha=.40 is an explicitly conservative planning prior, not a measured result.",
-                     draft_layers=4, supported_ks=(1,), label="Gemma 4 assistant MTP"),
-    )),
+    ),
+    "l70": Model(
+        "l70", "Llama 3.1 70B", "Meta", "#2B7A78", 70.6e9, 70.6e9, False, 80, 64, 8, 128, False
+    ),
+    "ge2": Model(
+        "ge2",
+        "Gemma 4 E2B",
+        "Gemma",
+        "#5D8C3C",
+        2e9,
+        2e9,
+        False,
+        35,
+        8,
+        1,
+        256,
+        False,
+        hidden_dim=1536,
+        local_attention_layers=28,
+        local_attention_window=512,
+        local_attention_heads=8,
+        local_attention_head_dim=256,
+        local_kv_heads=1,
+        local_kv_head_dim=256,
+        global_kv_heads=1,
+        global_head_dim=256,
+        attention_label="28 sliding 512 + 7 full attention",
+        max_context_tokens=131072,
+        speculative_profiles=(
+            _mtp_profile(
+                0.40,
+                0.08e9,
+                1,
+                "https://huggingface.co/google/gemma-4-E2B-it-assistant",
+                "Gemma 4 assistant checkpoint served through vLLM's MTP path. No acceptance benchmark is published; "
+                "alpha=.40 is an explicitly conservative planning prior, not a measured result.",
+                draft_layers=4,
+                supported_ks=(1,),
+                label="Gemma 4 assistant MTP",
+            ),
+        ),
+    ),
+    "ge4": Model(
+        "ge4",
+        "Gemma 4 E4B",
+        "Gemma",
+        "#6FA84A",
+        4e9,
+        4e9,
+        False,
+        34,
+        24,
+        8,
+        128,
+        False,
+        speculative_profiles=(
+            _mtp_profile(
+                0.40,
+                0.0788e9,
+                1,
+                "https://huggingface.co/google/gemma-4-E4B-it-assistant",
+                "Gemma 4 assistant checkpoint served through vLLM's MTP path. No acceptance benchmark is published; "
+                "alpha=.40 is an explicitly conservative planning prior, not a measured result.",
+                draft_layers=4,
+                supported_ks=(1,),
+                label="Gemma 4 assistant MTP",
+            ),
+        ),
+    ),
     "g12": Model(
         "g12",
         "Gemma 4 12B Unified",
@@ -2777,20 +3186,65 @@ MODELS: dict[str, Model] = {
         shared_key_value=True,
         attention_label="40 sliding 1k + 8 global p-RoPE; encoder-free image/audio projection",
     ),
-    "g26": Model("g26", "Gemma 4 26B-A4B", "Gemma", "#8AB85C", 26e9, 4e9, True, 30, 16, 2, 512, False,
-        hidden_dim=2816, local_attention_layers=25, local_attention_window=1024,
-        local_attention_heads=16, local_attention_head_dim=256, local_kv_heads=8,
-        local_kv_head_dim=256, global_kv_heads=2, global_head_dim=512,
-        shared_key_value=True, attention_label="25 sliding 1k + 5 full p-RoPE", max_context_tokens=262144,
+    "g26": Model(
+        "g26",
+        "Gemma 4 26B-A4B",
+        "Gemma",
+        "#8AB85C",
+        26e9,
+        4e9,
+        True,
+        30,
+        16,
+        2,
+        512,
+        False,
+        hidden_dim=2816,
+        local_attention_layers=25,
+        local_attention_window=1024,
+        local_attention_heads=16,
+        local_attention_head_dim=256,
+        local_kv_heads=8,
+        local_kv_head_dim=256,
+        global_kv_heads=2,
+        global_head_dim=512,
+        shared_key_value=True,
+        attention_label="25 sliding 1k + 5 full p-RoPE",
+        max_context_tokens=262144,
         speculative_profiles=(
-        _mtp_profile(0.40, 0.4e9, 1, "https://huggingface.co/google/gemma-4-26B-A4B-it-assistant",
-                     "Gemma 4 assistant checkpoint served through vLLM's MTP path. No acceptance benchmark is published; "
-                     "alpha=.40 is an explicitly conservative planning prior, not a measured result.",
-                     draft_layers=4, supported_ks=(1,), label="Gemma 4 assistant MTP"),
-        _eagle3_profile(0.9e9, 0.60, 5, "https://huggingface.co/RedHatAI/gemma-4-26B-A4B-it-speculator.eagle3",
-                        "RedHatAI EAGLE-3 speculator; checkpoint size is 0.9B, alpha is a family prior."),
-    )),
-    "g31": Model("g31", "Gemma 4 31B", "Gemma", "#A2C96E", 30.7e9, 30.7e9, False, 60, 32, 16, 256, False,
+            _mtp_profile(
+                0.40,
+                0.4e9,
+                1,
+                "https://huggingface.co/google/gemma-4-26B-A4B-it-assistant",
+                "Gemma 4 assistant checkpoint served through vLLM's MTP path. No acceptance benchmark is published; "
+                "alpha=.40 is an explicitly conservative planning prior, not a measured result.",
+                draft_layers=4,
+                supported_ks=(1,),
+                label="Gemma 4 assistant MTP",
+            ),
+            _eagle3_profile(
+                0.9e9,
+                0.60,
+                5,
+                "https://huggingface.co/RedHatAI/gemma-4-26B-A4B-it-speculator.eagle3",
+                "RedHatAI EAGLE-3 speculator; checkpoint size is 0.9B, alpha is a family prior.",
+            ),
+        ),
+    ),
+    "g31": Model(
+        "g31",
+        "Gemma 4 31B",
+        "Gemma",
+        "#A2C96E",
+        30.7e9,
+        30.7e9,
+        False,
+        60,
+        32,
+        16,
+        256,
+        False,
         hidden_dim=5376,
         attention_layers=60,
         local_attention_layers=50,
@@ -2804,17 +3258,35 @@ MODELS: dict[str, Model] = {
         attention_label="50 sliding 1k + 10 global p-RoPE",
         max_context_tokens=262144,
         speculative_profiles=(
-        _mtp_profile(0.40, 0.4695e9, 1, "https://huggingface.co/google/gemma-4-31B-it-assistant",
-                     "Official 939 MB BF16, four-layer Gemma 4 assistant served through vLLM's MTP path. "
-                     "No acceptance benchmark is published; alpha=.40 is an explicitly conservative planning prior, "
-                     "not a measured result.", exact_weight_bytes=939e6, draft_layers=4, supported_ks=(1,),
-                     label="Gemma 4 assistant MTP"),
-        _eagle3_profile(2e9, 0.60, 5, "https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.eagle3",
-                        "RedHatAI EAGLE-3 speculator; checkpoint size is 2B, alpha is a family prior."),
-        _dflash_profile(4e9, 0.72, 8, "https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash",
-                        "RedHatAI 4B DFlash checkpoint; k=8 and alpha=.72 reproduce the card's broad 2.53-5.17 acceptance-length range."),
-    )),
-
+            _mtp_profile(
+                0.40,
+                0.4695e9,
+                1,
+                "https://huggingface.co/google/gemma-4-31B-it-assistant",
+                "Official 939 MB BF16, four-layer Gemma 4 assistant served through vLLM's MTP path. "
+                "No acceptance benchmark is published; alpha=.40 is an explicitly conservative planning prior, "
+                "not a measured result.",
+                exact_weight_bytes=939e6,
+                draft_layers=4,
+                supported_ks=(1,),
+                label="Gemma 4 assistant MTP",
+            ),
+            _eagle3_profile(
+                2e9,
+                0.60,
+                5,
+                "https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.eagle3",
+                "RedHatAI EAGLE-3 speculator; checkpoint size is 2B, alpha is a family prior.",
+            ),
+            _dflash_profile(
+                4e9,
+                0.72,
+                8,
+                "https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash",
+                "RedHatAI 4B DFlash checkpoint; k=8 and alpha=.72 reproduce the card's broad 2.53-5.17 acceptance-length range.",
+            ),
+        ),
+    ),
     "lfm2.5-350m": _lfm_text_model(
         "lfm2.5-350m",
         "LFM2.5 350M",
@@ -2899,7 +3371,6 @@ MODELS: dict[str, Model] = {
         32,
         8,
     ),
-
     "rwkv7-g1d-01b": _rwkv7_g1_model(
         "rwkv7-g1d-01b",
         "RWKV7-G1D 0.1B",
@@ -2954,136 +3425,455 @@ MODELS: dict[str, Model] = {
         4096,
         RWKV7_G1_TOOL_CAPABILITIES,
     ),
-
-    "q08": Model("q08", "Qwen 3.5 0.8B", "Qwen", "#0E8F66", 0.8e9, 0.8e9, False, 24, 8, 2, 256, False,
-        hidden_dim=1024, attention_layers=6, linear_attention_layers=18, linear_attention_heads=16,
-        linear_attention_head_dim=128, linear_attention_k_heads=16, linear_attention_k_head_dim=128,
-        linear_attention_conv_kernel=4, attention_label="18 Gated DeltaNet + 6 full attention",
-        max_context_tokens=262144, speculative_profiles=(
-            _mtp_profile(0.65, 0.035e9, 1, "https://huggingface.co/Qwen/Qwen3.5-0.8B/blob/main/config.json",
-                         "Official config contains one native MTP layer. No per-size acceptance benchmark is published; "
-                         "alpha=.65 and the one-layer parameter footprint are conservative planning estimates.",
-                         supported_ks=(1,)),
-        )),
-    "q2": Model("q2", "Qwen 3.5 2B", "Qwen", "#15986D", 2e9, 2e9, False, 24, 8, 2, 256, False,
-        hidden_dim=2048, attention_layers=6, linear_attention_layers=18, linear_attention_heads=16,
-        linear_attention_head_dim=128, linear_attention_k_heads=16, linear_attention_k_head_dim=128,
-        linear_attention_conv_kernel=4, attention_label="18 Gated DeltaNet + 6 full attention",
-        max_context_tokens=262144, speculative_profiles=(
-            _mtp_profile(0.65, 0.08e9, 1, "https://huggingface.co/Qwen/Qwen3.5-2B/blob/main/config.json",
-                         "Official config contains one native MTP layer. No per-size acceptance benchmark is published; "
-                         "alpha=.65 and the one-layer parameter footprint are conservative planning estimates.",
-                         supported_ks=(1,)),
-        )),
-    "q4": Model("q4", "Qwen 3.5 4B", "Qwen", "#1AA174", 4e9, 4e9, False, 32, 16, 4, 256, False,
-        hidden_dim=2560, attention_layers=8, linear_attention_layers=24, linear_attention_heads=32,
-        linear_attention_head_dim=128, linear_attention_k_heads=16, linear_attention_k_head_dim=128,
-        linear_attention_conv_kernel=4, attention_label="24 Gated DeltaNet + 8 full attention",
-        max_context_tokens=262144, speculative_profiles=(
-            _mtp_profile(0.65, 0.125e9, 1, "https://huggingface.co/Qwen/Qwen3.5-4B/blob/main/config.json",
-                         "Official config contains one native MTP layer. No per-size acceptance benchmark is published; "
-                         "alpha=.65 and the one-layer parameter footprint are conservative planning estimates.",
-                         supported_ks=(1,)),
-        )),
-    "q9": Model("q9", "Qwen 3.5 9B", "Qwen", "#1D9E75", 9.2e9, 9.2e9, False, 32, 16, 4, 256, False,
-        hidden_dim=4096, attention_layers=8, linear_attention_layers=24, linear_attention_heads=32,
-        linear_attention_head_dim=128, linear_attention_k_heads=16, linear_attention_k_head_dim=128,
-        linear_attention_conv_kernel=4, attention_label="24 Gated DeltaNet + 8 full attention",
-        max_context_tokens=262144, speculative_profiles=(
-            _mtp_profile(0.65, 0.29e9, 1, "https://huggingface.co/Qwen/Qwen3.5-9B/blob/main/config.json",
-                         "Official config contains one native MTP layer. No per-size acceptance benchmark is published; "
-                         "alpha=.65 and the one-layer parameter footprint are conservative planning estimates.",
-                         supported_ks=(1,)),
-        )),
-    "q27": Model("q27", "Qwen 3.5 27B", "Qwen", "#3266ad", 27.8e9, 27.8e9, False, 64, 24, 4, 256, False,
-        hidden_dim=5120, attention_layers=16, linear_attention_layers=48, linear_attention_heads=48,
-        linear_attention_head_dim=128, linear_attention_k_heads=16, linear_attention_k_head_dim=128,
-        linear_attention_conv_kernel=4, attention_label="48 Gated DeltaNet + 16 full attention",
-        max_context_tokens=262144, speculative_profiles=(
-            _mtp_profile(0.9103, 0.43e9, 3, "https://huggingface.co/modal-labs/Qwen3.5-27B-DFlash",
-                         "Built-in MTP benchmarked on five workloads on 1x B200. Alpha is fitted to the mean measured "
-                         "accept length 3.4934 at k=3; measured speedup was 2.46-2.80x at concurrency 1 and "
-                         "1.98-2.34x at concurrency 32.", supported_ks=(3, 7, 15),
-                         acceptance_alpha_by_k=((3, 0.9103), (7, 0.8790), (15, 0.8586))),
-            _dflash_profile(2e9, 0.8765, 8, "https://huggingface.co/modal-labs/Qwen3.5-27B-DFlash",
-                            "Joint Z-Lab/Modal 2B BF16 checkpoint. Alpha is fitted to mean measured accept length "
-                            "5.6248 at block size 8 across five workloads; measured speedup was 3.48-4.76x at "
-                            "concurrency 1 and 2.14-3.01x at concurrency 32.", draft_layers=6,
-                            exact_weight_bytes=4.26e9, supported_ks=(4, 8, 16),
-                            acceptance_alpha_by_k=((4, 0.8227), (8, 0.8765), (16, 0.8841))),
-        )),
-    "q35": Model("q35", "Qwen 3.5 35B-A3B", "Qwen", "#7F77DD", 35e9, 3e9, True, 40, 16, 2, 256, False,
-        hidden_dim=2048, attention_layers=10, linear_attention_layers=30, linear_attention_heads=32,
-        linear_attention_head_dim=128, linear_attention_k_heads=16, linear_attention_k_head_dim=128,
-        linear_attention_conv_kernel=4, attention_label="30 Gated DeltaNet + 10 full attention",
-        max_context_tokens=262144, speculative_profiles=(
-        _mtp_profile(0.70, 0.1e9, 3, "https://www.lmsys.org/blog/2026-06-15-next-generation-speculative-decoding-dflash-v2/",
-                     "Native MTP documented for Qwen 3.5 397B; family assumption here — no per-size acceptance published.",
-                     resident_params=0.55e9),
-    )),
-    "q122": Model("q122", "Qwen 3.5 122B-A10B", "Qwen", "#D85A30", 122e9, 10e9, True, 48, 32, 2, 256, False,
-        hidden_dim=3072, attention_layers=12, linear_attention_layers=36, linear_attention_heads=64,
-        linear_attention_head_dim=128, linear_attention_k_heads=16, linear_attention_k_head_dim=128,
-        linear_attention_conv_kernel=4, attention_label="36 Gated DeltaNet + 12 full attention",
-        max_context_tokens=262144, speculative_profiles=(
-        _mtp_profile(0.70, 0.15e9, 3, "https://www.lmsys.org/blog/2026-06-15-next-generation-speculative-decoding-dflash-v2/",
-                     "Native MTP documented for Qwen 3.5 397B; family assumption here — no per-size acceptance published.",
-                     resident_params=1.3e9),
-    )),
-    "q397": Model("q397", "Qwen 3.5 397B-A17B", "Qwen", "#A6422A", 397e9, 17e9, True, 60, 32, 2, 256, False,
-        hidden_dim=4096, attention_layers=15, linear_attention_layers=45, linear_attention_heads=64,
-        linear_attention_head_dim=128, linear_attention_k_heads=16, linear_attention_k_head_dim=128,
-        linear_attention_conv_kernel=4, attention_label="45 Gated DeltaNet + 15 full attention",
-        max_context_tokens=262144, speculative_profiles=(
-        _mtp_profile(0.70, 0.2e9, 3, "https://www.lmsys.org/blog/2026-06-15-next-generation-speculative-decoding-dflash-v2/",
-                     "Native MTP benchmarked by LMSYS/Modal (7 draft steps optimal at concurrency 1); "
-                     "default k=3 is the conservative serving choice.", resident_params=4.2e9),
-        _dflash_profile(1e9, 0.78, 8, "https://huggingface.co/z-lab/Qwen3.5-397B-A17B-DFlash",
-                        "z-lab DFlash: >4.3x baseline and 1.5x native MTP at concurrency 1 (HumanEval, 8xB200); "
-                        "beats MTP at concurrencies 1-32. Uses the exact 1B checkpoint size; alpha=.78 is a conservative cross-workload prior."),
-    )),
-
-    "glm45a": Model("glm45a", "GLM-4.5-Air 106B-A12B", "GLM", "#2F7E9F", 106e9, 12e9, True, 46, 96, 8, 128, False,
-        hidden_dim=4096, max_context_tokens=131072, speculative_profiles=(
-        _mtp_profile(0.70, 0.25e9, 3, "https://arxiv.org/abs/2601.11580",
-                     "GLM-4.5 ships a native MTP head. SpecDecode-Bench measured 1.3-1.8x on GLM-4.5-Air (vLLM/H100); "
-                     "per-position acceptance degrades across the drafted tokens.", resident_params=1.9e9),
-    )),
-    "glm45": Model("glm45", "GLM-4.5 355B-A32B", "GLM", "#2B6D8A", 355e9, 32e9, True, 92, 96, 8, 128, False,
-        hidden_dim=5120, max_context_tokens=131072, speculative_profiles=(
-        _mtp_profile(0.70, 0.55e9, 3, "https://arxiv.org/abs/2601.11580",
-                     "GLM-4.5 ships a native MTP head; acceptance is the GLM-4.5-Air SpecDecode-Bench assumption.", resident_params=5.8e9),
-    )),
-    "glm46": Model("glm46", "GLM-4.6 357B-A32B", "GLM", "#275C75", 357e9, 32e9, True, 92, 96, 8, 128, False,
-        hidden_dim=5120, max_context_tokens=202752, speculative_profiles=(
-        _mtp_profile(0.70, 0.55e9, 3, "https://arxiv.org/abs/2601.11580",
-                     "Native MTP; GLM-4.5-family acceptance assumption (no per-version measurement published).", resident_params=5.8e9),
-    )),
-    "glm47": Model("glm47", "GLM-4.7 358B-A32B", "GLM", "#214A61", 358e9, 32e9, True, 92, 96, 8, 128, False,
-        hidden_dim=5120, max_context_tokens=202752, speculative_profiles=(
-        _mtp_profile(0.70, 0.55e9, 3, "https://arxiv.org/abs/2601.11580",
-                     "Native MTP; GLM-4.5-family acceptance assumption (no per-version measurement published).", resident_params=5.8e9),
-    )),
-    "glm47f": Model("glm47f", "GLM-4.7-Flash 31B-A3B", "GLM", "#3F93BA", 31e9, 3e9, True, 47, 20, 20, 256, True,
-        mla_kv_dim=512, mla_rope_dim=64, mla_tp_supported=True, hidden_dim=2048,
-        attention_label="MLA · 202,752 context", max_context_tokens=202752, speculative_profiles=(
-        _mtp_profile(0.70, 0.1e9, 3, "https://arxiv.org/abs/2601.11580",
-                     "Native MTP; GLM-4.5-family acceptance assumption (no per-version measurement published).", resident_params=0.65e9),
-    )),
-    "glm5": Model("glm5", "GLM-5 744B-A40B", "GLM", "#16354A", 744e9, 40e9, True, 78, 64, 64, 256, True,
-        mla_kv_dim=512, mla_rope_dim=64, mla_tp_supported=True, hidden_dim=6144,
-        sparse_attention_top_k=2048, sparse_indexer_heads=32, sparse_indexer_head_dim=128,
-        sparse_indexer_layers=78, attention_label="DSA top-2048 · 202,752 context",
-        max_context_tokens=202752, speculative_profiles=(
-        _mtp_profile(0.70, 0.6e9, 3, "https://arxiv.org/abs/2601.11580",
-                     "Native MTP; GLM-4.5-family acceptance assumption (no per-version measurement published).", resident_params=10.4e9),
-    )),
-    # Official GLM-5.1 config: 78-layer MLA + DSA, top-2048 indexer in every
-    # layer, and 202,752-token context. The 744B figure is the backbone; the
-    # optional MTP resident footprint is accounted for by its spec profile.
-    "glm51": Model(
-        "glm51", "GLM-5.1 744B-A40B", "GLM", "#0F273A",
-        744e9, 40e9, True, 78, 64, 64, 256, True,
+    "q08": Model(
+        "q08",
+        "Qwen 3.5 0.8B",
+        "Qwen",
+        "#0E8F66",
+        0.8e9,
+        0.8e9,
+        False,
+        24,
+        8,
+        2,
+        256,
+        False,
+        hidden_dim=1024,
+        attention_layers=6,
+        linear_attention_layers=18,
+        linear_attention_heads=16,
+        linear_attention_head_dim=128,
+        linear_attention_k_heads=16,
+        linear_attention_k_head_dim=128,
+        linear_attention_conv_kernel=4,
+        attention_label="18 Gated DeltaNet + 6 full attention",
+        max_context_tokens=262144,
+        speculative_profiles=(
+            _mtp_profile(
+                0.65,
+                0.035e9,
+                1,
+                "https://huggingface.co/Qwen/Qwen3.5-0.8B/blob/main/config.json",
+                "Official config contains one native MTP layer. No per-size acceptance benchmark is published; "
+                "alpha=.65 and the one-layer parameter footprint are conservative planning estimates.",
+                supported_ks=(1,),
+            ),
+        ),
+    ),
+    "q2": Model(
+        "q2",
+        "Qwen 3.5 2B",
+        "Qwen",
+        "#15986D",
+        2e9,
+        2e9,
+        False,
+        24,
+        8,
+        2,
+        256,
+        False,
+        hidden_dim=2048,
+        attention_layers=6,
+        linear_attention_layers=18,
+        linear_attention_heads=16,
+        linear_attention_head_dim=128,
+        linear_attention_k_heads=16,
+        linear_attention_k_head_dim=128,
+        linear_attention_conv_kernel=4,
+        attention_label="18 Gated DeltaNet + 6 full attention",
+        max_context_tokens=262144,
+        speculative_profiles=(
+            _mtp_profile(
+                0.65,
+                0.08e9,
+                1,
+                "https://huggingface.co/Qwen/Qwen3.5-2B/blob/main/config.json",
+                "Official config contains one native MTP layer. No per-size acceptance benchmark is published; "
+                "alpha=.65 and the one-layer parameter footprint are conservative planning estimates.",
+                supported_ks=(1,),
+            ),
+        ),
+    ),
+    "q4": Model(
+        "q4",
+        "Qwen 3.5 4B",
+        "Qwen",
+        "#1AA174",
+        4e9,
+        4e9,
+        False,
+        32,
+        16,
+        4,
+        256,
+        False,
+        hidden_dim=2560,
+        attention_layers=8,
+        linear_attention_layers=24,
+        linear_attention_heads=32,
+        linear_attention_head_dim=128,
+        linear_attention_k_heads=16,
+        linear_attention_k_head_dim=128,
+        linear_attention_conv_kernel=4,
+        attention_label="24 Gated DeltaNet + 8 full attention",
+        max_context_tokens=262144,
+        speculative_profiles=(
+            _mtp_profile(
+                0.65,
+                0.125e9,
+                1,
+                "https://huggingface.co/Qwen/Qwen3.5-4B/blob/main/config.json",
+                "Official config contains one native MTP layer. No per-size acceptance benchmark is published; "
+                "alpha=.65 and the one-layer parameter footprint are conservative planning estimates.",
+                supported_ks=(1,),
+            ),
+        ),
+    ),
+    "q9": Model(
+        "q9",
+        "Qwen 3.5 9B",
+        "Qwen",
+        "#1D9E75",
+        9.2e9,
+        9.2e9,
+        False,
+        32,
+        16,
+        4,
+        256,
+        False,
+        hidden_dim=4096,
+        attention_layers=8,
+        linear_attention_layers=24,
+        linear_attention_heads=32,
+        linear_attention_head_dim=128,
+        linear_attention_k_heads=16,
+        linear_attention_k_head_dim=128,
+        linear_attention_conv_kernel=4,
+        attention_label="24 Gated DeltaNet + 8 full attention",
+        max_context_tokens=262144,
+        speculative_profiles=(
+            _mtp_profile(
+                0.65,
+                0.29e9,
+                1,
+                "https://huggingface.co/Qwen/Qwen3.5-9B/blob/main/config.json",
+                "Official config contains one native MTP layer. No per-size acceptance benchmark is published; "
+                "alpha=.65 and the one-layer parameter footprint are conservative planning estimates.",
+                supported_ks=(1,),
+            ),
+        ),
+    ),
+    "q27": Model(
+        "q27",
+        "Qwen 3.5 27B",
+        "Qwen",
+        "#3266ad",
+        27.8e9,
+        27.8e9,
+        False,
+        64,
+        24,
+        4,
+        256,
+        False,
+        hidden_dim=5120,
+        attention_layers=16,
+        linear_attention_layers=48,
+        linear_attention_heads=48,
+        linear_attention_head_dim=128,
+        linear_attention_k_heads=16,
+        linear_attention_k_head_dim=128,
+        linear_attention_conv_kernel=4,
+        attention_label="48 Gated DeltaNet + 16 full attention",
+        max_context_tokens=262144,
+        speculative_profiles=(
+            _mtp_profile(
+                0.9103,
+                0.43e9,
+                3,
+                "https://huggingface.co/modal-labs/Qwen3.5-27B-DFlash",
+                "Built-in MTP benchmarked on five workloads on 1x B200. Alpha is fitted to the mean measured "
+                "accept length 3.4934 at k=3; measured speedup was 2.46-2.80x at concurrency 1 and "
+                "1.98-2.34x at concurrency 32.",
+                supported_ks=(3, 7, 15),
+                acceptance_alpha_by_k=((3, 0.9103), (7, 0.8790), (15, 0.8586)),
+            ),
+            _dflash_profile(
+                2e9,
+                0.8765,
+                8,
+                "https://huggingface.co/modal-labs/Qwen3.5-27B-DFlash",
+                "Joint Z-Lab/Modal 2B BF16 checkpoint. Alpha is fitted to mean measured accept length "
+                "5.6248 at block size 8 across five workloads; measured speedup was 3.48-4.76x at "
+                "concurrency 1 and 2.14-3.01x at concurrency 32.",
+                draft_layers=6,
+                exact_weight_bytes=4.26e9,
+                supported_ks=(4, 8, 16),
+                acceptance_alpha_by_k=((4, 0.8227), (8, 0.8765), (16, 0.8841)),
+            ),
+        ),
+    ),
+    "q35": Model(
+        "q35",
+        "Qwen 3.5 35B-A3B",
+        "Qwen",
+        "#7F77DD",
+        35e9,
+        3e9,
+        True,
+        40,
+        16,
+        2,
+        256,
+        False,
+        hidden_dim=2048,
+        attention_layers=10,
+        linear_attention_layers=30,
+        linear_attention_heads=32,
+        linear_attention_head_dim=128,
+        linear_attention_k_heads=16,
+        linear_attention_k_head_dim=128,
+        linear_attention_conv_kernel=4,
+        attention_label="30 Gated DeltaNet + 10 full attention",
+        max_context_tokens=262144,
+        speculative_profiles=(
+            _mtp_profile(
+                0.70,
+                0.1e9,
+                3,
+                "https://www.lmsys.org/blog/2026-06-15-next-generation-speculative-decoding-dflash-v2/",
+                "Native MTP documented for Qwen 3.5 397B; family assumption here — no per-size acceptance published.",
+                resident_params=0.55e9,
+            ),
+        ),
+    ),
+    "q122": Model(
+        "q122",
+        "Qwen 3.5 122B-A10B",
+        "Qwen",
+        "#D85A30",
+        122e9,
+        10e9,
+        True,
+        48,
+        32,
+        2,
+        256,
+        False,
+        hidden_dim=3072,
+        attention_layers=12,
+        linear_attention_layers=36,
+        linear_attention_heads=64,
+        linear_attention_head_dim=128,
+        linear_attention_k_heads=16,
+        linear_attention_k_head_dim=128,
+        linear_attention_conv_kernel=4,
+        attention_label="36 Gated DeltaNet + 12 full attention",
+        max_context_tokens=262144,
+        speculative_profiles=(
+            _mtp_profile(
+                0.70,
+                0.15e9,
+                3,
+                "https://www.lmsys.org/blog/2026-06-15-next-generation-speculative-decoding-dflash-v2/",
+                "Native MTP documented for Qwen 3.5 397B; family assumption here — no per-size acceptance published.",
+                resident_params=1.3e9,
+            ),
+        ),
+    ),
+    "q397": Model(
+        "q397",
+        "Qwen 3.5 397B-A17B",
+        "Qwen",
+        "#A6422A",
+        397e9,
+        17e9,
+        True,
+        60,
+        32,
+        2,
+        256,
+        False,
+        hidden_dim=4096,
+        attention_layers=15,
+        linear_attention_layers=45,
+        linear_attention_heads=64,
+        linear_attention_head_dim=128,
+        linear_attention_k_heads=16,
+        linear_attention_k_head_dim=128,
+        linear_attention_conv_kernel=4,
+        attention_label="45 Gated DeltaNet + 15 full attention",
+        max_context_tokens=262144,
+        speculative_profiles=(
+            _mtp_profile(
+                0.70,
+                0.2e9,
+                3,
+                "https://www.lmsys.org/blog/2026-06-15-next-generation-speculative-decoding-dflash-v2/",
+                "Native MTP benchmarked by LMSYS/Modal (7 draft steps optimal at concurrency 1); "
+                "default k=3 is the conservative serving choice.",
+                resident_params=4.2e9,
+            ),
+            _dflash_profile(
+                1e9,
+                0.78,
+                8,
+                "https://huggingface.co/z-lab/Qwen3.5-397B-A17B-DFlash",
+                "z-lab DFlash: >4.3x baseline and 1.5x native MTP at concurrency 1 (HumanEval, 8xB200); "
+                "beats MTP at concurrencies 1-32. Uses the exact 1B checkpoint size; alpha=.78 is a conservative cross-workload prior.",
+            ),
+        ),
+    ),
+    "glm45a": Model(
+        "glm45a",
+        "GLM-4.5-Air 106B-A12B",
+        "GLM",
+        "#2F7E9F",
+        106e9,
+        12e9,
+        True,
+        46,
+        96,
+        8,
+        128,
+        False,
+        hidden_dim=4096,
+        max_context_tokens=131072,
+        speculative_profiles=(
+            _mtp_profile(
+                0.70,
+                0.25e9,
+                3,
+                "https://arxiv.org/abs/2601.11580",
+                "GLM-4.5 ships a native MTP head. SpecDecode-Bench measured 1.3-1.8x on GLM-4.5-Air (vLLM/H100); "
+                "per-position acceptance degrades across the drafted tokens.",
+                resident_params=1.9e9,
+            ),
+        ),
+    ),
+    "glm45": Model(
+        "glm45",
+        "GLM-4.5 355B-A32B",
+        "GLM",
+        "#2B6D8A",
+        355e9,
+        32e9,
+        True,
+        92,
+        96,
+        8,
+        128,
+        False,
+        hidden_dim=5120,
+        max_context_tokens=131072,
+        speculative_profiles=(
+            _mtp_profile(
+                0.70,
+                0.55e9,
+                3,
+                "https://arxiv.org/abs/2601.11580",
+                "GLM-4.5 ships a native MTP head; acceptance is the GLM-4.5-Air SpecDecode-Bench assumption.",
+                resident_params=5.8e9,
+            ),
+        ),
+    ),
+    "glm46": Model(
+        "glm46",
+        "GLM-4.6 357B-A32B",
+        "GLM",
+        "#275C75",
+        357e9,
+        32e9,
+        True,
+        92,
+        96,
+        8,
+        128,
+        False,
+        hidden_dim=5120,
+        max_context_tokens=202752,
+        speculative_profiles=(
+            _mtp_profile(
+                0.70,
+                0.55e9,
+                3,
+                "https://arxiv.org/abs/2601.11580",
+                "Native MTP; GLM-4.5-family acceptance assumption (no per-version measurement published).",
+                resident_params=5.8e9,
+            ),
+        ),
+    ),
+    "glm47": Model(
+        "glm47",
+        "GLM-4.7 358B-A32B",
+        "GLM",
+        "#214A61",
+        358e9,
+        32e9,
+        True,
+        92,
+        96,
+        8,
+        128,
+        False,
+        hidden_dim=5120,
+        max_context_tokens=202752,
+        speculative_profiles=(
+            _mtp_profile(
+                0.70,
+                0.55e9,
+                3,
+                "https://arxiv.org/abs/2601.11580",
+                "Native MTP; GLM-4.5-family acceptance assumption (no per-version measurement published).",
+                resident_params=5.8e9,
+            ),
+        ),
+    ),
+    "glm47f": Model(
+        "glm47f",
+        "GLM-4.7-Flash 31B-A3B",
+        "GLM",
+        "#3F93BA",
+        31e9,
+        3e9,
+        True,
+        47,
+        20,
+        20,
+        256,
+        True,
+        mla_kv_dim=512,
+        mla_rope_dim=64,
+        mla_tp_supported=True,
+        hidden_dim=2048,
+        attention_label="MLA · 202,752 context",
+        max_context_tokens=202752,
+        speculative_profiles=(
+            _mtp_profile(
+                0.70,
+                0.1e9,
+                3,
+                "https://arxiv.org/abs/2601.11580",
+                "Native MTP; GLM-4.5-family acceptance assumption (no per-version measurement published).",
+                resident_params=0.65e9,
+            ),
+        ),
+    ),
+    "glm5": Model(
+        "glm5",
+        "GLM-5 744B-A40B",
+        "GLM",
+        "#16354A",
+        744e9,
+        40e9,
+        True,
+        78,
+        64,
+        64,
+        256,
+        True,
         mla_kv_dim=512,
         mla_rope_dim=64,
         mla_tp_supported=True,
@@ -3096,7 +3886,46 @@ MODELS: dict[str, Model] = {
         max_context_tokens=202752,
         speculative_profiles=(
             _mtp_profile(
-                0.70, 0.6e9, 3,
+                0.70,
+                0.6e9,
+                3,
+                "https://arxiv.org/abs/2601.11580",
+                "Native MTP; GLM-4.5-family acceptance assumption (no per-version measurement published).",
+                resident_params=10.4e9,
+            ),
+        ),
+    ),
+    # Official GLM-5.1 config: 78-layer MLA + DSA, top-2048 indexer in every
+    # layer, and 202,752-token context. The 744B figure is the backbone; the
+    # optional MTP resident footprint is accounted for by its spec profile.
+    "glm51": Model(
+        "glm51",
+        "GLM-5.1 744B-A40B",
+        "GLM",
+        "#0F273A",
+        744e9,
+        40e9,
+        True,
+        78,
+        64,
+        64,
+        256,
+        True,
+        mla_kv_dim=512,
+        mla_rope_dim=64,
+        mla_tp_supported=True,
+        hidden_dim=6144,
+        sparse_attention_top_k=2048,
+        sparse_indexer_heads=32,
+        sparse_indexer_head_dim=128,
+        sparse_indexer_layers=78,
+        attention_label="DSA top-2048 · 202,752 context",
+        max_context_tokens=202752,
+        speculative_profiles=(
+            _mtp_profile(
+                0.70,
+                0.6e9,
+                3,
                 "https://huggingface.co/zai-org/GLM-5.1",
                 "Native MTP; conservative acceptance prior because no public "
                 "per-position serving profile is available.",
@@ -3109,8 +3938,18 @@ MODELS: dict[str, Model] = {
     # IndexShare sparse attention and the 1M context are published in the official
     # config/card.
     "glm52": Model(
-        "glm52", "GLM-5.2 744B-A40B", "GLM", "#091D2D",
-        744e9, 40e9, True, 78, 64, 64, 256, True,
+        "glm52",
+        "GLM-5.2 744B-A40B",
+        "GLM",
+        "#091D2D",
+        744e9,
+        40e9,
+        True,
+        78,
+        64,
+        64,
+        256,
+        True,
         mla_kv_dim=512,
         mla_rope_dim=64,
         mla_tp_supported=True,
@@ -3125,7 +3964,9 @@ MODELS: dict[str, Model] = {
         max_context_tokens=1024 * 1024,
         speculative_profiles=(
             _mtp_profile(
-                0.74, 0.65e9, 4,
+                0.74,
+                0.65e9,
+                4,
                 "https://huggingface.co/zai-org/GLM-5.2",
                 "Native MTP; Z.ai reports up to 20% longer acceptance than GLM-5.1. "
                 "Acceptance remains a conservative planner prior pending a vLLM profile.",
@@ -3133,7 +3974,6 @@ MODELS: dict[str, Model] = {
             ),
         ),
     ),
-
     "k25": Model(
         "k25",
         "Kimi K2.5 1T-A32B",
@@ -3235,7 +4075,6 @@ MODELS: dict[str, Model] = {
         attention_label="20 KDA + 7 MLA · 1M context",
         max_context_tokens=1_048_576,
     ),
-
     "inkling": Model(
         "inkling",
         "Inkling 975B-A41B",
@@ -3285,7 +4124,6 @@ MODELS: dict[str, Model] = {
         attention_label="40 SWA + 8 global architecture proxy; preview config pending",
         max_context_tokens=1_048_576,
     ),
-
     "command-a-plus-05-2026": Model(
         "command-a-plus-05-2026",
         "Command A+ 05-2026",
@@ -3382,24 +4220,75 @@ MODELS: dict[str, Model] = {
         "Tiny Aya Water 3.35B",
         "#0369A1",
     ),
-
-    "minimax25": Model("minimax25", "MiniMax M2.5 229B-A10B", "MiniMax", "#2C6D9B", 229e9, 10e9, True, 62, 48, 8, 128, False,
-        hidden_dim=3072, max_context_tokens=196608, speculative_profiles=(
-        _mtp_profile(0.80, 0.2e9, 2, "https://huggingface.co/MiniMaxAI",
-                     "MiniMax ships an optional ~10.5 GB MTP drafter artifact (see the NVFP4 profile storage note); "
-                     "resident bytes use that artifact exactly; alpha is an unmeasured planning prior.",
-                     exact_weight_bytes=10.5e9, resident_params=5e9),
-    )),
-    "minimax27": Model("minimax27", "MiniMax M2.7 229B-A10B", "MiniMax", "#1D5276", 229e9, 10e9, True, 62, 48, 8, 128, False,
-        hidden_dim=3072, max_context_tokens=204800, speculative_profiles=(
-        _mtp_profile(0.80, 0.2e9, 2, "https://huggingface.co/MiniMaxAI",
-                     "MiniMax ships an optional ~10.5 GB MTP drafter artifact (see the NVFP4 profile storage note); "
-                     "resident bytes use that artifact exactly; alpha is an unmeasured planning prior.",
-                     exact_weight_bytes=10.5e9, resident_params=5e9),
-    )),
+    "minimax25": Model(
+        "minimax25",
+        "MiniMax M2.5 229B-A10B",
+        "MiniMax",
+        "#2C6D9B",
+        229e9,
+        10e9,
+        True,
+        62,
+        48,
+        8,
+        128,
+        False,
+        hidden_dim=3072,
+        max_context_tokens=196608,
+        speculative_profiles=(
+            _mtp_profile(
+                0.80,
+                0.2e9,
+                2,
+                "https://huggingface.co/MiniMaxAI",
+                "MiniMax ships an optional ~10.5 GB MTP drafter artifact (see the NVFP4 profile storage note); "
+                "resident bytes use that artifact exactly; alpha is an unmeasured planning prior.",
+                exact_weight_bytes=10.5e9,
+                resident_params=5e9,
+            ),
+        ),
+    ),
+    "minimax27": Model(
+        "minimax27",
+        "MiniMax M2.7 229B-A10B",
+        "MiniMax",
+        "#1D5276",
+        229e9,
+        10e9,
+        True,
+        62,
+        48,
+        8,
+        128,
+        False,
+        hidden_dim=3072,
+        max_context_tokens=204800,
+        speculative_profiles=(
+            _mtp_profile(
+                0.80,
+                0.2e9,
+                2,
+                "https://huggingface.co/MiniMaxAI",
+                "MiniMax ships an optional ~10.5 GB MTP drafter artifact (see the NVFP4 profile storage note); "
+                "resident bytes use that artifact exactly; alpha is an unmeasured planning prior.",
+                exact_weight_bytes=10.5e9,
+                resident_params=5e9,
+            ),
+        ),
+    ),
     "minimax3": Model(
-        "minimax3", "MiniMax M3 428B-A23B", "MiniMax", "#163E5C",
-        428e9, 23e9, True, 60, 64, 4, 128, False,
+        "minimax3",
+        "MiniMax M3 428B-A23B",
+        "MiniMax",
+        "#163E5C",
+        428e9,
+        23e9,
+        True,
+        60,
+        64,
+        4,
+        128,
+        False,
         hidden_dim=6144,
         sparse_attention_top_k=2048,
         sparse_indexer_heads=4,
@@ -3425,14 +4314,57 @@ MODELS: dict[str, Model] = {
             ),
         ),
     ),
-
-    "nem3s": Model("nem3s", "Nemotron 3 Super 120B-A12B", "Nemotron", "#6FA7C9", 120e9, 12e9, True, 88, 32, 2, 128, False,
-        kv_layers=8, hidden_dim=4096, max_context_tokens=1_048_576),
-    "nem3n": Model("nem3n", "Nemotron 3 Nano 30B-A3B", "Nemotron", "#98C5DE", 31.6e9, 3.2e9, True, 52, 32, 2, 128, False,
-        kv_layers=6, hidden_dim=2688, max_context_tokens=1_048_576),
-    "nem3no": Model("nem3no", "Nemotron 3 Nano Omni 30B-A3B", "Nemotron", "#B7D5E8", 30e9, 3e9, True, 52, 32, 2, 128, False,
-        kv_layers=6, hidden_dim=2688, max_context_tokens=262144),
-
+    "nem3s": Model(
+        "nem3s",
+        "Nemotron 3 Super 120B-A12B",
+        "Nemotron",
+        "#6FA7C9",
+        120e9,
+        12e9,
+        True,
+        88,
+        32,
+        2,
+        128,
+        False,
+        kv_layers=8,
+        hidden_dim=4096,
+        max_context_tokens=1_048_576,
+    ),
+    "nem3n": Model(
+        "nem3n",
+        "Nemotron 3 Nano 30B-A3B",
+        "Nemotron",
+        "#98C5DE",
+        31.6e9,
+        3.2e9,
+        True,
+        52,
+        32,
+        2,
+        128,
+        False,
+        kv_layers=6,
+        hidden_dim=2688,
+        max_context_tokens=1_048_576,
+    ),
+    "nem3no": Model(
+        "nem3no",
+        "Nemotron 3 Nano Omni 30B-A3B",
+        "Nemotron",
+        "#B7D5E8",
+        30e9,
+        3e9,
+        True,
+        52,
+        32,
+        2,
+        128,
+        False,
+        kv_layers=6,
+        hidden_dim=2688,
+        max_context_tokens=262144,
+    ),
     "ds3": Model(
         "ds3",
         "DeepSeek V3 671B-A37B",
@@ -3532,15 +4464,84 @@ MODELS: dict[str, Model] = {
             ),
         ),
     ),
-
-    "mi7": Model("mi7", "Mistral 7B", "Mistral", "#e07020", 7e9, 7e9, False, 32, 32, 8, 128, False, max_context_tokens=32768),
-    "mx87": Model("mx87", "Mixtral 8×7B (46.7B-A12.9B)", "Mistral", "#cc6633", 46.7e9, 12.9e9, True, 32, 32, 8, 128, False, max_context_tokens=32768),
-    "cs22": Model("cs22", "Codestral 22B", "Mistral", "#d4882e", 22e9, 22e9, False, 56, 48, 8, 128, False,
-        hidden_dim=6144, max_context_tokens=32768),
-    "ms24": Model("ms24", "Mistral Small 3.1 24B", "Mistral", "#b87530", 24e9, 24e9, False, 40, 32, 8, 128, False,
-        hidden_dim=5120, max_context_tokens=131072),
-    "ms32": Model("ms32", "Mistral Small 3.2 24B", "Mistral", "#C18438", 24e9, 24e9, False, 40, 32, 8, 128, False,
-        hidden_dim=5120, max_context_tokens=131072),
+    "mi7": Model(
+        "mi7",
+        "Mistral 7B",
+        "Mistral",
+        "#e07020",
+        7e9,
+        7e9,
+        False,
+        32,
+        32,
+        8,
+        128,
+        False,
+        max_context_tokens=32768,
+    ),
+    "mx87": Model(
+        "mx87",
+        "Mixtral 8×7B (46.7B-A12.9B)",
+        "Mistral",
+        "#cc6633",
+        46.7e9,
+        12.9e9,
+        True,
+        32,
+        32,
+        8,
+        128,
+        False,
+        max_context_tokens=32768,
+    ),
+    "cs22": Model(
+        "cs22",
+        "Codestral 22B",
+        "Mistral",
+        "#d4882e",
+        22e9,
+        22e9,
+        False,
+        56,
+        48,
+        8,
+        128,
+        False,
+        hidden_dim=6144,
+        max_context_tokens=32768,
+    ),
+    "ms24": Model(
+        "ms24",
+        "Mistral Small 3.1 24B",
+        "Mistral",
+        "#b87530",
+        24e9,
+        24e9,
+        False,
+        40,
+        32,
+        8,
+        128,
+        False,
+        hidden_dim=5120,
+        max_context_tokens=131072,
+    ),
+    "ms32": Model(
+        "ms32",
+        "Mistral Small 3.2 24B",
+        "Mistral",
+        "#C18438",
+        24e9,
+        24e9,
+        False,
+        40,
+        32,
+        8,
+        128,
+        False,
+        hidden_dim=5120,
+        max_context_tokens=131072,
+    ),
     "voxtral-realtime-mini-4b": Model(
         "voxtral-realtime-mini-4b",
         "Voxtral Mini Realtime 4B",
@@ -3855,27 +4856,163 @@ MODELS: dict[str, Model] = {
     ),
     # Mistral does not publish a parameter count for Medium 3.1; keep a hidden
     # legacy entry so older saved states continue to resolve cleanly.
-    "mm31": Model("mm31", "Mistral Medium 3.1 (legacy)", "Mistral", "#AD6A2C", 24e9, 24e9, False, 40, 32, 8, 128, False, hidden=True),
-    "mistral-medium-3.5-preview": Model("mistral-medium-3.5-preview", "Mistral Medium 3.5 128B", "Mistral", "#A95F24", 128e9, 128e9, False, 88, 96, 8, 128, False,
-        attention_label="Architecture proxy · ctx 256k", max_context_tokens=262144),
-    "ms4": Model("ms4", "Mistral Small 4 119B-A6.5B", "Mistral", "#93511F", 119e9, 6.5e9, True, 64, 64, 8, 128, False,
-        attention_label="Architecture proxy · ctx 256k", max_context_tokens=262144),
-    "ml3": Model("ml3", "Mistral Large 3 675B-A41B", "Mistral", "#7A3B18", 675e9, 41e9, True, 96, 128, 8, 128, False,
-        attention_label="Architecture proxy · ctx 256k", max_context_tokens=262144),
-    "ml123": Model("ml123", "Mistral Large 2 123B", "Mistral", "#994422", 123e9, 123e9, False, 88, 96, 8, 128, False),
-
-    "n3": Model("n3", "Ministral 3 3B", "Ministral", "#E2A552", 3e9, 3e9, False, 26, 32, 8, 128, False,
-        hidden_dim=3072, max_context_tokens=262144),
-    "n8": Model("n8", "Ministral 3 8B", "Ministral", "#D69343", 8e9, 8e9, False, 34, 32, 8, 128, False,
-        hidden_dim=4096, max_context_tokens=262144),
-    "n14": Model("n14", "Ministral 3 14B", "Ministral", "#CA8136", 14e9, 14e9, False, 40, 32, 8, 128, False,
-        hidden_dim=5120, max_context_tokens=262144),
-
-    "dv24": Model("dv24", "Devstral Small 2 24B", "Devstral", "#B85F59", 24e9, 24e9, False, 40, 32, 8, 128, False,
-        hidden_dim=5120, max_context_tokens=393216),
-    "dv123": Model("dv123", "Devstral 2 123B", "Devstral", "#94423E", 123e9, 123e9, False, 88, 96, 8, 128, False,
-        hidden_dim=12288, max_context_tokens=262144),
-
+    "mm31": Model(
+        "mm31",
+        "Mistral Medium 3.1 (legacy)",
+        "Mistral",
+        "#AD6A2C",
+        24e9,
+        24e9,
+        False,
+        40,
+        32,
+        8,
+        128,
+        False,
+        hidden=True,
+    ),
+    "mistral-medium-3.5-preview": Model(
+        "mistral-medium-3.5-preview",
+        "Mistral Medium 3.5 128B",
+        "Mistral",
+        "#A95F24",
+        128e9,
+        128e9,
+        False,
+        88,
+        96,
+        8,
+        128,
+        False,
+        attention_label="Architecture proxy · ctx 256k",
+        max_context_tokens=262144,
+    ),
+    "ms4": Model(
+        "ms4",
+        "Mistral Small 4 119B-A6.5B",
+        "Mistral",
+        "#93511F",
+        119e9,
+        6.5e9,
+        True,
+        64,
+        64,
+        8,
+        128,
+        False,
+        attention_label="Architecture proxy · ctx 256k",
+        max_context_tokens=262144,
+    ),
+    "ml3": Model(
+        "ml3",
+        "Mistral Large 3 675B-A41B",
+        "Mistral",
+        "#7A3B18",
+        675e9,
+        41e9,
+        True,
+        96,
+        128,
+        8,
+        128,
+        False,
+        attention_label="Architecture proxy · ctx 256k",
+        max_context_tokens=262144,
+    ),
+    "ml123": Model(
+        "ml123",
+        "Mistral Large 2 123B",
+        "Mistral",
+        "#994422",
+        123e9,
+        123e9,
+        False,
+        88,
+        96,
+        8,
+        128,
+        False,
+    ),
+    "n3": Model(
+        "n3",
+        "Ministral 3 3B",
+        "Ministral",
+        "#E2A552",
+        3e9,
+        3e9,
+        False,
+        26,
+        32,
+        8,
+        128,
+        False,
+        hidden_dim=3072,
+        max_context_tokens=262144,
+    ),
+    "n8": Model(
+        "n8",
+        "Ministral 3 8B",
+        "Ministral",
+        "#D69343",
+        8e9,
+        8e9,
+        False,
+        34,
+        32,
+        8,
+        128,
+        False,
+        hidden_dim=4096,
+        max_context_tokens=262144,
+    ),
+    "n14": Model(
+        "n14",
+        "Ministral 3 14B",
+        "Ministral",
+        "#CA8136",
+        14e9,
+        14e9,
+        False,
+        40,
+        32,
+        8,
+        128,
+        False,
+        hidden_dim=5120,
+        max_context_tokens=262144,
+    ),
+    "dv24": Model(
+        "dv24",
+        "Devstral Small 2 24B",
+        "Devstral",
+        "#B85F59",
+        24e9,
+        24e9,
+        False,
+        40,
+        32,
+        8,
+        128,
+        False,
+        hidden_dim=5120,
+        max_context_tokens=393216,
+    ),
+    "dv123": Model(
+        "dv123",
+        "Devstral 2 123B",
+        "Devstral",
+        "#94423E",
+        123e9,
+        123e9,
+        False,
+        88,
+        96,
+        8,
+        128,
+        False,
+        hidden_dim=12288,
+        max_context_tokens=262144,
+    ),
     # ZAYA1-base/reasoning-base config: 16 physical heads, CCA attention in 8-query-head
     # latent space, 2 KV heads, and 40 attention-bearing layers.
     "zaya1-8b": Model(
@@ -3920,7 +5057,6 @@ MODELS: dict[str, Model] = {
         hidden=True,
         attention_label="Legacy proxy",
     ),
-
     # Official Laguna M.1 config: 70 all-global MoE layers (the first three are
     # dense), 4096 hidden width, 64 Q / 8 KV heads, and 256k context.
     "laguna-m1": Model(
@@ -3940,16 +5076,71 @@ MODELS: dict[str, Model] = {
         attention_label="70 global attention · 3 dense + 67 MoE",
         max_context_tokens=262144,
     ),
-    "laguna-xs2": Model("laguna-xs2", "Laguna XS.2 33B-A3B", "Poolside", "#0891B2", 33e9, 3e9, True, 40, 48, 8, 128, False, hidden_dim=2048, local_attention_layers=30, local_attention_window=512, local_attention_heads=64, attention_label="10 global + 30 SWA 512"),
+    "laguna-xs2": Model(
+        "laguna-xs2",
+        "Laguna XS.2 33B-A3B",
+        "Poolside",
+        "#0891B2",
+        33e9,
+        3e9,
+        True,
+        40,
+        48,
+        8,
+        128,
+        False,
+        hidden_dim=2048,
+        local_attention_layers=30,
+        local_attention_window=512,
+        local_attention_heads=64,
+        attention_label="10 global + 30 SWA 512",
+    ),
     # Poolside states that XS 2.1 retains the XS.2 architecture.  Its public release
     # confirms 33B total / 3B activated parameters and 256K served context; detailed
     # layer dimensions remain unpublished, so retain the documented family proxy.
-    "laguna-xs-2-1": Model("laguna-xs-2-1", "Laguna XS 2.1 33B-A3B", "Poolside", "#0891B2", 33e9, 3e9, True, 40, 48, 8, 128, False, hidden_dim=2048, local_attention_layers=30, local_attention_window=512, local_attention_heads=64, attention_label="10 global + 30 SWA 512 (XS.2 architecture proxy)", max_context_tokens=256 * 1024),
+    "laguna-xs-2-1": Model(
+        "laguna-xs-2-1",
+        "Laguna XS 2.1 33B-A3B",
+        "Poolside",
+        "#0891B2",
+        33e9,
+        3e9,
+        True,
+        40,
+        48,
+        8,
+        128,
+        False,
+        hidden_dim=2048,
+        local_attention_layers=30,
+        local_attention_window=512,
+        local_attention_heads=64,
+        attention_label="10 global + 30 SWA 512 (XS.2 architecture proxy)",
+        max_context_tokens=256 * 1024,
+    ),
     # Laguna S 2.1 ships with a published config (poolside/Laguna-S-2.1): 48 layers,
     # hidden 3072, 12 full-attention layers at 48 heads and 36 sliding-window (512)
     # layers at 72 heads with per-head gating, 8 KV heads, 1M context.
-    "laguna-s-2-1": Model("laguna-s-2-1", "Laguna S 2.1 118B-A8B", "Poolside", "#06B6D4", 118e9, 8e9, True, 48, 48, 8, 128, False, hidden_dim=3072, local_attention_layers=36, local_attention_window=512, local_attention_heads=72, attention_label="12 global + 36 SWA 512 (per-head gating)", max_context_tokens=1024 * 1024),
-
+    "laguna-s-2-1": Model(
+        "laguna-s-2-1",
+        "Laguna S 2.1 118B-A8B",
+        "Poolside",
+        "#06B6D4",
+        118e9,
+        8e9,
+        True,
+        48,
+        48,
+        8,
+        128,
+        False,
+        hidden_dim=3072,
+        local_attention_layers=36,
+        local_attention_window=512,
+        local_attention_heads=72,
+        attention_label="12 global + 36 SWA 512 (per-head gating)",
+        max_context_tokens=1024 * 1024,
+    ),
     "mimo-v2.5-pro": Model(
         "mimo-v2.5-pro",
         "MiMo-V2.5-Pro 1.02T-A42B",
@@ -4032,42 +5223,57 @@ MODELS: dict[str, Model] = {
             ),
         ),
     ),
-
-    "cr13": Model("cr13", "Croissant 1.3B", "Croissant", "#dda050", 1.3e9, 1.3e9, False, 24, 16, 16, 128, False,
-        hidden_dim=2048, max_context_tokens=2048),
+    "cr13": Model(
+        "cr13",
+        "Croissant 1.3B",
+        "Croissant",
+        "#dda050",
+        1.3e9,
+        1.3e9,
+        False,
+        24,
+        16,
+        16,
+        128,
+        False,
+        hidden_dim=2048,
+        max_context_tokens=2048,
+    ),
 }
 
 # Keep Gemma 4's general-purpose LLM entries in the LLM picker while exposing
 # dedicated ASR workload variants with identical decoder geometry.
-MODELS.update({
-    "gemma-4-e2b-asr": replace(
-        MODELS["ge2"],
-        key="gemma-4-e2b-asr",
-        name="Gemma 4 E2B ASR",
-        cat="Audio",
-        capabilities_override=frozenset(),
-        realtime_profile=GEMMA_4_E2B_ASR_PROFILE,
-        speculative_profiles=(),
-    ),
-    "gemma-4-e4b-asr": replace(
-        MODELS["ge4"],
-        key="gemma-4-e4b-asr",
-        name="Gemma 4 E4B ASR",
-        cat="Audio",
-        capabilities_override=frozenset(),
-        realtime_profile=GEMMA_4_E4B_ASR_PROFILE,
-        speculative_profiles=(),
-    ),
-    "gemma-4-12b-unified-asr": replace(
-        MODELS["g12"],
-        key="gemma-4-12b-unified-asr",
-        name="Gemma 4 12B Unified ASR",
-        cat="Audio",
-        capabilities_override=frozenset(),
-        realtime_profile=GEMMA_4_12B_ASR_PROFILE,
-        speculative_profiles=(),
-    ),
-})
+MODELS.update(
+    {
+        "gemma-4-e2b-asr": replace(
+            MODELS["ge2"],
+            key="gemma-4-e2b-asr",
+            name="Gemma 4 E2B ASR",
+            cat="Audio",
+            capabilities_override=frozenset(),
+            realtime_profile=GEMMA_4_E2B_ASR_PROFILE,
+            speculative_profiles=(),
+        ),
+        "gemma-4-e4b-asr": replace(
+            MODELS["ge4"],
+            key="gemma-4-e4b-asr",
+            name="Gemma 4 E4B ASR",
+            cat="Audio",
+            capabilities_override=frozenset(),
+            realtime_profile=GEMMA_4_E4B_ASR_PROFILE,
+            speculative_profiles=(),
+        ),
+        "gemma-4-12b-unified-asr": replace(
+            MODELS["g12"],
+            key="gemma-4-12b-unified-asr",
+            name="Gemma 4 12B Unified ASR",
+            cat="Audio",
+            capabilities_override=frozenset(),
+            realtime_profile=GEMMA_4_12B_ASR_PROFILE,
+            speculative_profiles=(),
+        ),
+    }
+)
 
 
 QUANTIZATION_CAPTURED_AT = "2026-05-22"
@@ -4112,298 +5318,343 @@ def _nvfp4_profile(
     )
 
 
-MODEL_QUANTIZATION_PROFILES: dict[tuple[str, str], QuantizationProfile] = dict([
-    _nvfp4_profile(
-        model_key="g31",
-        source_repo="nvidia/Gemma-4-31B-IT-NVFP4",
-        source_revision="e5ef03afa233c35cb000323ff098d4291e1dd07c",
-        source_downloads=2_281_570,
-        storage_format_counts={
-            "BF16": 10_464_098_156,
-            "U8": 10_404_495_360,
-            "F8_E4M3": 1_300_561_920,
-            "F32": 360,
-        },
-        compute_precision_shares={"nvfp4": 0.62, "bf16": 0.38},
-        quantized=("language MLP weights: packed FP4 payload + FP8 scales",),
-        retained=("language self-attention BF16", "embeddings BF16", "vision tower BF16", "lm_head BF16"),
-        notes="HF quant config excludes every language self-attention block, the vision tower, embed_vision, and lm_head.",
-    ),
-    _nvfp4_profile(
-        model_key="g26",
-        source_repo="nvidia/Gemma-4-26B-A4B-NVFP4",
-        source_revision="a19cfe00be84568a6867111c9a68c9c44fdcffe6",
-        source_downloads=923_412,
-        storage_format_counts={
-            "BF16": 2_967_950_926,
-            "U8": 11_418_992_640,
-            "F8_E4M3": 1_427_374_080,
-        },
-        compute_precision_shares={"nvfp4": 0.72, "bf16": 0.28},
-        quantized=("later language MoE/MLP tensors: packed FP4 payload + FP8 scales",),
-        retained=("early language layers BF16", "routers BF16", "vision tower BF16", "lm_head BF16"),
-        notes="HF quant config excludes language layers 0-29 plus routers/self-attention, vision tower, embed_vision, and lm_head.",
-    ),
-    _nvfp4_profile(
-        model_key="q35",
-        source_repo="txn545/Qwen3.5-35B-A3B-NVFP4",
-        source_revision="63ffbd1d5ca18043b67ea5302238afe3929fddb2",
-        source_downloads=26_399,
-        storage_format_counts={
-            "F32": 61_700,
-            "BF16": 3_613_738_864,
-            "F8_E4M3": 2_021_130_240,
-            "U8": 16_169_041_920,
-        },
-        compute_precision_shares={"nvfp4": 0.82, "bf16": 0.18},
-        quantized=("MoE expert weights: packed FP4 payload + FP8 scales", "selected self-attention layers"),
-        retained=("linear attention BF16", "router gates BF16", "embeddings BF16", "vision modules BF16", "lm_head BF16"),
-        notes="Top exact Qwen3.5-35B-A3B NVFP4 artifact by HF downloads when captured.",
-    ),
-    _nvfp4_profile(
-        model_key="q122",
-        source_repo="Sehyo/Qwen3.5-122B-A10B-NVFP4",
-        source_revision="56a6bdda33285ba2d5688e4f71f6c714649497b4",
-        source_downloads=198_104,
-        storage_format_counts={
-            "F32": 74_112,
-            "BF16": 7_725_676_784,
-            "F8_E4M3": 7_335_051_264,
-            "U8": 58_680_410_112,
-        },
-        compute_precision_shares={"nvfp4": 0.84, "bf16": 0.16},
-        quantized=("Linear MoE/expert tensors: packed FP4 payload + FP8 scales",),
-        retained=("linear attention BF16", "router gates BF16", "visual modules BF16", "lm_head BF16"),
-        notes="Recipe targets Linear and ignores lm_head, router gates, shared expert gates, linear attention, and visual modules.",
-    ),
-    _nvfp4_profile(
-        model_key="q397",
-        source_repo="Sehyo/Qwen3.5-122B-A10B-NVFP4",
-        source_revision="56a6bdda33285ba2d5688e4f71f6c714649497b4",
-        source_downloads=198_104,
-        source_kind="family",
-        total_weight_bytes_override=265_101_993_628,
-        compute_precision_shares={"nvfp4": 0.84, "bf16": 0.16},
-        quantized=("Qwen3.5 MoE Linear tensors by family proxy",),
-        retained=("linear attention BF16", "router gates BF16", "visual modules BF16", "lm_head BF16"),
-        notes="Family proxy until the larger Qwen3.5-397B safetensors headers are captured locally.",
-    ),
-    (
-        ("kimi-k3", "mxfp4"),
-        QuantizationProfile(
-            precision_key="mxfp4",
-            label="MXFP4",
-            source_repo="moonshotai/Kimi-K3",
-            source_revision="9f62e4e9fffbd0a83ddd60e1c209d828994b3569",
-            source_downloads=2_850,
-            captured_at="2026-07-27",
-            source_kind="exact",
-            quant_algo="native MXFP4 QAT",
-            kv_cache_format="FP8",
-            kv_cache_bytes_per_elem=1.0,
-            group_size=32,
-            storage_format_counts={},
-            # The report's 104.2B active count includes 48.62B active routed-
-            # expert parameters; the remaining attention, latent projections,
-            # shared experts, routers, and dense layer stay in BF16.
-            compute_precision_shares={
-                "mxfp4": 0.466606256890595,
-                "bf16": 0.533393743109405,
+MODEL_QUANTIZATION_PROFILES: dict[tuple[str, str], QuantizationProfile] = dict(
+    [
+        _nvfp4_profile(
+            model_key="g31",
+            source_repo="nvidia/Gemma-4-31B-IT-NVFP4",
+            source_revision="e5ef03afa233c35cb000323ff098d4291e1dd07c",
+            source_downloads=2_281_570,
+            storage_format_counts={
+                "BF16": 10_464_098_156,
+                "U8": 10_404_495_360,
+                "F8_E4M3": 1_300_561_920,
+                "F32": 360,
             },
-            quantized=("92 layers of routed MoE expert weights in MXFP4 with MXFP8 activations",),
+            compute_precision_shares={"nvfp4": 0.62, "bf16": 0.38},
+            quantized=("language MLP weights: packed FP4 payload + FP8 scales",),
             retained=(
-                "attention and Block AttnRes projections BF16",
-                "latent MoE projections, shared experts, and routers BF16",
-                "dense layer, embeddings, MoonViT-V2, projector, and lm_head BF16",
+                "language self-attention BF16",
+                "embeddings BF16",
+                "vision tower BF16",
+                "lm_head BF16",
             ),
-            # Exact aggregate from the release's 96-shard safetensors index.
-            total_weight_bytes_override=1_560_860_324_864,
-            # Derived from the exact routed-expert geometry and the release
-            # artifact: active experts use 0.53125 B/param; all other active
-            # weights average 1.998 B/param.
-            active_weight_bytes_per_param_override=1.313609348872837,
-            notes=(
-                "Exact 96-shard release footprint. Only routed expert weights are MXFP4; "
-                "all non-expert components remain in higher precision per the technical report."
+            notes="HF quant config excludes every language self-attention block, the vision tower, embed_vision, and lm_head.",
+        ),
+        _nvfp4_profile(
+            model_key="g26",
+            source_repo="nvidia/Gemma-4-26B-A4B-NVFP4",
+            source_revision="a19cfe00be84568a6867111c9a68c9c44fdcffe6",
+            source_downloads=923_412,
+            storage_format_counts={
+                "BF16": 2_967_950_926,
+                "U8": 11_418_992_640,
+                "F8_E4M3": 1_427_374_080,
+            },
+            compute_precision_shares={"nvfp4": 0.72, "bf16": 0.28},
+            quantized=("later language MoE/MLP tensors: packed FP4 payload + FP8 scales",),
+            retained=(
+                "early language layers BF16",
+                "routers BF16",
+                "vision tower BF16",
+                "lm_head BF16",
+            ),
+            notes="HF quant config excludes language layers 0-29 plus routers/self-attention, vision tower, embed_vision, and lm_head.",
+        ),
+        _nvfp4_profile(
+            model_key="q35",
+            source_repo="txn545/Qwen3.5-35B-A3B-NVFP4",
+            source_revision="63ffbd1d5ca18043b67ea5302238afe3929fddb2",
+            source_downloads=26_399,
+            storage_format_counts={
+                "F32": 61_700,
+                "BF16": 3_613_738_864,
+                "F8_E4M3": 2_021_130_240,
+                "U8": 16_169_041_920,
+            },
+            compute_precision_shares={"nvfp4": 0.82, "bf16": 0.18},
+            quantized=(
+                "MoE expert weights: packed FP4 payload + FP8 scales",
+                "selected self-attention layers",
+            ),
+            retained=(
+                "linear attention BF16",
+                "router gates BF16",
+                "embeddings BF16",
+                "vision modules BF16",
+                "lm_head BF16",
+            ),
+            notes="Top exact Qwen3.5-35B-A3B NVFP4 artifact by HF downloads when captured.",
+        ),
+        _nvfp4_profile(
+            model_key="q122",
+            source_repo="Sehyo/Qwen3.5-122B-A10B-NVFP4",
+            source_revision="56a6bdda33285ba2d5688e4f71f6c714649497b4",
+            source_downloads=198_104,
+            storage_format_counts={
+                "F32": 74_112,
+                "BF16": 7_725_676_784,
+                "F8_E4M3": 7_335_051_264,
+                "U8": 58_680_410_112,
+            },
+            compute_precision_shares={"nvfp4": 0.84, "bf16": 0.16},
+            quantized=("Linear MoE/expert tensors: packed FP4 payload + FP8 scales",),
+            retained=(
+                "linear attention BF16",
+                "router gates BF16",
+                "visual modules BF16",
+                "lm_head BF16",
+            ),
+            notes="Recipe targets Linear and ignores lm_head, router gates, shared expert gates, linear attention, and visual modules.",
+        ),
+        _nvfp4_profile(
+            model_key="q397",
+            source_repo="Sehyo/Qwen3.5-122B-A10B-NVFP4",
+            source_revision="56a6bdda33285ba2d5688e4f71f6c714649497b4",
+            source_downloads=198_104,
+            source_kind="family",
+            total_weight_bytes_override=265_101_993_628,
+            compute_precision_shares={"nvfp4": 0.84, "bf16": 0.16},
+            quantized=("Qwen3.5 MoE Linear tensors by family proxy",),
+            retained=(
+                "linear attention BF16",
+                "router gates BF16",
+                "visual modules BF16",
+                "lm_head BF16",
+            ),
+            notes="Family proxy until the larger Qwen3.5-397B safetensors headers are captured locally.",
+        ),
+        (
+            ("kimi-k3", "mxfp4"),
+            QuantizationProfile(
+                precision_key="mxfp4",
+                label="MXFP4",
+                source_repo="moonshotai/Kimi-K3",
+                source_revision="9f62e4e9fffbd0a83ddd60e1c209d828994b3569",
+                source_downloads=2_850,
+                captured_at="2026-07-27",
+                source_kind="exact",
+                quant_algo="native MXFP4 QAT",
+                kv_cache_format="FP8",
+                kv_cache_bytes_per_elem=1.0,
+                group_size=32,
+                storage_format_counts={},
+                # The report's 104.2B active count includes 48.62B active routed-
+                # expert parameters; the remaining attention, latent projections,
+                # shared experts, routers, and dense layer stay in BF16.
+                compute_precision_shares={
+                    "mxfp4": 0.466606256890595,
+                    "bf16": 0.533393743109405,
+                },
+                quantized=(
+                    "92 layers of routed MoE expert weights in MXFP4 with MXFP8 activations",
+                ),
+                retained=(
+                    "attention and Block AttnRes projections BF16",
+                    "latent MoE projections, shared experts, and routers BF16",
+                    "dense layer, embeddings, MoonViT-V2, projector, and lm_head BF16",
+                ),
+                # Exact aggregate from the release's 96-shard safetensors index.
+                total_weight_bytes_override=1_560_860_324_864,
+                # Derived from the exact routed-expert geometry and the release
+                # artifact: active experts use 0.53125 B/param; all other active
+                # weights average 1.998 B/param.
+                active_weight_bytes_per_param_override=1.313609348872837,
+                notes=(
+                    "Exact 96-shard release footprint. Only routed expert weights are MXFP4; "
+                    "all non-expert components remain in higher precision per the technical report."
+                ),
             ),
         ),
-    ),
-    _nvfp4_profile(
-        model_key="k25",
-        source_repo="nvidia/Kimi-K2.5-NVFP4",
-        source_revision="0fd0a5e6879298d3476e3b61852a79792a35ae3d",
-        source_downloads=1_227_250,
-        total_weight_bytes_override=590_850_735_131,
-        compute_precision_shares={"nvfp4": 0.80, "fp8": 0.10, "bf16": 0.10},
-        quantized=("MoE experts NVFP4", "selected dense projections FP8"),
-        retained=("self-attention BF16", "vision/projector modules BF16", "lm_head BF16"),
-        notes="HF quant config is mixed precision with NVFP4 experts and FP8 dense projections; bytes use repository storage.",
-    ),
-    _nvfp4_profile(
-        model_key="inkling",
-        source_repo="thinkingmachines/Inkling-NVFP4",
-        source_revision="d11961f515e883e37796edb9dd6ec1bf0e0e8212",
-        source_downloads=4,
-        storage_format_counts={
-            "I64": 378,
-            "F32": 48_704,
-            "BF16": 39_160_185_992,
-            "F8_E4M3": 57_076_088_832,
-            "U8": 456_608_710_656,
-        },
-        compute_precision_shares={"nvfp4": 0.82, "fp8": 0.10, "bf16": 0.08},
-        quantized=("MoE/feed-forward tensors: packed NVFP4 payload + FP8 scales",),
-        retained=("attention and SConv tensors BF16/FP8", "routers BF16", "multimodal towers BF16", "lm_head BF16"),
-        notes="Exact base-checkpoint repository storage; excludes the optional 10.5 GB MTP drafter artifact.",
-    ),
-    _nvfp4_profile(
-        model_key="minimax25",
-        source_repo="nvidia/MiniMax-M2.5-NVFP4",
-        source_revision="b6220d658389629b9d507d4b2bb314f41fea7898",
-        source_downloads=137_435,
-        storage_format_counts={
-            "BF16": 1_278_796_288,
-            "F32": 2_730_491_904,
-            "F8_E4M3": 14_042_529_792,
-            "U8": 112_340_238_336,
-        },
-        compute_precision_shares={"nvfp4": 0.86, "bf16": 0.14},
-        quantized=("MoE/feed-forward weights: packed FP4 payload + FP8 scales",),
-        retained=("self-attention BF16", "MoE gates BF16", "lm_head BF16"),
-    ),
-    _nvfp4_profile(
-        model_key="minimax27",
-        source_repo="nvidia/MiniMax-M2.7-NVFP4",
-        source_revision="e79701cb1f9dce8fe5395b9ed2b20170beebecde",
-        source_downloads=195_984,
-        storage_format_counts={
-            "BF16": 1_278_796_288,
-            "F32": 2_730_491_904,
-            "F8_E4M3": 14_042_529_792,
-            "U8": 112_340_238_336,
-        },
-        compute_precision_shares={"nvfp4": 0.86, "bf16": 0.14},
-        quantized=("MoE/feed-forward weights: packed FP4 payload + FP8 scales",),
-        retained=("self-attention BF16", "MoE gates BF16", "lm_head BF16"),
-    ),
-    _nvfp4_profile(
-        model_key="minimax3",
-        source_repo="nvidia/MiniMax-M3-NVFP4",
-        source_revision="901464083161bf8612a29ff7ad29914cd4ab4a85",
-        source_downloads=0,
-        total_weight_bytes_override=250_103_762_320,
-        compute_precision_shares={"nvfp4": 0.86, "bf16": 0.14},
-        quantized=("MoE/feed-forward weights: packed FP4 payload + FP8 scales",),
-        retained=("attention, routing-sensitive tensors, embeddings, multimodal modules, and lm_head in higher precision",),
-        notes="Exact 88-shard official artifact footprint. The 86/14 compute split is a MiniMax-family planning proxy pending tensor-header classification.",
-        captured_at="2026-06-26",
-    ),
-    _nvfp4_profile(
-        model_key="nvidia-nemotron-3-embed-1b",
-        source_repo="nvidia/Nemotron-3-Embed-1B-NVFP4",
-        source_revision="c01600056187dba44bd712346cedb1e57fa50220",
-        source_downloads=0,
-        total_weight_bytes_override=1_027_789_672,
-        compute_precision_shares={"nvfp4": 1.0},
-        quantized=("encoder linear weights: packed NVFP4 payload + FP8 scales",),
-        retained=("normalization, embedding, and pooling-sensitive tensors in higher precision",),
-        notes="Exact official artifact footprint captured from the safetensors index; download count was not used as provenance.",
-        captured_at="2026-07-16",
-    ),
-    _nvfp4_profile(
-        model_key="nem3s",
-        source_repo="nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4",
-        source_revision="4f0cf9daaeb7a4d5e23f80a00e7ed15f0e03caf6",
-        source_downloads=1_017_905,
-        storage_format_counts={
-            "F32": 20_992,
-            "BF16": 6_020_553_728,
-            "F8_E4M3": 11_873_353_728,
-            "U8": 56_382_455_808,
-        },
-        compute_precision_shares={"nvfp4": 0.82, "fp8": 0.08, "bf16": 0.10},
-        quantized=("latent-MoE experts NVFP4", "some dense mixer projections FP8"),
-        retained=("attention and routing-sensitive tensors BF16",),
-        notes="HF quant config is mixed precision and KV cache FP8.",
-    ),
-    _nvfp4_profile(
-        model_key="nem3n",
-        source_repo="nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4",
-        source_revision="ce1b118ae66ec705d02c241525192832eb045fd3",
-        source_downloads=532_640,
-        storage_format_counts={
-            "F32": 7_916_416,
-            "BF16": 1_078_212_032,
-            "F8_E4M3": 1_905_738_240,
-            "U8": 15_245_905_920,
-        },
-        compute_precision_shares={"nvfp4": 0.82, "bf16": 0.18},
-        quantized=("latent-MoE experts NVFP4",),
-        retained=("routing-sensitive and attention tensors BF16",),
-    ),
-    _nvfp4_profile(
-        model_key="nem3no",
-        source_repo="nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4",
-        source_revision="dc5f0b0bfddf8b6e0f5891475be9af05b80126fe",
-        source_downloads=1_281_803,
-        storage_format_counts={
-            "F32": 7_916_416,
-            "BF16": 2_217_567_168,
-            "F8_E4M3": 3_251_232_768,
-            "U8": 14_687_404_032,
-        },
-        compute_precision_shares={"nvfp4": 0.76, "bf16": 0.24},
-        quantized=("language latent-MoE experts NVFP4",),
-        retained=("omni/multimodal towers BF16", "routing-sensitive and attention tensors BF16"),
-    ),
-    _nvfp4_profile(
-        model_key="glm5",
-        source_repo="nvidia/GLM-5-NVFP4",
-        source_revision="dc54ff55a7e9e71b85db953d8bc22eca894b44c6",
-        source_downloads=107_715,
-        storage_format_counts={
-            "BF16": 25_577_755_904,
-            "U8": 364_143_181_824,
-            "F8_E4M3": 45_517_897_728,
-            "F32": 19_456,
-        },
-        compute_precision_shares={"nvfp4": 0.84, "bf16": 0.16},
-        quantized=("GLM MoE expert tensors NVFP4",),
-        retained=("dense/routing-sensitive tensors BF16",),
-    ),
-    _nvfp4_profile(
-        model_key="glm51",
-        source_repo="nvidia/GLM-5-NVFP4",
-        source_revision="dc54ff55a7e9e71b85db953d8bc22eca894b44c6",
-        source_downloads=107_715,
-        source_kind="family",
-        storage_format_counts={
-            "BF16": 25_577_755_904,
-            "U8": 364_143_181_824,
-            "F8_E4M3": 45_517_897_728,
-            "F32": 19_456,
-        },
-        compute_precision_shares={"nvfp4": 0.84, "bf16": 0.16},
-        quantized=("GLM MoE expert tensors NVFP4 by family proxy",),
-        retained=("dense/routing-sensitive tensors BF16",),
-    ),
-    _nvfp4_profile(
-        model_key="glm52",
-        source_repo="nvidia/GLM-5-NVFP4",
-        source_revision="dc54ff55a7e9e71b85db953d8bc22eca894b44c6",
-        source_downloads=107_715,
-        source_kind="family",
-        storage_format_counts={
-            "BF16": 25_577_755_904,
-            "U8": 364_143_181_824,
-            "F8_E4M3": 45_517_897_728,
-            "F32": 19_456,
-        },
-        compute_precision_shares={"nvfp4": 0.84, "bf16": 0.16},
-        quantized=("GLM-5 expert tensors NVFP4 by family proxy",),
-        retained=("IndexShare/MTP and routing-sensitive tensors BF16",),
-    ),
-])
+        _nvfp4_profile(
+            model_key="k25",
+            source_repo="nvidia/Kimi-K2.5-NVFP4",
+            source_revision="0fd0a5e6879298d3476e3b61852a79792a35ae3d",
+            source_downloads=1_227_250,
+            total_weight_bytes_override=590_850_735_131,
+            compute_precision_shares={"nvfp4": 0.80, "fp8": 0.10, "bf16": 0.10},
+            quantized=("MoE experts NVFP4", "selected dense projections FP8"),
+            retained=("self-attention BF16", "vision/projector modules BF16", "lm_head BF16"),
+            notes="HF quant config is mixed precision with NVFP4 experts and FP8 dense projections; bytes use repository storage.",
+        ),
+        _nvfp4_profile(
+            model_key="inkling",
+            source_repo="thinkingmachines/Inkling-NVFP4",
+            source_revision="d11961f515e883e37796edb9dd6ec1bf0e0e8212",
+            source_downloads=4,
+            storage_format_counts={
+                "I64": 378,
+                "F32": 48_704,
+                "BF16": 39_160_185_992,
+                "F8_E4M3": 57_076_088_832,
+                "U8": 456_608_710_656,
+            },
+            compute_precision_shares={"nvfp4": 0.82, "fp8": 0.10, "bf16": 0.08},
+            quantized=("MoE/feed-forward tensors: packed NVFP4 payload + FP8 scales",),
+            retained=(
+                "attention and SConv tensors BF16/FP8",
+                "routers BF16",
+                "multimodal towers BF16",
+                "lm_head BF16",
+            ),
+            notes="Exact base-checkpoint repository storage; excludes the optional 10.5 GB MTP drafter artifact.",
+        ),
+        _nvfp4_profile(
+            model_key="minimax25",
+            source_repo="nvidia/MiniMax-M2.5-NVFP4",
+            source_revision="b6220d658389629b9d507d4b2bb314f41fea7898",
+            source_downloads=137_435,
+            storage_format_counts={
+                "BF16": 1_278_796_288,
+                "F32": 2_730_491_904,
+                "F8_E4M3": 14_042_529_792,
+                "U8": 112_340_238_336,
+            },
+            compute_precision_shares={"nvfp4": 0.86, "bf16": 0.14},
+            quantized=("MoE/feed-forward weights: packed FP4 payload + FP8 scales",),
+            retained=("self-attention BF16", "MoE gates BF16", "lm_head BF16"),
+        ),
+        _nvfp4_profile(
+            model_key="minimax27",
+            source_repo="nvidia/MiniMax-M2.7-NVFP4",
+            source_revision="e79701cb1f9dce8fe5395b9ed2b20170beebecde",
+            source_downloads=195_984,
+            storage_format_counts={
+                "BF16": 1_278_796_288,
+                "F32": 2_730_491_904,
+                "F8_E4M3": 14_042_529_792,
+                "U8": 112_340_238_336,
+            },
+            compute_precision_shares={"nvfp4": 0.86, "bf16": 0.14},
+            quantized=("MoE/feed-forward weights: packed FP4 payload + FP8 scales",),
+            retained=("self-attention BF16", "MoE gates BF16", "lm_head BF16"),
+        ),
+        _nvfp4_profile(
+            model_key="minimax3",
+            source_repo="nvidia/MiniMax-M3-NVFP4",
+            source_revision="901464083161bf8612a29ff7ad29914cd4ab4a85",
+            source_downloads=0,
+            total_weight_bytes_override=250_103_762_320,
+            compute_precision_shares={"nvfp4": 0.86, "bf16": 0.14},
+            quantized=("MoE/feed-forward weights: packed FP4 payload + FP8 scales",),
+            retained=(
+                "attention, routing-sensitive tensors, embeddings, multimodal modules, and lm_head in higher precision",
+            ),
+            notes="Exact 88-shard official artifact footprint. The 86/14 compute split is a MiniMax-family planning proxy pending tensor-header classification.",
+            captured_at="2026-06-26",
+        ),
+        _nvfp4_profile(
+            model_key="nvidia-nemotron-3-embed-1b",
+            source_repo="nvidia/Nemotron-3-Embed-1B-NVFP4",
+            source_revision="c01600056187dba44bd712346cedb1e57fa50220",
+            source_downloads=0,
+            total_weight_bytes_override=1_027_789_672,
+            compute_precision_shares={"nvfp4": 1.0},
+            quantized=("encoder linear weights: packed NVFP4 payload + FP8 scales",),
+            retained=(
+                "normalization, embedding, and pooling-sensitive tensors in higher precision",
+            ),
+            notes="Exact official artifact footprint captured from the safetensors index; download count was not used as provenance.",
+            captured_at="2026-07-16",
+        ),
+        _nvfp4_profile(
+            model_key="nem3s",
+            source_repo="nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4",
+            source_revision="4f0cf9daaeb7a4d5e23f80a00e7ed15f0e03caf6",
+            source_downloads=1_017_905,
+            storage_format_counts={
+                "F32": 20_992,
+                "BF16": 6_020_553_728,
+                "F8_E4M3": 11_873_353_728,
+                "U8": 56_382_455_808,
+            },
+            compute_precision_shares={"nvfp4": 0.82, "fp8": 0.08, "bf16": 0.10},
+            quantized=("latent-MoE experts NVFP4", "some dense mixer projections FP8"),
+            retained=("attention and routing-sensitive tensors BF16",),
+            notes="HF quant config is mixed precision and KV cache FP8.",
+        ),
+        _nvfp4_profile(
+            model_key="nem3n",
+            source_repo="nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4",
+            source_revision="ce1b118ae66ec705d02c241525192832eb045fd3",
+            source_downloads=532_640,
+            storage_format_counts={
+                "F32": 7_916_416,
+                "BF16": 1_078_212_032,
+                "F8_E4M3": 1_905_738_240,
+                "U8": 15_245_905_920,
+            },
+            compute_precision_shares={"nvfp4": 0.82, "bf16": 0.18},
+            quantized=("latent-MoE experts NVFP4",),
+            retained=("routing-sensitive and attention tensors BF16",),
+        ),
+        _nvfp4_profile(
+            model_key="nem3no",
+            source_repo="nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4",
+            source_revision="dc5f0b0bfddf8b6e0f5891475be9af05b80126fe",
+            source_downloads=1_281_803,
+            storage_format_counts={
+                "F32": 7_916_416,
+                "BF16": 2_217_567_168,
+                "F8_E4M3": 3_251_232_768,
+                "U8": 14_687_404_032,
+            },
+            compute_precision_shares={"nvfp4": 0.76, "bf16": 0.24},
+            quantized=("language latent-MoE experts NVFP4",),
+            retained=(
+                "omni/multimodal towers BF16",
+                "routing-sensitive and attention tensors BF16",
+            ),
+        ),
+        _nvfp4_profile(
+            model_key="glm5",
+            source_repo="nvidia/GLM-5-NVFP4",
+            source_revision="dc54ff55a7e9e71b85db953d8bc22eca894b44c6",
+            source_downloads=107_715,
+            storage_format_counts={
+                "BF16": 25_577_755_904,
+                "U8": 364_143_181_824,
+                "F8_E4M3": 45_517_897_728,
+                "F32": 19_456,
+            },
+            compute_precision_shares={"nvfp4": 0.84, "bf16": 0.16},
+            quantized=("GLM MoE expert tensors NVFP4",),
+            retained=("dense/routing-sensitive tensors BF16",),
+        ),
+        _nvfp4_profile(
+            model_key="glm51",
+            source_repo="nvidia/GLM-5-NVFP4",
+            source_revision="dc54ff55a7e9e71b85db953d8bc22eca894b44c6",
+            source_downloads=107_715,
+            source_kind="family",
+            storage_format_counts={
+                "BF16": 25_577_755_904,
+                "U8": 364_143_181_824,
+                "F8_E4M3": 45_517_897_728,
+                "F32": 19_456,
+            },
+            compute_precision_shares={"nvfp4": 0.84, "bf16": 0.16},
+            quantized=("GLM MoE expert tensors NVFP4 by family proxy",),
+            retained=("dense/routing-sensitive tensors BF16",),
+        ),
+        _nvfp4_profile(
+            model_key="glm52",
+            source_repo="nvidia/GLM-5-NVFP4",
+            source_revision="dc54ff55a7e9e71b85db953d8bc22eca894b44c6",
+            source_downloads=107_715,
+            source_kind="family",
+            storage_format_counts={
+                "BF16": 25_577_755_904,
+                "U8": 364_143_181_824,
+                "F8_E4M3": 45_517_897_728,
+                "F32": 19_456,
+            },
+            compute_precision_shares={"nvfp4": 0.84, "bf16": 0.16},
+            quantized=("GLM-5 expert tensors NVFP4 by family proxy",),
+            retained=("IndexShare/MTP and routing-sensitive tensors BF16",),
+        ),
+    ]
+)
 
 
 def get_quantization_profile(model_key: str, prec: str) -> QuantizationProfile | None:
@@ -4413,29 +5664,68 @@ def get_quantization_profile(model_key: str, prec: str) -> QuantizationProfile |
 # Capability overrides. Vision-enabled and reasoning-first models deviate from the default
 # (tools + ctx_128k). Kept conservative — annotate models with well-documented support.
 _VISION_MODELS = (
-    "ge2", "ge4", "g12", "g26", "g31",
-    "k25", "kimi-k3", "inkling", "inkling-small-preview",
+    "ge2",
+    "ge4",
+    "g12",
+    "g26",
+    "g31",
+    "k25",
+    "kimi-k3",
+    "inkling",
+    "inkling-small-preview",
     "command-a-plus-05-2026",
-    "ms24", "ms32", "mistral-medium-3.5-preview",
-    "minimax25", "minimax27", "nem3no", "mimo-v2.5",
+    "ms24",
+    "ms32",
+    "mistral-medium-3.5-preview",
+    "minimax25",
+    "minimax27",
+    "nem3no",
+    "mimo-v2.5",
 )
 _AUDIO_INPUT_MODELS = (
-    "ge2", "ge4", "g12",
-    "inkling", "inkling-small-preview",
+    "ge2",
+    "ge4",
+    "g12",
+    "inkling",
+    "inkling-small-preview",
 )
 _REASONING_MODELS = (
-    "g12", "q35", "q122", "q397",
-    "glm45", "glm45a", "glm46", "glm47", "glm47f", "glm5", "glm51", "glm52",
-    "k25", "kimi-k3", "inkling", "inkling-small-preview",
-    "ds3", "deepseek-v4-pro", "deepseek-v4-flash",
+    "g12",
+    "q35",
+    "q122",
+    "q397",
+    "glm45",
+    "glm45a",
+    "glm46",
+    "glm47",
+    "glm47f",
+    "glm5",
+    "glm51",
+    "glm52",
+    "k25",
+    "kimi-k3",
+    "inkling",
+    "inkling-small-preview",
+    "ds3",
+    "deepseek-v4-pro",
+    "deepseek-v4-flash",
     "lfm2.5-1.2b-thinking",
     "command-a-plus-05-2026",
-    "mistral-medium-3.5-preview", "ml3",
-    "minimax25", "minimax27",
-    "nem3s", "nem3n", "nem3no",
-    "zaya1-8b", "zaya1-74b-preview", "laguna-m1", "laguna-xs2", "laguna-xs-2-1",
+    "mistral-medium-3.5-preview",
+    "ml3",
+    "minimax25",
+    "minimax27",
+    "nem3s",
+    "nem3n",
+    "nem3no",
+    "zaya1-8b",
+    "zaya1-74b-preview",
+    "laguna-m1",
+    "laguna-xs2",
+    "laguna-xs-2-1",
     "laguna-s-2-1",
-    "mimo-v2.5-pro", "mimo-v2.5",
+    "mimo-v2.5-pro",
+    "mimo-v2.5",
 )
 for _k in _VISION_MODELS:
     if _k in MODELS:
@@ -4459,14 +5749,14 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "g12": (25.0, 12.0),  # Proxy from Google Gemma 4 12B benchmarks; no AA page found at launch.
     "g26": (27.0, 14.0),
     "g31": (32.0, 7.1),
-    "lfm2.5-350m": (7.0, 12.0),          # Conservative proxy; no AA page found for LFM2.5-350M.
+    "lfm2.5-350m": (7.0, 12.0),  # Conservative proxy; no AA page found for LFM2.5-350M.
     "lfm2.5-1.2b-instruct": (8.0, 4.6),
     "lfm2.5-1.2b-thinking": (8.0, 31.0),
-    "lfm2-700m": (7.0, 10.0),           # Conservative size proxy; no AA page found for LFM2-700M.
+    "lfm2-700m": (7.0, 10.0),  # Conservative size proxy; no AA page found for LFM2-700M.
     "lfm2-2.6b": (8.0, 7.8),
     "lfm2-8b-a1b": (7.0, 7.8),
     "lfm2-24b-a2b": (10.0, 11.0),
-    "rwkv7-g1d-01b": (7.0, 60.0),     # Low-confidence size proxy until AA publishes RWKV7-G1 rows.
+    "rwkv7-g1d-01b": (7.0, 60.0),  # Low-confidence size proxy until AA publishes RWKV7-G1 rows.
     "rwkv7-g1d-04b": (8.0, 70.0),
     "rwkv7-g1f-15b": (11.0, 90.0),
     "rwkv7-g1f-29b": (14.0, 105.0),
@@ -4491,24 +5781,45 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "k25": (35.0, 87.0),
     "kimi-k3": (57.0, 130.0),  # Direct Artificial Analysis K3 reasoning row.
     "kimi-linear-48b": (37.0, 100.0),  # Proxy from Qwen 3.5 35B-A3B until AA publishes Kimi Linear.
-    "inkling": (45.0, 70.0),           # Official broad benchmark suite; AA-scale/verbosity proxy pending a direct row.
-    "inkling-small-preview": (44.0, 70.0),  # Preview benchmarks track Inkling closely; weights/config remain pending.
+    "inkling": (
+        45.0,
+        70.0,
+    ),  # Official broad benchmark suite; AA-scale/verbosity proxy pending a direct row.
+    "inkling-small-preview": (
+        44.0,
+        70.0,
+    ),  # Preview benchmarks track Inkling closely; weights/config remain pending.
     "command-a-plus-05-2026": (37.0, 66.0),
-    "command-a-03-2025": (32.0, 70.0),       # Conservative proxy until AA publishes a directly comparable Command A row.
-    "command-r7b-12-2024": (12.0, 8.3),      # Size-class proxy from compact open instruction models; no AA row found.
-    "north-mini-code-1-0": (37.0, 100.0),    # Coding-agent proxy from Qwen 3.5 35B-A3B until public benchmark rows exist.
+    "command-a-03-2025": (
+        32.0,
+        70.0,
+    ),  # Conservative proxy until AA publishes a directly comparable Command A row.
+    "command-r7b-12-2024": (
+        12.0,
+        8.3,
+    ),  # Size-class proxy from compact open instruction models; no AA row found.
+    "north-mini-code-1-0": (
+        37.0,
+        100.0,
+    ),  # Coding-agent proxy from Qwen 3.5 35B-A3B until public benchmark rows exist.
     "minimax25": (42.0, 56.0),
     "minimax3": (48.0, 70.0),  # Low-confidence launch-benchmark proxy; no direct AA row yet.
     "minimax27": (50.0, 87.0),
     "nem3s": (36.0, 110.0),
     "nem3n": (24.0, 140.0),
-    "nem3no": (26.0, 130.0),  # Omni preview proxy from Nano reasoning until AA publishes a dedicated page.
+    "nem3no": (
+        26.0,
+        130.0,
+    ),  # Omni preview proxy from Nano reasoning until AA publishes a dedicated page.
     "ds3": (14.0, 3.3),
     "deepseek-v4-pro": (52.0, 190.0),
     "deepseek-v4-flash": (47.0, 240.0),
     "mi7": (7.0, 2.5),
-    "mx87": (8.0, 2.5),    # Proxy verbosity from Mistral 7B; AA exposes score but not token usage.
-    "cs22": (15.0, 4.4),   # Proxy from Devstral Small (Jul '25'); no AA page for Codestral 22B found.
+    "mx87": (8.0, 2.5),  # Proxy verbosity from Mistral 7B; AA exposes score but not token usage.
+    "cs22": (
+        15.0,
+        4.4,
+    ),  # Proxy from Devstral Small (Jul '25'); no AA page for Codestral 22B found.
     "ms24": (14.0, 4.7),
     "ms32": (15.0, 4.5),
     "mm31": (21.0, 7.6),
@@ -4521,22 +5832,34 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "n14": (16.0, 11.0),
     "dv24": (19.0, 8.6),
     "dv123": (22.0, 7.4),
-    "tiny-aya-global": (8.0, 4.6),           # Compact multilingual proxy; gated config and no AA row found.
+    "tiny-aya-global": (8.0, 4.6),  # Compact multilingual proxy; gated config and no AA row found.
     "tiny-aya-earth": (8.0, 4.6),
     "tiny-aya-fire": (8.0, 4.6),
     "tiny-aya-water": (8.0, 4.6),
-    "zaya1-8b": (24.0, 140.0),       # Proxy from Nemotron 3 Nano reasoning until AA publishes ZAYA1-8B.
-    "zaya1-74b-preview": (37.0, 100.0),  # Preview is pre-RL; proxy from Qwen 3.5 35B-A3B until AA publishes it.
-    "laguna-m1": (44.0, 95.0),       # Proxy from Qwen 3.5 397B-A17B adjusted against Poolside coding-agent benchmarks; no AA row found.
-    "laguna-xs2": (37.0, 100.0),     # Proxy from Qwen 3.5 35B-A3B; no AA page for Laguna XS.2 found.
-    "laguna-xs-2-1": (37.0, 100.0),  # Same Qwen 3.5 35B-A3B proxy pending a directly comparable AA row.
+    "zaya1-8b": (24.0, 140.0),  # Proxy from Nemotron 3 Nano reasoning until AA publishes ZAYA1-8B.
+    "zaya1-74b-preview": (
+        37.0,
+        100.0,
+    ),  # Preview is pre-RL; proxy from Qwen 3.5 35B-A3B until AA publishes it.
+    "laguna-m1": (
+        44.0,
+        95.0,
+    ),  # Proxy from Qwen 3.5 397B-A17B adjusted against Poolside coding-agent benchmarks; no AA row found.
+    "laguna-xs2": (37.0, 100.0),  # Proxy from Qwen 3.5 35B-A3B; no AA page for Laguna XS.2 found.
+    "laguna-xs-2-1": (
+        37.0,
+        100.0,
+    ),  # Same Qwen 3.5 35B-A3B proxy pending a directly comparable AA row.
     # Quality is a provisional AA-scale proxy. No comparable AA Intelligence Index
     # output-token measurement exists yet, so keep token efficiency neutral instead of
     # imposing the old, unrelated 95M-token family proxy (η=0.11).
     "laguna-s-2-1": (45.0, 10.0),
     "mimo-v2.5-pro": (54.0, 92.0),
     "mimo-v2.5": (49.0, 74.0),
-    "cr13": (12.0, 8.3),   # Proxy from Gemma 4 E2B (Non-reasoning); no AA page for Croissant 1.3B found.
+    "cr13": (
+        12.0,
+        8.3,
+    ),  # Proxy from Gemma 4 E2B (Non-reasoning); no AA page for Croissant 1.3B found.
 }
 
 for _k, (_score, _verbosity_m) in AA_MODEL_METRICS.items():
@@ -4623,10 +5946,15 @@ def _domain_anchor(
     note: str = "",
 ) -> DomainQualityAnchor:
     return DomainQualityAnchor(
-        quality=min(max(
-            float(normalized_quality) if normalized_quality is not None else float(score) / 100.0,
-            0.0,
-        ), 1.0),
+        quality=min(
+            max(
+                float(normalized_quality)
+                if normalized_quality is not None
+                else float(score) / 100.0,
+                0.0,
+            ),
+            1.0,
+        ),
         benchmark=benchmark,
         raw_score=float(score),
         source=source,
@@ -4664,12 +5992,16 @@ MODEL_DOMAIN_QUALITY_ANCHORS: dict[str, dict[str, DomainQualityAnchor]] = {
     },
     "k25": {
         "coding": _domain_anchor(
-            76.8, "SWE-bench Verified", _KIMI_K25_DOMAIN_SOURCE,
+            76.8,
+            "SWE-bench Verified",
+            _KIMI_K25_DOMAIN_SOURCE,
             note="Vendor minimal-tool harness; coding results averaged over five runs.",
         ),
         "reasoning": _domain_anchor(87.6, "GPQA Diamond", _KIMI_K25_DOMAIN_SOURCE),
         "long_context": _domain_anchor(
-            61.0, "LongBench v2", _KIMI_K25_DOMAIN_SOURCE,
+            61.0,
+            "LongBench v2",
+            _KIMI_K25_DOMAIN_SOURCE,
             note="Prompts and input contexts standardized to approximately 128k tokens.",
         ),
         "multilingual": _domain_anchor(73.0, "SWE-bench Multilingual", _KIMI_K25_DOMAIN_SOURCE),
@@ -4677,16 +6009,22 @@ MODEL_DOMAIN_QUALITY_ANCHORS: dict[str, dict[str, DomainQualityAnchor]] = {
     },
     "kimi-k3": {
         "coding": _domain_anchor(
-            67.5, "DeepSWE", _KIMI_K3_DOMAIN_SOURCE,
+            67.5,
+            "DeepSWE",
+            _KIMI_K3_DOMAIN_SOURCE,
             note="Kimi Code harness; the report also discloses 67.3 with mini-SWE-agent.",
         ),
         "reasoning": _domain_anchor(93.5, "GPQA Diamond", _KIMI_K3_DOMAIN_SOURCE),
         "long_context": _domain_anchor(
-            74.7, "AA-LCR", _KIMI_K3_DOMAIN_SOURCE,
+            74.7,
+            "AA-LCR",
+            _KIMI_K3_DOMAIN_SOURCE,
             note="Artificial Analysis long-context reasoning score cited in the release report.",
         ),
         "vision": _domain_anchor(
-            81.6, "MMMU-Pro", _KIMI_K3_DOMAIN_SOURCE,
+            81.6,
+            "MMMU-Pro",
+            _KIMI_K3_DOMAIN_SOURCE,
             note="Without Python tool augmentation; the tool-augmented score is 83.4.",
         ),
     },
@@ -4700,7 +6038,9 @@ MODEL_DOMAIN_QUALITY_ANCHORS: dict[str, dict[str, DomainQualityAnchor]] = {
         "coding": _domain_anchor(80.0, "LiveCodeBench v6", _GEMMA4_DOMAIN_SOURCE),
         "reasoning": _domain_anchor(84.3, "GPQA Diamond", _GEMMA4_DOMAIN_SOURCE),
         "long_context": _domain_anchor(
-            66.4, "MRCR v2 8-needle 128k", _GEMMA4_DOMAIN_SOURCE,
+            66.4,
+            "MRCR v2 8-needle 128k",
+            _GEMMA4_DOMAIN_SOURCE,
             note="Retrieval-style long-context benchmark; not directly comparable to LongBench v2.",
         ),
     },
@@ -4726,14 +6066,18 @@ MODEL_DOMAIN_QUALITY_ANCHORS: dict[str, dict[str, DomainQualityAnchor]] = {
     },
     "glm5": {
         "coding": _domain_anchor(
-            77.8, "SWE-bench Verified", _GLM5_DOMAIN_SOURCE,
+            77.8,
+            "SWE-bench Verified",
+            _GLM5_DOMAIN_SOURCE,
             note="OpenHands harness with a tailored prompt and 200k context window.",
         ),
         "reasoning": _domain_anchor(86.0, "GPQA Diamond", _GLM5_DOMAIN_SOURCE),
     },
     "glm51": {
         "coding": _domain_anchor(
-            58.4, "SWE-Bench Pro → Verified-equivalent", _GLM52_DOMAIN_SOURCE,
+            58.4,
+            "SWE-Bench Pro → Verified-equivalent",
+            _GLM52_DOMAIN_SOURCE,
             normalized_quality=swebench_pro_to_coding_quality(58.4),
             confidence=0.75,
             note="Provisional frozen-cohort linear crosswalk; raw SWE-Bench Pro score retained.",
@@ -4742,7 +6086,9 @@ MODEL_DOMAIN_QUALITY_ANCHORS: dict[str, dict[str, DomainQualityAnchor]] = {
     },
     "glm52": {
         "coding": _domain_anchor(
-            62.1, "SWE-Bench Pro → Verified-equivalent", _GLM52_DOMAIN_SOURCE,
+            62.1,
+            "SWE-Bench Pro → Verified-equivalent",
+            _GLM52_DOMAIN_SOURCE,
             normalized_quality=swebench_pro_to_coding_quality(62.1),
             confidence=0.75,
             note="Provisional frozen-cohort linear crosswalk; corroborated by DeepSWE 46.2 and Terminal-Bench 2.1 81.0.",
@@ -4751,7 +6097,9 @@ MODEL_DOMAIN_QUALITY_ANCHORS: dict[str, dict[str, DomainQualityAnchor]] = {
     },
     "laguna-s-2-1": {
         "coding": _domain_anchor(
-            59.4, "SWE-Bench Pro → Verified-equivalent", _LAGUNA_S21_DOMAIN_SOURCE,
+            59.4,
+            "SWE-Bench Pro → Verified-equivalent",
+            _LAGUNA_S21_DOMAIN_SOURCE,
             normalized_quality=swebench_pro_to_coding_quality(59.4),
             confidence=0.75,
             note="Provisional frozen-cohort linear crosswalk; corroborated by DeepSWE 40.4 and Terminal-Bench 2.1 70.2.",
@@ -4759,7 +6107,9 @@ MODEL_DOMAIN_QUALITY_ANCHORS: dict[str, dict[str, DomainQualityAnchor]] = {
     },
     "north-mini-code-1-0": {
         "coding": _domain_anchor(
-            67.6, "SWE-bench Verified", _NORTH_CODE_DOMAIN_SOURCE,
+            67.6,
+            "SWE-bench Verified",
+            _NORTH_CODE_DOMAIN_SOURCE,
             note="SWE-Agent 1.1.0; three-seed vendor evaluation.",
         ),
     },
@@ -5111,27 +6461,36 @@ for _cloud in CLOUD_MODELS.values():
         _cloud["pricing_captured_at"] = CLOUD_PRICING_CAPTURED_AT
 
 AA_CLOUD_METRICS: dict[str, tuple[float, float]] = {
-    "gpt-5.6-sol": (51.0, 80.0),         # Frontier-bound proxy pending a directly comparable AA row.
-    "gpt-5.6-terra": (47.0, 70.0),       # GPT-5.4-class proxy pending a directly comparable AA row.
-    "gpt-5.6-luna": (42.0, 65.0),        # Efficient frontier proxy pending a directly comparable AA row.
-    "claude-fable": (51.0, 80.0),        # Frontier-bound proxy pending a directly comparable AA row.
-    "claude-opus": (51.0, 72.0),         # Opus 4.7-class proxy pending a direct Opus 4.8 row.
-    "claude-sonnet": (49.0, 55.0),       # Sonnet 4.6-class proxy pending a direct Sonnet 5 row.
-    "claude-haiku": (37.0, 87.0),        # Proxy from Claude 4.5 Haiku (Reasoning).
-    "gemini-pro": (51.0, 55.0),          # Preview benchmark proxy pending a stable AA row.
-    "gemini-flash": (47.0, 30.0),        # Gemini 3-family proxy pending a direct 3.5 Flash row.
-    "gemini-flash-lite": (35.0, 36.0),   # Compact Gemini 3-family proxy.
-    "mistral-medium": (39.0, 90.0),      # Mistral Medium 3.5.
-    "mistral-large": (37.0, 60.0),       # Mistral Large 3 family proxy pending a direct row.
-    "mistral-small": (31.0, 35.0),       # Size-class proxy pending a direct Mistral Small 4 row.
-    "mistral-large-2": (15.0, 2.6),      # Compatibility anchor for imported legacy policies.
-    "codestral-2501": (20.0, 10.0),      # Coding-model proxy; API alias now points to current Codestral.
-    "grok-4.1-fast": (41.0, 30.0),       # Grok 4.1-class proxy pending a direct Fast row.
-    "deepseek-v4-flash": (42.0, 30.0),   # V4 launch-benchmark proxy pending a direct AA row.
-    "deepseek-v4-pro": (49.0, 60.0),     # V4 launch-benchmark proxy pending a direct AA row.
-    "kimi-k3": (57.0, 130.0),          # Direct Artificial Analysis K3 reasoning row.
-    "command-a-03-2025": (32.0, 70.0),   # Conservative proxy until AA publishes a directly comparable Command A row.
-    "command-r7b-12-2024": (12.0, 8.3),  # Size-class proxy from compact open instruction models; no AA row found.
+    "gpt-5.6-sol": (51.0, 80.0),  # Frontier-bound proxy pending a directly comparable AA row.
+    "gpt-5.6-terra": (47.0, 70.0),  # GPT-5.4-class proxy pending a directly comparable AA row.
+    "gpt-5.6-luna": (42.0, 65.0),  # Efficient frontier proxy pending a directly comparable AA row.
+    "claude-fable": (51.0, 80.0),  # Frontier-bound proxy pending a directly comparable AA row.
+    "claude-opus": (51.0, 72.0),  # Opus 4.7-class proxy pending a direct Opus 4.8 row.
+    "claude-sonnet": (49.0, 55.0),  # Sonnet 4.6-class proxy pending a direct Sonnet 5 row.
+    "claude-haiku": (37.0, 87.0),  # Proxy from Claude 4.5 Haiku (Reasoning).
+    "gemini-pro": (51.0, 55.0),  # Preview benchmark proxy pending a stable AA row.
+    "gemini-flash": (47.0, 30.0),  # Gemini 3-family proxy pending a direct 3.5 Flash row.
+    "gemini-flash-lite": (35.0, 36.0),  # Compact Gemini 3-family proxy.
+    "mistral-medium": (39.0, 90.0),  # Mistral Medium 3.5.
+    "mistral-large": (37.0, 60.0),  # Mistral Large 3 family proxy pending a direct row.
+    "mistral-small": (31.0, 35.0),  # Size-class proxy pending a direct Mistral Small 4 row.
+    "mistral-large-2": (15.0, 2.6),  # Compatibility anchor for imported legacy policies.
+    "codestral-2501": (
+        20.0,
+        10.0,
+    ),  # Coding-model proxy; API alias now points to current Codestral.
+    "grok-4.1-fast": (41.0, 30.0),  # Grok 4.1-class proxy pending a direct Fast row.
+    "deepseek-v4-flash": (42.0, 30.0),  # V4 launch-benchmark proxy pending a direct AA row.
+    "deepseek-v4-pro": (49.0, 60.0),  # V4 launch-benchmark proxy pending a direct AA row.
+    "kimi-k3": (57.0, 130.0),  # Direct Artificial Analysis K3 reasoning row.
+    "command-a-03-2025": (
+        32.0,
+        70.0,
+    ),  # Conservative proxy until AA publishes a directly comparable Command A row.
+    "command-r7b-12-2024": (
+        12.0,
+        8.3,
+    ),  # Size-class proxy from compact open instruction models; no AA row found.
 }
 
 for _k, (_score, _verbosity_m) in AA_CLOUD_METRICS.items():
@@ -5144,14 +6503,20 @@ def cloud_models_missing_quality_anchors() -> list[str]:
     """Cloud/API models lacking an AA_CLOUD_METRICS row (same silent-0.5 failure mode)."""
     return sorted(key for key in CLOUD_MODELS if key not in AA_CLOUD_METRICS)
 
+
 # Vertex availability matrix: GCP regions where each cloud-model family is
 # served today. Models not on Vertex Europe (e.g. OpenAI via Azure, DeepSeek)
 # have an empty tuple and no grid-intensity estimate. Regions are enriched
 # onto CLOUD_MODELS at the bottom of the file, after the carbon-intensity
 # tables and helpers are defined.
 _GEMINI_PRO_ZONES = (
-    "europe-west1", "europe-west4", "europe-west8", "europe-west9",
-    "europe-central2", "europe-north1", "europe-southwest1",
+    "europe-west1",
+    "europe-west4",
+    "europe-west8",
+    "europe-west9",
+    "europe-central2",
+    "europe-north1",
+    "europe-southwest1",
 )
 _GEMINI_FLASH_ZONES = _GEMINI_PRO_ZONES + ("europe-west2", "europe-west3")
 _CLAUDE_ZONES = ("europe-west1",)
@@ -5197,7 +6562,12 @@ def success_rate(quality: float, difficulty: float, k: float = SUCCESS_RATE_SIGM
     return 1.0 / (1.0 + math.exp(-x))
 
 
-def required_quality(difficulty: float, min_success_rate: float, k: float = SUCCESS_RATE_SIGMOID_K, quality_floor: float = 0.0) -> float:
+def required_quality(
+    difficulty: float,
+    min_success_rate: float,
+    k: float = SUCCESS_RATE_SIGMOID_K,
+    quality_floor: float = 0.0,
+) -> float:
     """Inverse of success_rate(): minimum model quality that clears `min_success_rate`
     at the given `difficulty`. Returns a value on the same [0, 1] quality axis the model
     catalog uses (AA Intelligence Index calibrated into 0.30..0.95)."""
@@ -5274,7 +6644,7 @@ CORPO_CLOUD_DEFAULT = "current"
 
 def corpo_cloud_models(name: str) -> tuple[str, ...]:
     preset = CORPO_CLOUD_PRESETS.get(name) or CORPO_CLOUD_PRESETS[CORPO_CLOUD_DEFAULT]
-    return preset["models"]
+    return tuple(preset["models"])
 
 
 # Opinionated use-case definitions so the demo is one click from a realistic story.
@@ -5297,25 +6667,508 @@ SCALE_MODELS = {
 }
 
 PROJECT_PRESETS = [
-    {"key": "classify",       "name": "Mass classification",        "difficulty": 0.10, "tokens_day": 3.0e9, "scale_value": 5_000_000, "scale_kind": {"model": "linear", "label": "Records processed", "unit": "records/day", "token_multiplier": 600, "min": 0, "max": 10_000_000, "step": 10_000, "formula": "records/day x average tokens per record"}, "wtp_per_m": 0.25, "requires": (),                    "min_success_rate": 0.80, "quality_floor": 0.35, "batch_eligible": True, "latent_jobs_day": 8.0e9, "unlock_price_per_m": 0.05, "in_pre": "Classify", "out_pre": "Classify", "scale_hint": "Records/day x tokens per record; mostly batchable queues."},
-    {"key": "summarize",      "name": "Doc summarization",          "difficulty": 0.25, "tokens_day": 1.5e9, "scale_value": 60_000, "scale_kind": {"model": "linear", "label": "Documents summarized", "unit": "documents/day", "token_multiplier": 25_000, "min": 0, "max": 250_000, "step": 100, "formula": "documents/day x average document+summary tokens"}, "wtp_per_m": 0.90, "requires": ("ctx_128k",),         "min_success_rate": 0.85, "quality_floor": 0.50, "batch_eligible": True, "latent_jobs_day": 3.0e9, "unlock_price_per_m": 0.20, "in_pre": "Long doc", "out_pre": "Long doc", "scale_hint": "Documents/day x document length; periodic backfills can dominate."},
-    {"key": "chatbot",        "name": "Customer service agent",     "difficulty": 0.30, "tokens_day": 2.0e9, "scale_value": 80_000, "scale_kind": {"model": "linear", "label": "Support tickets", "unit": "tickets/day", "token_multiplier": 25_000, "min": 0, "max": 250_000, "step": 100, "formula": "tickets/day x 5 turns x about 5k tokens/turn"}, "wtp_per_m": 4.00, "requires": ("tools",),            "min_success_rate": 0.95, "quality_floor": 0.60, "in_pre": "Chat",     "out_pre": "Chat",     "scale_hint": "Tickets/day x turns x resent history and tool results; interactive peak matters."},
-    {"key": "email_corrector","name": "Email correction copilot",   "difficulty": 0.18, "tokens_day": 50e6, "scale_value": 5_000, "scale_kind": {"model": "linear", "label": "Enabled headcount", "unit": "employees", "token_multiplier": 10_000, "min": 0, "max": 25_000, "step": 10, "formula": "employees x 5 assisted messages/day x about 2k tokens"}, "wtp_per_m": 3.25, "requires": (),                    "min_success_rate": 0.90, "quality_floor": 0.40, "in_pre": "Chat",     "out_pre": "Chat",     "scale_hint": "Enabled headcount x assisted messages, not total inbox traffic; roughly linear with adoption."},
-    {"key": "coding",         "name": "Repository coding agent",    "difficulty": 0.55, "tokens_day": 1.2e9, "scale_value": 8_000, "scale_kind": {"model": "linear", "label": "Developer seats", "unit": "developers", "token_multiplier": 150_000, "min": 0, "max": 25_000, "step": 10, "formula": "developers x agent sessions/day x repository context and retries"}, "wtp_per_m": 4.00, "requires": ("tools", "ctx_128k"), "min_success_rate": 0.85, "quality_floor": 0.70, "in_pre": "Code",     "out_pre": "Code",     "scale_hint": "Agentic repo work, not inline completion: multiple tool calls and context refreshes per developer-day."},
-    {"key": "meeting_notes",  "name": "Meeting notes assistant",    "difficulty": 0.35, "tokens_day": 120e6, "scale_value": 6_000, "scale_kind": {"model": "linear", "label": "Recorded meeting time", "unit": "meeting hours/day", "token_multiplier": 20_000, "min": 0, "max": 20_000, "step": 10, "formula": "meeting hours/day x about 14k transcript + summary and prompt tokens"}, "wtp_per_m": 7.50, "requires": (),                    "min_success_rate": 0.88, "quality_floor": 0.55, "batch_eligible": True, "latent_jobs_day": 1.0e9, "unlock_price_per_m": 0.35, "in_pre": "RAG",      "out_pre": "Long doc", "scale_hint": "Recorded hours x transcript and note tokens; one-pass work can be delayed after calls."},
-    {"key": "evals",          "name": "Batch evaluations",          "difficulty": 0.45, "tokens_day": 800e6, "scale_value": 400_000, "scale_kind": {"model": "linear", "label": "Evaluation prompts", "unit": "eval prompts/day", "token_multiplier": 2_000, "min": 0, "max": 2_000_000, "step": 1_000, "formula": "eval prompts/day x average prompt+judgment tokens"}, "wtp_per_m": 2.00, "requires": (),                    "min_success_rate": 0.90, "quality_floor": 0.60, "batch_eligible": True, "latent_jobs_day": 2.0e9, "unlock_price_per_m": 0.50, "in_pre": "RAG",      "out_pre": "Classify", "scale_hint": "Runs/day x eval set size; off-peak capacity is usually acceptable."},
-    {"key": "inbox_archive",  "name": "Decade inbox knowledge base","difficulty": 0.50, "tokens_day": 120e6, "scale_value": 50, "scale_kind": {"model": "corpus", "label": "Indexed mailboxes", "unit": "mailboxes indexed", "token_multiplier": 2_400_000, "min": 0, "max": 5_000, "step": 10, "formula": "mailboxes x about 72M corpus tokens / 30-day backfill"}, "wtp_per_m": 1.75, "requires": (),                    "min_success_rate": 0.86, "quality_floor": 0.62, "batch_eligible": True, "latent_jobs_day": 12.0e9, "unlock_price_per_m": 0.30, "in_pre": "RAG",      "out_pre": "Long doc", "scale_hint": "Illustrative 30-day backfill; replace 72M tokens/mailbox and horizon with measured corpus data."},
-    {"key": "longctx",        "name": "Multi-pass long-ctx analytics","difficulty": 0.70, "tokens_day": 400e6, "scale_value": 200, "scale_kind": {"model": "linear", "label": "Large analyses", "unit": "analyses/day", "token_multiplier": 2_000_000, "min": 0, "max": 1_000, "step": 1, "formula": "analyses/day x about 16 passes x 125k input+output tokens"}, "wtp_per_m": 8.00, "requires": ("ctx_128k", "reasoning"), "min_success_rate": 0.80, "quality_floor": 0.78, "latent_jobs_day": 1.0e9, "unlock_price_per_m": 3.00, "in_pre": "Long doc", "out_pre": "Long doc", "scale_hint": "Multi-pass source-pack analysis; 2M is total processed tokens, not one impossible context window."},
-    {"key": "research",       "name": "Deep research agent",        "difficulty": 0.75, "tokens_day": 150e6, "scale_value": 300, "scale_kind": {"model": "custom", "label": "Research jobs", "unit": "investigations/day", "token_multiplier": 500_000, "min": 0, "max": 1_000, "step": 1, "formula": "investigations/day x about 20 agent calls x 25k processed tokens"}, "wtp_per_m": 20.00,"requires": ("tools", "reasoning"),"min_success_rate": 0.75, "quality_floor": 0.85, "latent_jobs_day": 500e6, "unlock_price_per_m": 5.00, "in_pre": "RAG",      "out_pre": "Long doc", "scale_hint": "Multi-call agent estimate; telemetry must replace the illustrative 20-call depth."},
-    {"key": "document_extraction", "name": "Invoice & claims extraction", "difficulty": 0.30, "tokens_day": 750e6, "scale_value": 250_000, "scale_kind": {"model": "linear", "label": "Document pages processed", "unit": "pages/day", "token_multiplier": 3_000, "min": 0, "max": 1_000_000, "step": 1_000, "formula": "pages/day x image/OCR input + structured output and validation tokens"}, "wtp_per_m": 1.25, "requires": ("images",), "min_success_rate": 0.94, "quality_floor": 0.58, "batch_eligible": True, "latent_jobs_day": 2.0e9, "unlock_price_per_m": 0.25, "in_pre": "Classify", "out_pre": "Classify", "scale_hint": "Pages/day x image/OCR and extraction tokens; retries and validation raise the multiplier."},
-    {"key": "enterprise_search", "name": "Enterprise search assistant", "difficulty": 0.42, "tokens_day": 1.2e9, "scale_value": 150_000, "scale_kind": {"model": "linear", "label": "Knowledge queries", "unit": "queries/day", "token_multiplier": 8_000, "min": 0, "max": 1_000_000, "step": 1_000, "formula": "queries/day x query + about 8 retrieved chunks + answer"}, "wtp_per_m": 2.50, "requires": (), "min_success_rate": 0.92, "quality_floor": 0.65, "batch_eligible": False, "latent_jobs_day": 3.0e9, "unlock_price_per_m": 0.75, "in_pre": "RAG", "out_pre": "Chat", "scale_hint": "Active users x searches/day x retrieved evidence; retrieval is assumed app-side and daytime concurrency matters."},
-    {"key": "contact_center_qa", "name": "Contact-center QA", "difficulty": 0.45, "tokens_day": 300e6, "scale_value": 15_000, "scale_kind": {"model": "linear", "label": "Recorded call time", "unit": "call hours/day", "token_multiplier": 20_000, "min": 0, "max": 100_000, "step": 100, "formula": "call hours/day x transcript + rubric-scoring and summary tokens"}, "wtp_per_m": 4.00, "requires": (), "min_success_rate": 0.92, "quality_floor": 0.65, "batch_eligible": True, "latent_jobs_day": 1.8e9, "unlock_price_per_m": 0.40, "in_pre": "RAG", "out_pre": "Classify", "scale_hint": "Recorded hours x transcript, summary, and QA rubric passes; transcription compute is outside this LLM estimate."},
-    {"key": "translation", "name": "Multilingual translation", "difficulty": 0.35, "tokens_day": 15e6, "scale_value": 5_000_000, "scale_kind": {"model": "linear", "label": "Source words translated", "unit": "source words/day", "token_multiplier": 3.0, "min": 0, "max": 100_000_000, "step": 100_000, "formula": "source words/day x source-and-target token conversion"}, "wtp_per_m": 0.70, "requires": (), "min_success_rate": 0.90, "quality_floor": 0.62, "batch_eligible": True, "latent_jobs_day": 300e6, "unlock_price_per_m": 0.15, "in_pre": "Chat", "out_pre": "Chat", "scale_hint": "Source words x target languages and variants; translation-memory hits should reduce demand."},
-    {"key": "contract_review", "name": "Contract review & redlining", "difficulty": 0.70, "tokens_day": 600e6, "scale_value": 8_000, "scale_kind": {"model": "linear", "label": "Contracts reviewed", "unit": "contracts/day", "token_multiplier": 75_000, "min": 0, "max": 50_000, "step": 100, "formula": "contracts/day x source, playbook, review, and revision tokens"}, "wtp_per_m": 8.00, "requires": ("ctx_128k", "reasoning"), "min_success_rate": 0.85, "quality_floor": 0.80, "batch_eligible": True, "latent_jobs_day": 1.2e9, "unlock_price_per_m": 1.50, "in_pre": "Long doc", "out_pre": "Long doc", "scale_hint": "Contracts x pages x review passes; nightly portfolio scans coexist with interactive redlining."},
-    {"key": "security_triage", "name": "Security alert investigation", "difficulty": 0.68, "tokens_day": 1.2e9, "scale_value": 100_000, "scale_kind": {"model": "linear", "label": "Security alerts investigated", "unit": "alerts/day", "token_multiplier": 12_000, "min": 0, "max": 1_000_000, "step": 1_000, "formula": "alerts/day x evidence bundle + tool calls + verdict tokens"}, "wtp_per_m": 6.00, "requires": ("tools", "reasoning"), "min_success_rate": 0.85, "quality_floor": 0.78, "batch_eligible": False, "latent_jobs_day": 4.0e9, "unlock_price_per_m": 1.00, "in_pre": "RAG", "out_pre": "Classify", "scale_hint": "Alerts/day x logs, identity context, threat intelligence, and investigation turns; peak latency matters."},
-    {"key": "aml_casework", "name": "AML/KYC case investigation", "difficulty": 0.72, "tokens_day": 600e6, "scale_value": 12_000, "scale_kind": {"model": "linear", "label": "Cases investigated", "unit": "cases/day", "token_multiplier": 50_000, "min": 0, "max": 100_000, "step": 100, "formula": "cases/day x transaction evidence + policy checks + narrative tokens"}, "wtp_per_m": 12.00, "requires": ("tools", "ctx_128k", "reasoning"), "min_success_rate": 0.80, "quality_floor": 0.84, "batch_eligible": True, "latent_jobs_day": 2.4e9, "unlock_price_per_m": 2.00, "in_pre": "RAG", "out_pre": "Long doc", "scale_hint": "Alerts escalated to cases x evidence depth; batch enrichment precedes mandatory human review."},
-    {"key": "synthetic_generation", "name": "Synthetic test-data generation", "difficulty": 0.55, "tokens_day": 1.0e9, "scale_value": 200_000, "scale_kind": {"model": "linear", "label": "Examples generated", "unit": "examples/day", "token_multiplier": 5_000, "min": 0, "max": 2_000_000, "step": 1_000, "formula": "examples/day x prompt, generated artifact, critique, and retry tokens"}, "wtp_per_m": 1.50, "requires": (), "min_success_rate": 0.85, "quality_floor": 0.68, "batch_eligible": True, "latent_jobs_day": 8.0e9, "unlock_price_per_m": 0.20, "in_pre": "Classify", "out_pre": "Code", "scale_hint": "Examples/day x generation and validation passes; decode-heavy and highly batchable."},
-    {"key": "catalog_enrichment", "name": "Product-catalog enrichment", "difficulty": 0.25, "tokens_day": 1.0e9, "scale_value": 500_000, "scale_kind": {"model": "linear", "label": "Catalog items enriched", "unit": "SKUs/day", "token_multiplier": 2_000, "min": 0, "max": 5_000_000, "step": 10_000, "formula": "SKUs/day x image/text input + attributes and copy tokens"}, "wtp_per_m": 0.60, "requires": ("images",), "min_success_rate": 0.90, "quality_floor": 0.52, "batch_eligible": True, "latent_jobs_day": 5.0e9, "unlock_price_per_m": 0.10, "in_pre": "Classify", "out_pre": "Chat", "scale_hint": "SKUs x images, locales, and copy variants; seasonal reprocessing creates large batch spikes."},
+    {
+        "key": "classify",
+        "name": "Mass classification",
+        "difficulty": 0.10,
+        "tokens_day": 3.0e9,
+        "scale_value": 5_000_000,
+        "scale_kind": {
+            "model": "linear",
+            "label": "Records processed",
+            "unit": "records/day",
+            "token_multiplier": 600,
+            "min": 0,
+            "max": 10_000_000,
+            "step": 10_000,
+            "formula": "records/day x average tokens per record",
+        },
+        "wtp_per_m": 0.25,
+        "requires": (),
+        "min_success_rate": 0.80,
+        "quality_floor": 0.35,
+        "batch_eligible": True,
+        "latent_jobs_day": 8.0e9,
+        "unlock_price_per_m": 0.05,
+        "in_pre": "Classify",
+        "out_pre": "Classify",
+        "scale_hint": "Records/day x tokens per record; mostly batchable queues.",
+    },
+    {
+        "key": "summarize",
+        "name": "Doc summarization",
+        "difficulty": 0.25,
+        "tokens_day": 1.5e9,
+        "scale_value": 60_000,
+        "scale_kind": {
+            "model": "linear",
+            "label": "Documents summarized",
+            "unit": "documents/day",
+            "token_multiplier": 25_000,
+            "min": 0,
+            "max": 250_000,
+            "step": 100,
+            "formula": "documents/day x average document+summary tokens",
+        },
+        "wtp_per_m": 0.90,
+        "requires": ("ctx_128k",),
+        "min_success_rate": 0.85,
+        "quality_floor": 0.50,
+        "batch_eligible": True,
+        "latent_jobs_day": 3.0e9,
+        "unlock_price_per_m": 0.20,
+        "in_pre": "Long doc",
+        "out_pre": "Long doc",
+        "scale_hint": "Documents/day x document length; periodic backfills can dominate.",
+    },
+    {
+        "key": "chatbot",
+        "name": "Customer service agent",
+        "difficulty": 0.30,
+        "tokens_day": 2.0e9,
+        "scale_value": 80_000,
+        "scale_kind": {
+            "model": "linear",
+            "label": "Support tickets",
+            "unit": "tickets/day",
+            "token_multiplier": 25_000,
+            "min": 0,
+            "max": 250_000,
+            "step": 100,
+            "formula": "tickets/day x 5 turns x about 5k tokens/turn",
+        },
+        "wtp_per_m": 4.00,
+        "requires": ("tools",),
+        "min_success_rate": 0.95,
+        "quality_floor": 0.60,
+        "in_pre": "Chat",
+        "out_pre": "Chat",
+        "scale_hint": "Tickets/day x turns x resent history and tool results; interactive peak matters.",
+    },
+    {
+        "key": "email_corrector",
+        "name": "Email correction copilot",
+        "difficulty": 0.18,
+        "tokens_day": 50e6,
+        "scale_value": 5_000,
+        "scale_kind": {
+            "model": "linear",
+            "label": "Enabled headcount",
+            "unit": "employees",
+            "token_multiplier": 10_000,
+            "min": 0,
+            "max": 25_000,
+            "step": 10,
+            "formula": "employees x 5 assisted messages/day x about 2k tokens",
+        },
+        "wtp_per_m": 3.25,
+        "requires": (),
+        "min_success_rate": 0.90,
+        "quality_floor": 0.40,
+        "in_pre": "Chat",
+        "out_pre": "Chat",
+        "scale_hint": "Enabled headcount x assisted messages, not total inbox traffic; roughly linear with adoption.",
+    },
+    {
+        "key": "coding",
+        "name": "Repository coding agent",
+        "difficulty": 0.55,
+        "tokens_day": 1.2e9,
+        "scale_value": 8_000,
+        "scale_kind": {
+            "model": "linear",
+            "label": "Developer seats",
+            "unit": "developers",
+            "token_multiplier": 150_000,
+            "min": 0,
+            "max": 25_000,
+            "step": 10,
+            "formula": "developers x agent sessions/day x repository context and retries",
+        },
+        "wtp_per_m": 4.00,
+        "requires": ("tools", "ctx_128k"),
+        "min_success_rate": 0.85,
+        "quality_floor": 0.70,
+        "in_pre": "Code",
+        "out_pre": "Code",
+        "scale_hint": "Agentic repo work, not inline completion: multiple tool calls and context refreshes per developer-day.",
+    },
+    {
+        "key": "meeting_notes",
+        "name": "Meeting notes assistant",
+        "difficulty": 0.35,
+        "tokens_day": 120e6,
+        "scale_value": 6_000,
+        "scale_kind": {
+            "model": "linear",
+            "label": "Recorded meeting time",
+            "unit": "meeting hours/day",
+            "token_multiplier": 20_000,
+            "min": 0,
+            "max": 20_000,
+            "step": 10,
+            "formula": "meeting hours/day x about 14k transcript + summary and prompt tokens",
+        },
+        "wtp_per_m": 7.50,
+        "requires": (),
+        "min_success_rate": 0.88,
+        "quality_floor": 0.55,
+        "batch_eligible": True,
+        "latent_jobs_day": 1.0e9,
+        "unlock_price_per_m": 0.35,
+        "in_pre": "RAG",
+        "out_pre": "Long doc",
+        "scale_hint": "Recorded hours x transcript and note tokens; one-pass work can be delayed after calls.",
+    },
+    {
+        "key": "evals",
+        "name": "Batch evaluations",
+        "difficulty": 0.45,
+        "tokens_day": 800e6,
+        "scale_value": 400_000,
+        "scale_kind": {
+            "model": "linear",
+            "label": "Evaluation prompts",
+            "unit": "eval prompts/day",
+            "token_multiplier": 2_000,
+            "min": 0,
+            "max": 2_000_000,
+            "step": 1_000,
+            "formula": "eval prompts/day x average prompt+judgment tokens",
+        },
+        "wtp_per_m": 2.00,
+        "requires": (),
+        "min_success_rate": 0.90,
+        "quality_floor": 0.60,
+        "batch_eligible": True,
+        "latent_jobs_day": 2.0e9,
+        "unlock_price_per_m": 0.50,
+        "in_pre": "RAG",
+        "out_pre": "Classify",
+        "scale_hint": "Runs/day x eval set size; off-peak capacity is usually acceptable.",
+    },
+    {
+        "key": "inbox_archive",
+        "name": "Decade inbox knowledge base",
+        "difficulty": 0.50,
+        "tokens_day": 120e6,
+        "scale_value": 50,
+        "scale_kind": {
+            "model": "corpus",
+            "label": "Indexed mailboxes",
+            "unit": "mailboxes indexed",
+            "token_multiplier": 2_400_000,
+            "min": 0,
+            "max": 5_000,
+            "step": 10,
+            "formula": "mailboxes x about 72M corpus tokens / 30-day backfill",
+        },
+        "wtp_per_m": 1.75,
+        "requires": (),
+        "min_success_rate": 0.86,
+        "quality_floor": 0.62,
+        "batch_eligible": True,
+        "latent_jobs_day": 12.0e9,
+        "unlock_price_per_m": 0.30,
+        "in_pre": "RAG",
+        "out_pre": "Long doc",
+        "scale_hint": "Illustrative 30-day backfill; replace 72M tokens/mailbox and horizon with measured corpus data.",
+    },
+    {
+        "key": "longctx",
+        "name": "Multi-pass long-ctx analytics",
+        "difficulty": 0.70,
+        "tokens_day": 400e6,
+        "scale_value": 200,
+        "scale_kind": {
+            "model": "linear",
+            "label": "Large analyses",
+            "unit": "analyses/day",
+            "token_multiplier": 2_000_000,
+            "min": 0,
+            "max": 1_000,
+            "step": 1,
+            "formula": "analyses/day x about 16 passes x 125k input+output tokens",
+        },
+        "wtp_per_m": 8.00,
+        "requires": ("ctx_128k", "reasoning"),
+        "min_success_rate": 0.80,
+        "quality_floor": 0.78,
+        "latent_jobs_day": 1.0e9,
+        "unlock_price_per_m": 3.00,
+        "in_pre": "Long doc",
+        "out_pre": "Long doc",
+        "scale_hint": "Multi-pass source-pack analysis; 2M is total processed tokens, not one impossible context window.",
+    },
+    {
+        "key": "research",
+        "name": "Deep research agent",
+        "difficulty": 0.75,
+        "tokens_day": 150e6,
+        "scale_value": 300,
+        "scale_kind": {
+            "model": "custom",
+            "label": "Research jobs",
+            "unit": "investigations/day",
+            "token_multiplier": 500_000,
+            "min": 0,
+            "max": 1_000,
+            "step": 1,
+            "formula": "investigations/day x about 20 agent calls x 25k processed tokens",
+        },
+        "wtp_per_m": 20.00,
+        "requires": ("tools", "reasoning"),
+        "min_success_rate": 0.75,
+        "quality_floor": 0.85,
+        "latent_jobs_day": 500e6,
+        "unlock_price_per_m": 5.00,
+        "in_pre": "RAG",
+        "out_pre": "Long doc",
+        "scale_hint": "Multi-call agent estimate; telemetry must replace the illustrative 20-call depth.",
+    },
+    {
+        "key": "document_extraction",
+        "name": "Invoice & claims extraction",
+        "difficulty": 0.30,
+        "tokens_day": 750e6,
+        "scale_value": 250_000,
+        "scale_kind": {
+            "model": "linear",
+            "label": "Document pages processed",
+            "unit": "pages/day",
+            "token_multiplier": 3_000,
+            "min": 0,
+            "max": 1_000_000,
+            "step": 1_000,
+            "formula": "pages/day x image/OCR input + structured output and validation tokens",
+        },
+        "wtp_per_m": 1.25,
+        "requires": ("images",),
+        "min_success_rate": 0.94,
+        "quality_floor": 0.58,
+        "batch_eligible": True,
+        "latent_jobs_day": 2.0e9,
+        "unlock_price_per_m": 0.25,
+        "in_pre": "Classify",
+        "out_pre": "Classify",
+        "scale_hint": "Pages/day x image/OCR and extraction tokens; retries and validation raise the multiplier.",
+    },
+    {
+        "key": "enterprise_search",
+        "name": "Enterprise search assistant",
+        "difficulty": 0.42,
+        "tokens_day": 1.2e9,
+        "scale_value": 150_000,
+        "scale_kind": {
+            "model": "linear",
+            "label": "Knowledge queries",
+            "unit": "queries/day",
+            "token_multiplier": 8_000,
+            "min": 0,
+            "max": 1_000_000,
+            "step": 1_000,
+            "formula": "queries/day x query + about 8 retrieved chunks + answer",
+        },
+        "wtp_per_m": 2.50,
+        "requires": (),
+        "min_success_rate": 0.92,
+        "quality_floor": 0.65,
+        "batch_eligible": False,
+        "latent_jobs_day": 3.0e9,
+        "unlock_price_per_m": 0.75,
+        "in_pre": "RAG",
+        "out_pre": "Chat",
+        "scale_hint": "Active users x searches/day x retrieved evidence; retrieval is assumed app-side and daytime concurrency matters.",
+    },
+    {
+        "key": "contact_center_qa",
+        "name": "Contact-center QA",
+        "difficulty": 0.45,
+        "tokens_day": 300e6,
+        "scale_value": 15_000,
+        "scale_kind": {
+            "model": "linear",
+            "label": "Recorded call time",
+            "unit": "call hours/day",
+            "token_multiplier": 20_000,
+            "min": 0,
+            "max": 100_000,
+            "step": 100,
+            "formula": "call hours/day x transcript + rubric-scoring and summary tokens",
+        },
+        "wtp_per_m": 4.00,
+        "requires": (),
+        "min_success_rate": 0.92,
+        "quality_floor": 0.65,
+        "batch_eligible": True,
+        "latent_jobs_day": 1.8e9,
+        "unlock_price_per_m": 0.40,
+        "in_pre": "RAG",
+        "out_pre": "Classify",
+        "scale_hint": "Recorded hours x transcript, summary, and QA rubric passes; transcription compute is outside this LLM estimate.",
+    },
+    {
+        "key": "translation",
+        "name": "Multilingual translation",
+        "difficulty": 0.35,
+        "tokens_day": 15e6,
+        "scale_value": 5_000_000,
+        "scale_kind": {
+            "model": "linear",
+            "label": "Source words translated",
+            "unit": "source words/day",
+            "token_multiplier": 3.0,
+            "min": 0,
+            "max": 100_000_000,
+            "step": 100_000,
+            "formula": "source words/day x source-and-target token conversion",
+        },
+        "wtp_per_m": 0.70,
+        "requires": (),
+        "min_success_rate": 0.90,
+        "quality_floor": 0.62,
+        "batch_eligible": True,
+        "latent_jobs_day": 300e6,
+        "unlock_price_per_m": 0.15,
+        "in_pre": "Chat",
+        "out_pre": "Chat",
+        "scale_hint": "Source words x target languages and variants; translation-memory hits should reduce demand.",
+    },
+    {
+        "key": "contract_review",
+        "name": "Contract review & redlining",
+        "difficulty": 0.70,
+        "tokens_day": 600e6,
+        "scale_value": 8_000,
+        "scale_kind": {
+            "model": "linear",
+            "label": "Contracts reviewed",
+            "unit": "contracts/day",
+            "token_multiplier": 75_000,
+            "min": 0,
+            "max": 50_000,
+            "step": 100,
+            "formula": "contracts/day x source, playbook, review, and revision tokens",
+        },
+        "wtp_per_m": 8.00,
+        "requires": ("ctx_128k", "reasoning"),
+        "min_success_rate": 0.85,
+        "quality_floor": 0.80,
+        "batch_eligible": True,
+        "latent_jobs_day": 1.2e9,
+        "unlock_price_per_m": 1.50,
+        "in_pre": "Long doc",
+        "out_pre": "Long doc",
+        "scale_hint": "Contracts x pages x review passes; nightly portfolio scans coexist with interactive redlining.",
+    },
+    {
+        "key": "security_triage",
+        "name": "Security alert investigation",
+        "difficulty": 0.68,
+        "tokens_day": 1.2e9,
+        "scale_value": 100_000,
+        "scale_kind": {
+            "model": "linear",
+            "label": "Security alerts investigated",
+            "unit": "alerts/day",
+            "token_multiplier": 12_000,
+            "min": 0,
+            "max": 1_000_000,
+            "step": 1_000,
+            "formula": "alerts/day x evidence bundle + tool calls + verdict tokens",
+        },
+        "wtp_per_m": 6.00,
+        "requires": ("tools", "reasoning"),
+        "min_success_rate": 0.85,
+        "quality_floor": 0.78,
+        "batch_eligible": False,
+        "latent_jobs_day": 4.0e9,
+        "unlock_price_per_m": 1.00,
+        "in_pre": "RAG",
+        "out_pre": "Classify",
+        "scale_hint": "Alerts/day x logs, identity context, threat intelligence, and investigation turns; peak latency matters.",
+    },
+    {
+        "key": "aml_casework",
+        "name": "AML/KYC case investigation",
+        "difficulty": 0.72,
+        "tokens_day": 600e6,
+        "scale_value": 12_000,
+        "scale_kind": {
+            "model": "linear",
+            "label": "Cases investigated",
+            "unit": "cases/day",
+            "token_multiplier": 50_000,
+            "min": 0,
+            "max": 100_000,
+            "step": 100,
+            "formula": "cases/day x transaction evidence + policy checks + narrative tokens",
+        },
+        "wtp_per_m": 12.00,
+        "requires": ("tools", "ctx_128k", "reasoning"),
+        "min_success_rate": 0.80,
+        "quality_floor": 0.84,
+        "batch_eligible": True,
+        "latent_jobs_day": 2.4e9,
+        "unlock_price_per_m": 2.00,
+        "in_pre": "RAG",
+        "out_pre": "Long doc",
+        "scale_hint": "Alerts escalated to cases x evidence depth; batch enrichment precedes mandatory human review.",
+    },
+    {
+        "key": "synthetic_generation",
+        "name": "Synthetic test-data generation",
+        "difficulty": 0.55,
+        "tokens_day": 1.0e9,
+        "scale_value": 200_000,
+        "scale_kind": {
+            "model": "linear",
+            "label": "Examples generated",
+            "unit": "examples/day",
+            "token_multiplier": 5_000,
+            "min": 0,
+            "max": 2_000_000,
+            "step": 1_000,
+            "formula": "examples/day x prompt, generated artifact, critique, and retry tokens",
+        },
+        "wtp_per_m": 1.50,
+        "requires": (),
+        "min_success_rate": 0.85,
+        "quality_floor": 0.68,
+        "batch_eligible": True,
+        "latent_jobs_day": 8.0e9,
+        "unlock_price_per_m": 0.20,
+        "in_pre": "Classify",
+        "out_pre": "Code",
+        "scale_hint": "Examples/day x generation and validation passes; decode-heavy and highly batchable.",
+    },
+    {
+        "key": "catalog_enrichment",
+        "name": "Product-catalog enrichment",
+        "difficulty": 0.25,
+        "tokens_day": 1.0e9,
+        "scale_value": 500_000,
+        "scale_kind": {
+            "model": "linear",
+            "label": "Catalog items enriched",
+            "unit": "SKUs/day",
+            "token_multiplier": 2_000,
+            "min": 0,
+            "max": 5_000_000,
+            "step": 10_000,
+            "formula": "SKUs/day x image/text input + attributes and copy tokens",
+        },
+        "wtp_per_m": 0.60,
+        "requires": ("images",),
+        "min_success_rate": 0.90,
+        "quality_floor": 0.52,
+        "batch_eligible": True,
+        "latent_jobs_day": 5.0e9,
+        "unlock_price_per_m": 0.10,
+        "in_pre": "Classify",
+        "out_pre": "Chat",
+        "scale_hint": "SKUs x images, locales, and copy variants; seasonal reprocessing creates large batch spikes.",
+    },
 ]
 
 # Empirical prefix-token reuse priors by workload archetype.  These are not a
@@ -5378,11 +7231,13 @@ USE_CASE_QUALITY_WEIGHTS = {
 }
 
 for _preset in PROJECT_PRESETS:
-    _preset["prefix_hit_rate"] = USE_CASE_PREFIX_HIT_RATES.get(_preset["key"], 0.0)
-    _preset["quality_domain"] = USE_CASE_QUALITY_DOMAINS.get(_preset["key"], "general")
+    _preset_key = str(_preset["key"])
+    _quality_domain = USE_CASE_QUALITY_DOMAINS.get(_preset_key, "general")
+    _preset["prefix_hit_rate"] = USE_CASE_PREFIX_HIT_RATES.get(_preset_key, 0.0)
+    _preset["quality_domain"] = _quality_domain
     _preset["quality_weights"] = normalize_quality_weights(
-        USE_CASE_QUALITY_WEIGHTS.get(_preset["key"]),
-        _preset["quality_domain"],
+        USE_CASE_QUALITY_WEIGHTS.get(_preset_key),
+        _quality_domain,
     )
 
 DAY_SHAPES = {
@@ -5394,36 +7249,120 @@ DAY_SHAPES = {
     "workday": {
         "label": "Enterprise workday",
         "weights": [
-            0.30, 0.24, 0.20, 0.18, 0.18, 0.22, 0.35, 0.55,
-            0.82, 1.00, 1.10, 1.16, 1.20, 1.18, 1.10, 1.00,
-            0.92, 0.82, 0.68, 0.54, 0.44, 0.38, 0.34, 0.32,
+            0.30,
+            0.24,
+            0.20,
+            0.18,
+            0.18,
+            0.22,
+            0.35,
+            0.55,
+            0.82,
+            1.00,
+            1.10,
+            1.16,
+            1.20,
+            1.18,
+            1.10,
+            1.00,
+            0.92,
+            0.82,
+            0.68,
+            0.54,
+            0.44,
+            0.38,
+            0.34,
+            0.32,
         ],
         "note": "Daytime-heavy office demand with a mild evening shoulder.",
     },
     "consumer": {
         "label": "Consumer evening",
         "weights": [
-            0.32, 0.28, 0.24, 0.22, 0.20, 0.22, 0.30, 0.42,
-            0.58, 0.70, 0.78, 0.84, 0.88, 0.92, 0.98, 1.04,
-            1.10, 1.18, 1.28, 1.36, 1.40, 1.24, 0.92, 0.54,
+            0.32,
+            0.28,
+            0.24,
+            0.22,
+            0.20,
+            0.22,
+            0.30,
+            0.42,
+            0.58,
+            0.70,
+            0.78,
+            0.84,
+            0.88,
+            0.92,
+            0.98,
+            1.04,
+            1.10,
+            1.18,
+            1.28,
+            1.36,
+            1.40,
+            1.24,
+            0.92,
+            0.54,
         ],
         "note": "Lower daytime demand with a strong evening consumer peak.",
     },
     "globalsaas": {
         "label": "Follow the sun",
         "weights": [
-            0.55, 0.52, 0.50, 0.48, 0.50, 0.56, 0.64, 0.74,
-            0.86, 0.96, 1.02, 1.08, 1.12, 1.16, 1.18, 1.16,
-            1.12, 1.08, 1.00, 0.90, 0.82, 0.74, 0.68, 0.60,
+            0.55,
+            0.52,
+            0.50,
+            0.48,
+            0.50,
+            0.56,
+            0.64,
+            0.74,
+            0.86,
+            0.96,
+            1.02,
+            1.08,
+            1.12,
+            1.16,
+            1.18,
+            1.16,
+            1.12,
+            1.08,
+            1.00,
+            0.90,
+            0.82,
+            0.74,
+            0.68,
+            0.60,
         ],
         "note": "Broader global SaaS demand with fewer sharp regional peaks.",
     },
     "nightbatch": {
         "label": "Night batch",
         "weights": [
-            1.28, 1.34, 1.38, 1.40, 1.34, 1.18, 0.92, 0.68,
-            0.48, 0.38, 0.34, 0.32, 0.32, 0.34, 0.38, 0.42,
-            0.50, 0.62, 0.78, 0.92, 1.00, 1.08, 1.18, 1.24,
+            1.28,
+            1.34,
+            1.38,
+            1.40,
+            1.34,
+            1.18,
+            0.92,
+            0.68,
+            0.48,
+            0.38,
+            0.34,
+            0.32,
+            0.32,
+            0.34,
+            0.38,
+            0.42,
+            0.50,
+            0.62,
+            0.78,
+            0.92,
+            1.00,
+            1.08,
+            1.18,
+            1.24,
         ],
         "note": "Off-peak-heavy traffic that leans into discounted overnight processing.",
     },
@@ -5433,16 +7372,266 @@ DAY_SHAPES = {
 # Hour index 0 = local midnight.
 # Values are grams CO2-equivalent per kWh delivered.
 CARBON_INTENSITY_HOURLY: dict[str, list[float]] = {
-    "BE": [290, 280, 270, 265, 270, 290, 320, 340, 330, 310, 290, 270, 260, 260, 270, 290, 320, 350, 380, 400, 390, 360, 330, 310],
-    "UK": [230, 220, 210, 205, 210, 230, 260, 280, 270, 250, 230, 220, 210, 210, 220, 240, 260, 290, 320, 340, 330, 300, 270, 250],
-    "DE": [420, 410, 400, 395, 400, 420, 450, 480, 470, 450, 430, 410, 400, 395, 405, 430, 460, 500, 540, 560, 550, 520, 480, 450],
-    "NL": [410, 400, 390, 380, 385, 410, 440, 470, 460, 440, 420, 400, 390, 385, 395, 420, 450, 490, 530, 550, 540, 510, 470, 440],
-    "CH": [120, 115, 110, 110, 115, 120, 130, 135, 130, 125, 120, 115, 110, 110, 115, 120, 130, 140, 150, 155, 150, 140, 130, 125],
-    "IT": [360, 350, 340, 330, 335, 360, 400, 420, 410, 380, 360, 340, 330, 330, 340, 360, 390, 430, 470, 490, 480, 450, 420, 390],
-    "FR": [60, 55, 55, 55, 55, 60, 65, 70, 65, 60, 55, 50, 50, 50, 50, 55, 60, 70, 75, 80, 80, 75, 70, 65],
-    "FI": [140, 135, 130, 130, 135, 140, 150, 155, 150, 145, 140, 135, 130, 130, 135, 140, 150, 160, 170, 180, 175, 165, 155, 150],
-    "PL": [650, 640, 630, 625, 630, 650, 700, 730, 720, 700, 680, 660, 650, 645, 655, 680, 720, 760, 800, 820, 810, 780, 740, 700],
-    "ES": [250, 240, 230, 220, 230, 260, 300, 320, 290, 240, 200, 180, 150, 160, 170, 200, 260, 320, 380, 400, 380, 350, 310, 280],
+    "BE": [
+        290,
+        280,
+        270,
+        265,
+        270,
+        290,
+        320,
+        340,
+        330,
+        310,
+        290,
+        270,
+        260,
+        260,
+        270,
+        290,
+        320,
+        350,
+        380,
+        400,
+        390,
+        360,
+        330,
+        310,
+    ],
+    "UK": [
+        230,
+        220,
+        210,
+        205,
+        210,
+        230,
+        260,
+        280,
+        270,
+        250,
+        230,
+        220,
+        210,
+        210,
+        220,
+        240,
+        260,
+        290,
+        320,
+        340,
+        330,
+        300,
+        270,
+        250,
+    ],
+    "DE": [
+        420,
+        410,
+        400,
+        395,
+        400,
+        420,
+        450,
+        480,
+        470,
+        450,
+        430,
+        410,
+        400,
+        395,
+        405,
+        430,
+        460,
+        500,
+        540,
+        560,
+        550,
+        520,
+        480,
+        450,
+    ],
+    "NL": [
+        410,
+        400,
+        390,
+        380,
+        385,
+        410,
+        440,
+        470,
+        460,
+        440,
+        420,
+        400,
+        390,
+        385,
+        395,
+        420,
+        450,
+        490,
+        530,
+        550,
+        540,
+        510,
+        470,
+        440,
+    ],
+    "CH": [
+        120,
+        115,
+        110,
+        110,
+        115,
+        120,
+        130,
+        135,
+        130,
+        125,
+        120,
+        115,
+        110,
+        110,
+        115,
+        120,
+        130,
+        140,
+        150,
+        155,
+        150,
+        140,
+        130,
+        125,
+    ],
+    "IT": [
+        360,
+        350,
+        340,
+        330,
+        335,
+        360,
+        400,
+        420,
+        410,
+        380,
+        360,
+        340,
+        330,
+        330,
+        340,
+        360,
+        390,
+        430,
+        470,
+        490,
+        480,
+        450,
+        420,
+        390,
+    ],
+    "FR": [
+        60,
+        55,
+        55,
+        55,
+        55,
+        60,
+        65,
+        70,
+        65,
+        60,
+        55,
+        50,
+        50,
+        50,
+        50,
+        55,
+        60,
+        70,
+        75,
+        80,
+        80,
+        75,
+        70,
+        65,
+    ],
+    "FI": [
+        140,
+        135,
+        130,
+        130,
+        135,
+        140,
+        150,
+        155,
+        150,
+        145,
+        140,
+        135,
+        130,
+        130,
+        135,
+        140,
+        150,
+        160,
+        170,
+        180,
+        175,
+        165,
+        155,
+        150,
+    ],
+    "PL": [
+        650,
+        640,
+        630,
+        625,
+        630,
+        650,
+        700,
+        730,
+        720,
+        700,
+        680,
+        660,
+        650,
+        645,
+        655,
+        680,
+        720,
+        760,
+        800,
+        820,
+        810,
+        780,
+        740,
+        700,
+    ],
+    "ES": [
+        250,
+        240,
+        230,
+        220,
+        230,
+        260,
+        300,
+        320,
+        290,
+        240,
+        200,
+        180,
+        150,
+        160,
+        170,
+        200,
+        260,
+        320,
+        380,
+        400,
+        380,
+        350,
+        310,
+        280,
+    ],
 }
 
 COUNTRIES = {
@@ -5462,14 +7651,14 @@ DEFAULT_COUNTRY = "FR"
 # GCP region → country code. Only the European Vertex regions from the
 # cloud-model availability matrix are mapped; add more as they come into scope.
 GCP_ZONE_COUNTRY: dict[str, str] = {
-    "europe-west1": "BE",       # St. Ghislain
-    "europe-west2": "UK",       # London
-    "europe-west3": "DE",       # Frankfurt
-    "europe-west4": "NL",       # Eemshaven
-    "europe-west8": "IT",       # Milan
-    "europe-west9": "FR",       # Paris
-    "europe-central2": "PL",    # Warsaw
-    "europe-north1": "FI",      # Hamina
+    "europe-west1": "BE",  # St. Ghislain
+    "europe-west2": "UK",  # London
+    "europe-west3": "DE",  # Frankfurt
+    "europe-west4": "NL",  # Eemshaven
+    "europe-west8": "IT",  # Milan
+    "europe-west9": "FR",  # Paris
+    "europe-central2": "PL",  # Warsaw
+    "europe-north1": "FI",  # Hamina
     "europe-southwest1": "ES",  # Madrid
 }
 
@@ -5489,7 +7678,9 @@ def carbon_intensity_avg(country: str, hour_weights: list[float] | None = None) 
     return sum(series[h] * hour_weights[h] for h in range(24)) / total_w
 
 
-def cloud_model_grid_intensity(zones: tuple[str, ...], hour_weights: list[float] | None = None) -> float:
+def cloud_model_grid_intensity(
+    zones: tuple[str, ...], hour_weights: list[float] | None = None
+) -> float:
     """Unweighted (or demand-weighted) gCO2/kWh averaged across the zones a cloud model is served from.
 
     Zones we can't map to a country are ignored; returns 0.0 when none resolve."""

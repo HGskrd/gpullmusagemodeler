@@ -21,24 +21,24 @@ from data import (
     CLOUD_PRICING_CAPTURED_AT,
     CLOUD_PRICING_SOURCES,
     CORPO_CLOUD_PRESETS,
+    EMBEDDING_DECONTAMINATED_BEIR_SOURCES,
     EMBEDDING_DOC_BUCKETS,
     EMBEDDING_DOC_PRESETS,
-    EMBEDDING_DECONTAMINATED_BEIR_SOURCES,
     EMBEDDING_QUALITY_PLACEHOLDER,
     EMBEDDING_QUALITY_SOURCES,
     GPU_FP4_FLOPS,
     GPU_TDP_WATTS,
     GPUS,
     MODELS,
-    PUBLISHED_EMBEDDING_DECONTAMINATED_BEIR,
-    PUBLISHED_EMBEDDING_QUALITY,
     PREVIEW_ASSUMPTIONS,
     PREVIEW_ASSUMPTIONS_CAPTURED_AT,
+    PUBLISHED_EMBEDDING_DECONTAMINATED_BEIR,
+    PUBLISHED_EMBEDDING_QUALITY,
     aa_intelligence_to_quality,
-    quality_to_aa_intelligence,
     aa_output_tokens_to_efficiency,
     cloud_models_missing_quality_anchors,
     get_quantization_profile,
+    quality_to_aa_intelligence,
     text_models_missing_quality_anchors,
 )
 
@@ -215,7 +215,9 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(profile.source_kind, "exact")
         self.assertEqual(profile.total_weight_bytes, 1_560_860_324_864)
         self.assertAlmostEqual(model.weight_bytes_per_param("mxfp4"), 0.5614605485122303)
-        self.assertAlmostEqual(model.active_weight_bytes("mxfp4") / model.active_params, 1.313609348872837)
+        self.assertAlmostEqual(
+            model.active_weight_bytes("mxfp4") / model.active_params, 1.313609348872837
+        )
         self.assertAlmostEqual(profile.compute_precision_shares["mxfp4"], 0.466606256890595)
         self.assertIn("latent MoE projections, shared experts, and routers BF16", profile.retained)
 
@@ -524,8 +526,12 @@ class ModelCatalogTests(unittest.TestCase):
 
     def test_audited_hybrid_and_long_context_entries_use_published_geometry(self):
         q397 = MODELS["q397"]
-        self.assertEqual((q397.layers, q397.hidden_size, q397.attention_layer_count), (60, 4096, 15))
-        self.assertEqual((q397.linear_attention_layer_count, q397.linear_attention_head_count), (45, 64))
+        self.assertEqual(
+            (q397.layers, q397.hidden_size, q397.attention_layer_count), (60, 4096, 15)
+        )
+        self.assertEqual(
+            (q397.linear_attention_layer_count, q397.linear_attention_head_count), (45, 64)
+        )
         self.assertEqual(q397.max_context_tokens, 262144)
 
         gemma = MODELS["g26"]
@@ -645,15 +651,45 @@ class ModelCatalogTests(unittest.TestCase):
     def test_lfm_catalog_entries_use_hybrid_attention_specs(self):
         expected = {
             "lfm2.5-350m": ("LFM2.5 350M", 354_483_968, 354_483_968, 16, 6, 1024, 16, 8, False),
-            "lfm2.5-1.2b-instruct": ("LFM2.5 1.2B Instruct", 1_170_340_608, 1_170_340_608, 16, 6, 2048, 32, 8, False),
-            "lfm2.5-1.2b-thinking": ("LFM2.5 1.2B Thinking", 1_170_340_608, 1_170_340_608, 16, 6, 2048, 32, 8, True),
+            "lfm2.5-1.2b-instruct": (
+                "LFM2.5 1.2B Instruct",
+                1_170_340_608,
+                1_170_340_608,
+                16,
+                6,
+                2048,
+                32,
+                8,
+                False,
+            ),
+            "lfm2.5-1.2b-thinking": (
+                "LFM2.5 1.2B Thinking",
+                1_170_340_608,
+                1_170_340_608,
+                16,
+                6,
+                2048,
+                32,
+                8,
+                True,
+            ),
             "lfm2-700m": ("LFM2 700M", 742_489_344, 742_489_344, 16, 6, 1536, 24, 8, False),
             "lfm2-2.6b": ("LFM2 2.6B", 2_569_272_320, 2_569_272_320, 30, 8, 2048, 32, 8, False),
             "lfm2-8b-a1b": ("LFM2 8B-A1.5B", 8.3e9, 1.5e9, 24, 6, 2048, 32, 8, False),
             "lfm2-24b-a2b": ("LFM2 24B-A2.3B", 24e9, 2.3e9, 40, 10, 2048, 32, 8, False),
         }
 
-        for key, (name, total, active, layers, attn_layers, hidden_dim, heads, kv_heads, reasoning) in expected.items():
+        for key, (
+            name,
+            total,
+            active,
+            layers,
+            attn_layers,
+            hidden_dim,
+            heads,
+            kv_heads,
+            reasoning,
+        ) in expected.items():
             with self.subTest(key=key):
                 model = MODELS[key]
 
@@ -676,9 +712,15 @@ class ModelCatalogTests(unittest.TestCase):
                 self.assertEqual("reasoning" in model.capabilities, reasoning)
                 self.assertGreater(kv_cache_bytes_for_sequence(model, 32768, "bf16"), 0.0)
 
-        self.assertAlmostEqual(MODELS["lfm2.5-1.2b-instruct"].quality, aa_intelligence_to_quality(8.0))
-        self.assertAlmostEqual(MODELS["lfm2.5-1.2b-instruct"].token_efficiency, aa_output_tokens_to_efficiency(4.6))
-        self.assertAlmostEqual(MODELS["lfm2.5-1.2b-thinking"].token_efficiency, aa_output_tokens_to_efficiency(31.0))
+        self.assertAlmostEqual(
+            MODELS["lfm2.5-1.2b-instruct"].quality, aa_intelligence_to_quality(8.0)
+        )
+        self.assertAlmostEqual(
+            MODELS["lfm2.5-1.2b-instruct"].token_efficiency, aa_output_tokens_to_efficiency(4.6)
+        )
+        self.assertAlmostEqual(
+            MODELS["lfm2.5-1.2b-thinking"].token_efficiency, aa_output_tokens_to_efficiency(31.0)
+        )
 
     def test_nvfp4_profile_lut_uses_artifact_storage_for_gemma_31b(self):
         model = MODELS["g31"]
@@ -689,7 +731,9 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(profile.source_kind, "exact")
         self.assertIn("language self-attention BF16", profile.retained)
         expected_storage = 2 * 10_464_098_156 + 10_404_495_360 + 1_300_561_920 + 4 * 360
-        self.assertAlmostEqual(model.weight_bytes_per_param("nvfp4"), expected_storage / 30.7e9, places=9)
+        self.assertAlmostEqual(
+            model.weight_bytes_per_param("nvfp4"), expected_storage / 30.7e9, places=9
+        )
         self.assertAlmostEqual(model.kv_cache_bytes_per_elem("nvfp4"), 1.0)
 
     def test_qwen_moe_nvfp4_profiles_are_model_specific(self):
@@ -701,7 +745,9 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertAlmostEqual(q35.weight_bytes_per_param("nvfp4"), 0.726225620, places=6)
         self.assertAlmostEqual(q122.weight_bytes_per_param("nvfp4"), 0.667763208, places=6)
         self.assertAlmostEqual(q397.weight_bytes_per_param("nvfp4"), 0.667763208, places=6)
-        self.assertNotAlmostEqual(q35.weight_bytes_per_param("nvfp4"), q122.weight_bytes_per_param("nvfp4"), places=3)
+        self.assertNotAlmostEqual(
+            q35.weight_bytes_per_param("nvfp4"), q122.weight_bytes_per_param("nvfp4"), places=3
+        )
 
     def test_rwkv7_g1_catalog_family_uses_recurrent_state(self):
         expected = {
@@ -784,7 +830,9 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertTrue(model.is_realtime_only)
         self.assertEqual(model.capabilities, frozenset())
         self.assertIsNotNone(profile)
-        self.assertEqual(profile.source, "XiaomiMiMo/MiMo-V2.5-ASR + XiaomiMiMo/MiMo-Audio-Tokenizer")
+        self.assertEqual(
+            profile.source, "XiaomiMiMo/MiMo-V2.5-ASR + XiaomiMiMo/MiMo-Audio-Tokenizer"
+        )
         self.assertEqual(profile.state_tokens, 8192)
         self.assertAlmostEqual(profile.audio_ms_per_token, 160.0)
         self.assertAlmostEqual(profile.tokens_per_second, 6.25)
@@ -799,11 +847,23 @@ class ModelCatalogTests(unittest.TestCase):
             "gemma-4-e2b-asr": ("Gemma 4 E2B ASR", 2.0e9, False),
             "gemma-4-e4b-asr": ("Gemma 4 E4B ASR", 4.0e9, False),
             "gemma-4-12b-unified-asr": ("Gemma 4 12B Unified ASR", 11.95e9, False),
-            "nvidia-nemotron-speech-streaming-0.6b": ("NVIDIA Nemotron Speech Streaming 0.6B", 0.6e9, True),
-            "nvidia-nemotron-3.5-asr-streaming-0.6b": ("NVIDIA Nemotron 3.5 ASR Streaming 0.6B", 0.6e9, True),
+            "nvidia-nemotron-speech-streaming-0.6b": (
+                "NVIDIA Nemotron Speech Streaming 0.6B",
+                0.6e9,
+                True,
+            ),
+            "nvidia-nemotron-3.5-asr-streaming-0.6b": (
+                "NVIDIA Nemotron 3.5 ASR Streaming 0.6B",
+                0.6e9,
+                True,
+            ),
             "nvidia-parakeet-unified-0.6b": ("NVIDIA Parakeet Unified 0.6B", 0.6e9, True),
             "nvidia-parakeet-realtime-eou-120m": ("NVIDIA Parakeet Realtime EOU 120M", 120e6, True),
-            "nvidia-multitalker-parakeet-streaming-0.6b": ("NVIDIA Multitalker Parakeet Streaming 0.6B", 0.6e9, True),
+            "nvidia-multitalker-parakeet-streaming-0.6b": (
+                "NVIDIA Multitalker Parakeet Streaming 0.6B",
+                0.6e9,
+                True,
+            ),
             "kyutai-stt-1b-en-fr": ("Kyutai STT 1B EN/FR", 1.0e9, True),
             "kyutai-stt-2.6b-en": ("Kyutai STT 2.6B EN", 2.6e9, True),
             "moonshine-streaming-tiny": ("Moonshine Streaming Tiny 34M", 34e6, True),
@@ -858,7 +918,9 @@ class ModelCatalogTests(unittest.TestCase):
 
         self.assertEqual(MODELS["gemma-4-e2b-asr"].realtime_profile.audio_attention_layers, 12)
         self.assertEqual(MODELS["gemma-4-e4b-asr"].realtime_profile.audio_attention_layers, 12)
-        self.assertIn("no separate audio encoder", MODELS["gemma-4-12b-unified-asr"].realtime_profile.note)
+        self.assertIn(
+            "no separate audio encoder", MODELS["gemma-4-12b-unified-asr"].realtime_profile.note
+        )
 
     def test_nemotron_35_asr_streaming_catalog_entry_uses_hf_card(self):
         model = MODELS["nvidia-nemotron-3.5-asr-streaming-0.6b"]
@@ -919,15 +981,27 @@ class ModelCatalogTests(unittest.TestCase):
 
         self.assertEqual(MODELS["lateon"].embedding_profile.late_interaction_dim, 128)
         self.assertEqual(MODELS["bge-m3"].embedding_profile.late_interaction_dim, 1024)
-        self.assertEqual(MODELS["mxbai-edge-colbert-v0-17m"].embedding_profile.late_interaction_dim, 48)
-        self.assertEqual(MODELS["mxbai-edge-colbert-v0-32m"].embedding_profile.late_interaction_dim, 64)
+        self.assertEqual(
+            MODELS["mxbai-edge-colbert-v0-17m"].embedding_profile.late_interaction_dim, 48
+        )
+        self.assertEqual(
+            MODELS["mxbai-edge-colbert-v0-32m"].embedding_profile.late_interaction_dim, 64
+        )
 
     def test_nemotron_3_embed_entries_use_official_encoder_configs(self):
         expected = {
             "nvidia-nemotron-3-embed-8b": (8.36e9, 34, 4096, 32, 8, 128, 4096),
             "nvidia-nemotron-3-embed-1b": (1.14e9, 16, 2048, 24, 8, 128, 2048),
         }
-        for key, (params, layers, hidden, heads, kv_heads, head_dim, output_dim) in expected.items():
+        for key, (
+            params,
+            layers,
+            hidden,
+            heads,
+            kv_heads,
+            head_dim,
+            output_dim,
+        ) in expected.items():
             with self.subTest(key=key):
                 model = MODELS[key]
                 profile = model.embedding_profile
@@ -1010,8 +1084,12 @@ class ModelCatalogTests(unittest.TestCase):
         )
         self.assertEqual(set(PUBLISHED_EMBEDDING_QUALITY), set(expected_quality))
         self.assertEqual(set(EMBEDDING_QUALITY_SOURCES), set(expected_quality))
-        self.assertEqual(set(PUBLISHED_EMBEDDING_DECONTAMINATED_BEIR), set(expected_decontaminated_beir))
-        self.assertEqual(set(EMBEDDING_DECONTAMINATED_BEIR_SOURCES), set(expected_decontaminated_beir))
+        self.assertEqual(
+            set(PUBLISHED_EMBEDDING_DECONTAMINATED_BEIR), set(expected_decontaminated_beir)
+        )
+        self.assertEqual(
+            set(EMBEDDING_DECONTAMINATED_BEIR_SOURCES), set(expected_decontaminated_beir)
+        )
         for key, score in expected_quality.items():
             with self.subTest(key=key):
                 self.assertAlmostEqual(PUBLISHED_EMBEDDING_QUALITY[key], score)
@@ -1046,7 +1124,9 @@ class ModelCatalogTests(unittest.TestCase):
 
     def test_embedding_estimator_uses_document_size_distribution(self):
         model = MODELS["denseon"]
-        stats = embedding_doc_stats(model, EMBEDDING_DOC_PRESETS["Doc"], EMBEDDING_DOC_BUCKETS, "bf16")
+        stats = embedding_doc_stats(
+            model, EMBEDDING_DOC_PRESETS["Doc"], EMBEDDING_DOC_BUCKETS, "bf16"
+        )
 
         self.assertLessEqual(stats.mean_seq_len, 512)
         self.assertGreaterEqual(stats.p90_seq_len, stats.p50_seq_len)
@@ -1118,7 +1198,9 @@ class ModelCatalogTests(unittest.TestCase):
                     self.assertLess(profile.acceptance_alpha, 1.0)
                     self.assertGreaterEqual(profile.default_k, 1)
                     self.assertGreater(profile.draft_params, 0.0)
-                    self.assertGreaterEqual(profile.draft_params, profile.active_params or profile.draft_params)
+                    self.assertGreaterEqual(
+                        profile.draft_params, profile.active_params or profile.draft_params
+                    )
                     self.assertGreaterEqual(profile.exact_weight_bytes, 0.0)
                     lo, hi = kv_overhead_bounds[profile.method]
                     self.assertGreaterEqual(profile.kv_overhead, lo)
@@ -1152,7 +1234,19 @@ class ModelCatalogTests(unittest.TestCase):
 
     def test_native_mtp_models_are_flagged(self):
         # Models with documented native MTP heads must expose an mtp profile.
-        for key in ("ds3", "deepseek-v4-pro", "glm45a", "g31", "q08", "q2", "q4", "q9", "q27", "q397", "mimo-v2.5-pro"):
+        for key in (
+            "ds3",
+            "deepseek-v4-pro",
+            "glm45a",
+            "g31",
+            "q08",
+            "q2",
+            "q4",
+            "q9",
+            "q27",
+            "q397",
+            "mimo-v2.5-pro",
+        ):
             with self.subTest(model=key):
                 methods = {p.method for p in MODELS[key].speculative_profiles}
                 self.assertIn("mtp", methods)
@@ -1161,8 +1255,12 @@ class ModelCatalogTests(unittest.TestCase):
         q397_methods = {p.method for p in MODELS["q397"].speculative_profiles}
         self.assertIn("dflash", q397_methods)
         self.assertIn("dflash", {p.method for p in MODELS["q27"].speculative_profiles})
-        self.assertNotIn("mtp", {p.method for p in MODELS["deepseek-v4-flash"].speculative_profiles})
-        self.assertIn("dspark", {p.method for p in MODELS["deepseek-v4-flash"].speculative_profiles})
+        self.assertNotIn(
+            "mtp", {p.method for p in MODELS["deepseek-v4-flash"].speculative_profiles}
+        )
+        self.assertIn(
+            "dspark", {p.method for p in MODELS["deepseek-v4-flash"].speculative_profiles}
+        )
         self.assertNotIn("mtp", {p.method for p in MODELS["g12"].speculative_profiles})
 
 

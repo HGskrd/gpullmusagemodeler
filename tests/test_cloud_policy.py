@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import cloud_policy
 import app as app_module
+import cloud_policy
 from calc import _cloud_price_per_m_in_preset
 from state import normalize_corpo_cloud
 
@@ -16,16 +16,18 @@ class CloudPolicyTests(unittest.TestCase):
         cloud_policy.configure(None)
 
     def test_allowlist_and_negotiated_prices_reach_projection_math(self):
-        policy = cloud_policy.validate_policy({
-            "allowed_models": ["gemini-flash-lite"],
-            "price_overrides": {
-                "gemini-flash-lite": {
-                    "in_per_m": 0,
-                    "cached_in_per_m": 0,
-                    "out_per_m": 0,
+        policy = cloud_policy.validate_policy(
+            {
+                "allowed_models": ["gemini-flash-lite"],
+                "price_overrides": {
+                    "gemini-flash-lite": {
+                        "in_per_m": 0,
+                        "cached_in_per_m": 0,
+                        "out_per_m": 0,
+                    },
                 },
-            },
-        })
+            }
+        )
         cloud_policy.configure(policy)
 
         cloud, price_per_m = _cloud_price_per_m_in_preset(
@@ -43,35 +45,43 @@ class CloudPolicyTests(unittest.TestCase):
         self.assertEqual(set(cloud_policy.effective_catalog()), {"gemini-flash-lite"})
 
     def test_custom_preset_is_selectable_by_state_normalizer(self):
-        policy = cloud_policy.validate_policy({
-            "allowed_models": ["gemini-flash-lite"],
-            "corpo_presets": {
-                "negotiated": {
-                    "label": "Negotiated gateway",
-                    "models": ["gemini-flash-lite"],
+        policy = cloud_policy.validate_policy(
+            {
+                "allowed_models": ["gemini-flash-lite"],
+                "corpo_presets": {
+                    "negotiated": {
+                        "label": "Negotiated gateway",
+                        "models": ["gemini-flash-lite"],
+                    },
                 },
-            },
-        })
+            }
+        )
         cloud_policy.configure(policy)
 
         self.assertEqual(normalize_corpo_cloud("negotiated"), "negotiated")
 
     def test_custom_preset_cannot_bypass_allowlist(self):
         with self.assertRaisesRegex(ValueError, "outside allowed_models"):
-            cloud_policy.validate_policy({
-                "allowed_models": ["gemini-flash-lite"],
-                "corpo_presets": {
-                    "invalid": {
-                        "label": "Invalid gateway",
-                        "models": ["claude-sonnet"],
+            cloud_policy.validate_policy(
+                {
+                    "allowed_models": ["gemini-flash-lite"],
+                    "corpo_presets": {
+                        "invalid": {
+                            "label": "Invalid gateway",
+                            "models": ["claude-sonnet"],
+                        },
                     },
-                },
-            })
+                }
+            )
 
     def test_cloud_routing_enforces_required_capabilities(self):
-        cloud_policy.configure(cloud_policy.validate_policy({
-            "allowed_models": ["gemini-flash-lite"],
-        }))
+        cloud_policy.configure(
+            cloud_policy.validate_policy(
+                {
+                    "allowed_models": ["gemini-flash-lite"],
+                }
+            )
+        )
 
         cloud, price_per_m = _cloud_price_per_m_in_preset(
             difficulty=0,
@@ -103,18 +113,22 @@ class CloudPolicyTests(unittest.TestCase):
         self.assertTrue(cloud_policy.policy_active())
 
     def test_custom_gateway_and_policy_status_render(self):
-        cloud_policy.configure(cloud_policy.validate_policy({
-            "allowed_models": ["gemini-flash-lite"],
-            "price_overrides": {
-                "gemini-flash-lite": {"out_per_m": 0.5},
-            },
-            "corpo_presets": {
-                "negotiated": {
-                    "label": "Negotiated gateway",
-                    "models": ["gemini-flash-lite"],
-                },
-            },
-        }))
+        cloud_policy.configure(
+            cloud_policy.validate_policy(
+                {
+                    "allowed_models": ["gemini-flash-lite"],
+                    "price_overrides": {
+                        "gemini-flash-lite": {"out_per_m": 0.5},
+                    },
+                    "corpo_presets": {
+                        "negotiated": {
+                            "label": "Negotiated gateway",
+                            "models": ["gemini-flash-lite"],
+                        },
+                    },
+                }
+            )
+        )
 
         response = app_module.app.test_client().get("/")
 

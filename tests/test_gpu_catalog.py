@@ -2,9 +2,9 @@ import unittest
 
 from data import (
     GPU_CARDS,
-    GPUS,
     GPU_TCO_DEFAULTS,
     GPU_TCO_PRICE_USD,
+    GPUS,
     MODELS,
     PREVIEW_ASSUMPTIONS,
 )
@@ -41,27 +41,27 @@ class GPUCatalogTests(unittest.TestCase):
         self.assertEqual(state.gpus[0].cost_per_gpu_hour, GPUS["H100"].default_tco_per_gpu_hour)
 
     def test_scenario_import_defaults_missing_tco_but_preserves_explicit_zero(self):
-        defaulted = deserialize_planner_state({
-            "projects": [],
-            "gpus": [{"uid": 1, "gpu_type": "H100", "count": 1}],
-            "models": [],
-        })
-        suppressed = deserialize_planner_state({
-            "projects": [],
-            "gpus": [{"uid": 1, "gpu_type": "H100", "count": 1, "cost_per_gpu_hour": 0.0}],
-            "models": [],
-        })
+        defaulted = deserialize_planner_state(
+            {
+                "projects": [],
+                "gpus": [{"uid": 1, "gpu_type": "H100", "count": 1}],
+                "models": [],
+            }
+        )
+        suppressed = deserialize_planner_state(
+            {
+                "projects": [],
+                "gpus": [{"uid": 1, "gpu_type": "H100", "count": 1, "cost_per_gpu_hour": 0.0}],
+                "models": [],
+            }
+        )
 
         self.assertEqual(defaulted.gpus[0].cost_per_gpu_hour, GPUS["H100"].default_tco_per_gpu_hour)
         self.assertEqual(suppressed.gpus[0].cost_per_gpu_hour, 0.0)
 
     def test_vera_rubin_preview_profile_uses_preliminary_vendor_specs(self):
         gpu = GPUS["RUBIN_NVL72"]
-        picker_keys = {
-            option.gpu_key
-            for card in GPU_CARDS
-            for option in card.planner_options
-        }
+        picker_keys = {option.gpu_key for card in GPU_CARDS for option in card.planner_options}
 
         self.assertEqual(gpu.name, "Vera Rubin NVL72 Preview 288GB/GPU")
         self.assertEqual(gpu.mem, 288e9)
@@ -148,11 +148,7 @@ class GPUCatalogTests(unittest.TestCase):
         self.assertNotIn("10 PF BF16", assumption_text)
 
     def test_new_system_and_specialist_accelerator_entries_are_exposed(self):
-        picker_keys = {
-            option.gpu_key
-            for card in GPU_CARDS
-            for option in card.planner_options
-        }
+        picker_keys = {option.gpu_key for card in GPU_CARDS for option in card.planner_options}
 
         for key in {
             "HELIOS_MI455X",
@@ -224,11 +220,7 @@ class GPUCatalogTests(unittest.TestCase):
             "A40",
             "Gaudi2",
         }
-        picker_keys = {
-            option.gpu_key
-            for card in GPU_CARDS
-            for option in card.planner_options
-        }
+        picker_keys = {option.gpu_key for card in GPU_CARDS for option in card.planner_options}
 
         for key in requested_keys:
             self.assertIn(key, GPUS)
@@ -247,11 +239,7 @@ class GPUCatalogTests(unittest.TestCase):
         self.assertEqual(GPUS["Gaudi2"].mem, 96e9)
 
     def test_blackwell_ultra_catalog_entries_and_set_constraints(self):
-        picker_keys = {
-            option.gpu_key
-            for card in GPU_CARDS
-            for option in card.planner_options
-        }
+        picker_keys = {option.gpu_key for card in GPU_CARDS for option in card.planner_options}
 
         for key in {"GB300", "DGX_STATION_GB300", "B300", "B200", "GB200"}:
             self.assertIn(key, GPUS)
@@ -316,9 +304,7 @@ class GPUCatalogTests(unittest.TestCase):
         state = PlannerState()
         add_gpu(state, "H100", 64)
         embedding_keys = [
-            key
-            for key, model in MODELS.items()
-            if model.is_embedding_model and not model.hidden
+            key for key, model in MODELS.items() if model.is_embedding_model and not model.hidden
         ]
 
         added = add_models(state, embedding_keys)

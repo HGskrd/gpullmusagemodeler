@@ -66,9 +66,7 @@ class RouteValidationTests(unittest.TestCase):
     def test_unexpected_failure_is_an_opaque_500(self):
         secret = "psycopg://user:hunter2@db.internal/planner"
 
-        with patch.object(
-            app_module, "change_gpu_qty", side_effect=RuntimeError(secret)
-        ):
+        with patch.object(app_module, "change_gpu_qty", side_effect=RuntimeError(secret)):
             response = self.client.post(
                 "/gpu/qty",
                 headers=self.headers,

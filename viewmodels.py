@@ -5,15 +5,6 @@ from __future__ import annotations
 import math
 from typing import Optional
 
-from data import (
-    EMBEDDING_DOC_BUCKETS,
-    INPUT_BUCKETS,
-    MODELS,
-    OUTPUT_BUCKETS,
-    PRECISIONS,
-    GPU,
-    Model,
-)
 from calc import (
     EfficiencyParams,
     avg_dist,
@@ -32,6 +23,15 @@ from calc import (
     spec_optimization_for,
     strategy_label,
     valid_strategies,
+)
+from data import (
+    EMBEDDING_DOC_BUCKETS,
+    GPU,
+    INPUT_BUCKETS,
+    MODELS,
+    OUTPUT_BUCKETS,
+    PRECISIONS,
+    Model,
 )
 from placement import (
     _assignment_memories,
@@ -57,7 +57,15 @@ def _comm_summary(tp: int, pp: int) -> str:
     return "Comm model: " + " + ".join(terms) if terms else ""
 
 
-def _comm_alerts(model: Model, tp: int, pp: int, dp: int, gpu: Optional[GPU], avg_seq: float, eff: EfficiencyParams) -> list[str]:
+def _comm_alerts(
+    model: Model,
+    tp: int,
+    pp: int,
+    dp: int,
+    gpu: Optional[GPU],
+    avg_seq: float,
+    eff: EfficiencyParams,
+) -> list[str]:
     if gpu is None:
         return []
 
@@ -74,7 +82,9 @@ def _comm_alerts(model: Model, tp: int, pp: int, dp: int, gpu: Optional[GPU], av
             f"{scope}MoE expert dispatch/combine traffic is excluded, so throughput may be optimistic."
         )
     if comm.dcp_advisory:
-        alerts.append("Long-context KV sharding can shift real capacity versus this simplified estimate.")
+        alerts.append(
+            "Long-context KV sharding can shift real capacity versus this simplified estimate."
+        )
     return alerts
 
 
@@ -82,9 +92,13 @@ def _precision_alerts(prec: str, gpu: Optional[GPU]) -> list[str]:
     if gpu is None:
         return []
     if prec == "nvfp4" and not gpu_supports_nvfp4(gpu):
-        return [f"NVFP4 is not native on {gpu.name}; compute is discounted for dequant/packing fallback."]
+        return [
+            f"NVFP4 is not native on {gpu.name}; compute is discounted for dequant/packing fallback."
+        ]
     if prec == "mxfp4" and not gpu_supports_mxfp4(gpu):
-        return [f"MXFP4 is not native on {gpu.name}; compute is discounted for dequant/packing fallback."]
+        return [
+            f"MXFP4 is not native on {gpu.name}; compute is discounted for dequant/packing fallback."
+        ]
     return []
 
 
@@ -93,11 +107,15 @@ def _quantization_profile_alerts(model: Model, prec: str) -> list[str]:
     if profile is None:
         return []
     if profile.source_kind == "family":
-        return [f"{profile.label} uses a family proxy from {profile.source_repo}; exact artifact tensor headers are not pinned yet."]
+        return [
+            f"{profile.label} uses a family proxy from {profile.source_repo}; exact artifact tensor headers are not pinned yet."
+        ]
     return []
 
 
-def _build_model_info(state: PlannerState, am: ModelAssignment, gpu_pool: Optional[GpuPool], prefill_mem, decode_mem) -> dict:
+def _build_model_info(
+    state: PlannerState, am: ModelAssignment, gpu_pool: Optional[GpuPool], prefill_mem, decode_mem
+) -> dict:
     model = MODELS[am.model_key]
     gpu = gpu_pool.gpu if gpu_pool else None
     quant_profiles_by_precision = {
@@ -115,9 +133,13 @@ def _build_model_info(state: PlannerState, am: ModelAssignment, gpu_pool: Option
     selected_pool_min_gpu_count = None
     alt_min_gpu_count = None
     alt_pool_min_gpu_count = None
-    spec_runtime = resolve_spec_runtime(model, am.spec_method, am.spec_k, state.spec_acceptance, am.prec)
+    spec_runtime = resolve_spec_runtime(
+        model, am.spec_method, am.spec_k, state.spec_acceptance, am.prec
+    )
     if gpu and am.gpu_count > 0:
-        strats = valid_strategies(model, am.gpu_count, gpu, state.mu, state.profiled_non_kv_gb, am.prec, spec_runtime)
+        strats = valid_strategies(
+            model, am.gpu_count, gpu, state.mu, state.profiled_non_kv_gb, am.prec, spec_runtime
+        )
         recommended_label = strategy_label(*_preferred_strategy(state, am, gpu, "decode"))
 
     avg_in = avg_dist(state.in_dist, INPUT_BUCKETS)
@@ -129,7 +151,9 @@ def _build_model_info(state: PlannerState, am: ModelAssignment, gpu_pool: Option
     if realtime_profile is not None:
         avg_seq = float(realtime_profile.state_tokens)
     if embedding_profile is not None:
-        embedding_stats = embedding_doc_stats(model, state.embedding_doc_dist, EMBEDDING_DOC_BUCKETS, am.prec)
+        embedding_stats = embedding_doc_stats(
+            model, state.embedding_doc_dist, EMBEDDING_DOC_BUCKETS, am.prec
+        )
         avg_seq = float(embedding_stats.mean_seq_len)
 
     decode_max_slots = 0
@@ -170,9 +194,16 @@ def _build_model_info(state: PlannerState, am: ModelAssignment, gpu_pool: Option
                 spec_runtime,
             )
         note = str(getattr(spec_runtime.profile, "note", "") or "").lower()
-        prior_is_unmeasured = any(marker in note for marker in (
-            "unmeasured", "not a measured", "no acceptance benchmark", "assumption", "family proxy",
-        ))
+        prior_is_unmeasured = any(
+            marker in note
+            for marker in (
+                "unmeasured",
+                "not a measured",
+                "no acceptance benchmark",
+                "assumption",
+                "family proxy",
+            )
+        )
         if state.spec_acceptance > 0:
             alpha_source = "user override"
             unmeasured_prior = True
@@ -197,36 +228,59 @@ def _build_model_info(state: PlannerState, am: ModelAssignment, gpu_pool: Option
             "tau": spec_runtime.tau,
             "draft_gb": spec_runtime.draft_weight_bytes / 1e9,
             "probe_bs": probe_bs,
-            "speedup": optimization.speedup if optimization is not None else (probe.spec_speedup if probe else 0.0),
-            "beneficial": optimization.beneficial if optimization is not None else bool(probe and probe.spec_speedup >= 1.0),
+            "speedup": optimization.speedup
+            if optimization is not None
+            else (probe.spec_speedup if probe else 0.0),
+            "beneficial": optimization.beneficial
+            if optimization is not None
+            else bool(probe and probe.spec_speedup >= 1.0),
             "active": optimization.beneficial if optimization is not None else True,
             "reason": optimization.reason if optimization is not None else "manual k",
         }
 
-    prefill_probe_len = max(1, effective_prefill_length(max(state.task_il, avg_in), state.prefix_hit_rate))
+    prefill_probe_len = max(
+        1, effective_prefill_length(max(state.task_il, avg_in), state.prefix_hit_rate)
+    )
     prefill_max_batch = 0
     if prefill_mem and prefill_probe_len > 0:
-        prefill_kv = per_replica_kv_cache_bytes(model, prefill_probe_len, am.prec, am.prefill_pp, am.prefill_tp)
-        prefill_max_batch = (int(prefill_mem.kv_budget / prefill_kv) if prefill_kv > 0 else 0) * am.prefill_dp
+        prefill_kv = per_replica_kv_cache_bytes(
+            model, prefill_probe_len, am.prec, am.prefill_pp, am.prefill_tp
+        )
+        prefill_max_batch = (
+            int(prefill_mem.kv_budget / prefill_kv) if prefill_kv > 0 else 0
+        ) * am.prefill_dp
 
-    others_used = sum(x.gpu_count for x in state.models if x.uid != am.uid and x.gpu_uid == am.gpu_uid)
+    others_used = sum(
+        x.gpu_count for x in state.models if x.uid != am.uid and x.gpu_uid == am.gpu_uid
+    )
     max_avail = gpu_pool.count - others_used if gpu_pool else 0
     if gpu:
         needs_now = {
-            prec: _min_gpu_count_for_pool(model, gpu, state.mu, state.profiled_non_kv_gb, prec, max_avail)
+            prec: _min_gpu_count_for_pool(
+                model, gpu, state.mu, state.profiled_non_kv_gb, prec, max_avail
+            )
             for prec in PRECISIONS
         }
         needs_pool = {
-            prec: _min_gpu_count_for_pool(model, gpu, state.mu, state.profiled_non_kv_gb, prec, gpu_pool.count)
+            prec: _min_gpu_count_for_pool(
+                model, gpu, state.mu, state.profiled_non_kv_gb, prec, gpu_pool.count
+            )
             for prec in PRECISIONS
         }
         selected_need = needs_now[am.prec]
         selected_pool_need = needs_pool[am.prec]
         fit_now = [
-            prec for prec in PRECISIONS
-            if prec != am.prec and am.gpu_count > 0
+            prec
+            for prec in PRECISIONS
+            if prec != am.prec
+            and am.gpu_count > 0
             and valid_strategies(
-                model, am.gpu_count, gpu, state.mu, state.profiled_non_kv_gb, prec,
+                model,
+                am.gpu_count,
+                gpu,
+                state.mu,
+                state.profiled_non_kv_gb,
+                prec,
                 resolve_spec_runtime(model, am.spec_method, am.spec_k, state.spec_acceptance, prec),
             )
         ]
@@ -236,7 +290,9 @@ def _build_model_info(state: PlannerState, am: ModelAssignment, gpu_pool: Option
             alt_need = needs_now[alt_prec]
             alt_pool_need = needs_pool[alt_prec]
         else:
-            alt_prec, alt_pool_need = _best_precision_need({prec: need for prec, need in needs_pool.items() if prec != am.prec})
+            alt_prec, alt_pool_need = _best_precision_need(
+                {prec: need for prec, need in needs_pool.items() if prec != am.prec}
+            )
             alt_need = needs_now.get(alt_prec, math.inf) if alt_prec else math.inf
         if not math.isinf(selected_need):
             selected_min_gpu_count = int(selected_need)
@@ -281,7 +337,9 @@ def _build_model_info(state: PlannerState, am: ModelAssignment, gpu_pool: Option
     embedding = None
     if embedding_profile is not None and gpu and am.gpu_count > 0 and prefill_mem is not None:
         if embedding_stats is None:
-            embedding_stats = embedding_doc_stats(model, state.embedding_doc_dist, EMBEDDING_DOC_BUCKETS, am.prec)
+            embedding_stats = embedding_doc_stats(
+                model, state.embedding_doc_dist, EMBEDDING_DOC_BUCKETS, am.prec
+            )
         best_embedding = None
         for bs in _probe_batch_sizes(max(am.prefill_dp, 1)):
             sample = compute_embedding_distribution(
@@ -310,13 +368,15 @@ def _build_model_info(state: PlannerState, am: ModelAssignment, gpu_pool: Option
             if share <= 0:
                 continue
             clipped = embedding_sequence_length(model, bucket.length)
-            doc_distribution.append({
-                "label": bucket.label,
-                "length": bucket.length,
-                "clipped_length": clipped,
-                "share": share,
-                "color": bucket.color,
-            })
+            doc_distribution.append(
+                {
+                    "label": bucket.label,
+                    "length": bucket.length,
+                    "clipped_length": clipped,
+                    "share": share,
+                    "color": bucket.color,
+                }
+            )
         embedding = {
             "profile": embedding_profile,
             "seq_len": round(embedding_stats.mean_seq_len),
@@ -372,12 +432,23 @@ def _build_model_info(state: PlannerState, am: ModelAssignment, gpu_pool: Option
         "alt_min_gpu_count": alt_min_gpu_count,
         "alt_pool_min_gpu_count": alt_pool_min_gpu_count,
         "comm_summary": _comm_summary(am.tp, am.pp),
-        "precision_alerts": _precision_alerts(am.prec, gpu) + _quantization_profile_alerts(model, am.prec),
+        "precision_alerts": _precision_alerts(am.prec, gpu)
+        + _quantization_profile_alerts(model, am.prec),
         "alerts": _comm_alerts(model, am.tp, am.pp, am.dp, gpu, avg_seq, state.decode_efficiency),
         "prefill_comm_summary": _comm_summary(am.prefill_tp, am.prefill_pp),
         "decode_comm_summary": _comm_summary(am.tp, am.pp),
-        "prefill_alerts": _comm_alerts(model, am.prefill_tp, am.prefill_pp, am.prefill_dp, gpu, prefill_probe_len, state.prefill_efficiency),
-        "decode_alerts": _comm_alerts(model, am.tp, am.pp, am.dp, gpu, avg_seq, state.decode_efficiency),
+        "prefill_alerts": _comm_alerts(
+            model,
+            am.prefill_tp,
+            am.prefill_pp,
+            am.prefill_dp,
+            gpu,
+            prefill_probe_len,
+            state.prefill_efficiency,
+        ),
+        "decode_alerts": _comm_alerts(
+            model, am.tp, am.pp, am.dp, gpu, avg_seq, state.decode_efficiency
+        ),
         "decode_exceeds_node": bool(gpu and am.tp > gpu.node_size),
         "prefill_exceeds_node": bool(gpu and am.prefill_tp > gpu.node_size),
     }

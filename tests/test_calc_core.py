@@ -15,9 +15,9 @@ from calc import (
     _deployment_capacity_for_profile,
     _pp_peak_fraction,
     _prefill_attention_work,
-    communication_breakdown,
     attention_residual_scratch_bytes,
     chart_user_pareto,
+    communication_breakdown,
     compute_data,
     compute_data_capacity,
     compute_decode,
@@ -29,16 +29,25 @@ from calc import (
     kv_cache_bytes_for_sequence,
     model_gpu_flops,
     optimize_spec_k,
-    per_tp_linear_attention_state_bytes,
     per_replica_kv_cache_bytes,
     per_replica_recurrent_state_bytes,
     per_replica_token_kv_cache_bytes,
+    per_tp_linear_attention_state_bytes,
     resolve_spec_runtime,
     spec_acceptance_len,
     spec_finite_output_tau,
     valid_strategies,
 )
-from data import DIST_PRESETS, GPUS, MODELS, EmbeddingProfile, GPU, Model, SpeculativeProfile, success_rate
+from data import (
+    DIST_PRESETS,
+    GPU,
+    GPUS,
+    MODELS,
+    EmbeddingProfile,
+    Model,
+    SpeculativeProfile,
+    success_rate,
+)
 from placement import get_deployed, retune_models
 from state import GpuPool, ModelAssignment, PlannerState, Project
 
@@ -63,7 +72,18 @@ class CoreCapacityMathTests(unittest.TestCase):
 
     def test_linear_attention_state_uses_schema_head_shards(self):
         model = Model(
-            "linear", "Linear", "Test", "#000", 1, 1, False, 2, 4, 1, 8, False,
+            "linear",
+            "Linear",
+            "Test",
+            "#000",
+            1,
+            1,
+            False,
+            2,
+            4,
+            1,
+            8,
+            False,
             attention_layers=0,
             linear_attention_layers=2,
             linear_attention_heads=4,
@@ -80,7 +100,18 @@ class CoreCapacityMathTests(unittest.TestCase):
 
     def test_recurrent_state_is_split_from_token_growing_kv(self):
         model = Model(
-            "hybrid", "Hybrid", "Test", "#000", 1, 1, False, 2, 4, 1, 8, False,
+            "hybrid",
+            "Hybrid",
+            "Test",
+            "#000",
+            1,
+            1,
+            False,
+            2,
+            4,
+            1,
+            8,
+            False,
             attention_layers=1,
             linear_attention_layers=1,
             linear_attention_heads=4,
@@ -98,14 +129,38 @@ class CoreCapacityMathTests(unittest.TestCase):
 
     def test_spec_verification_does_not_multiply_fixed_recurrent_state_by_k(self):
         model = Model(
-            "recurrent", "Recurrent", "Test", "#000", 1, 1, False, 1, 1, 1, 4, False,
-            attention_layers=0, linear_attention_layers=1,
-            linear_attention_heads=1, linear_attention_head_dim=4,
+            "recurrent",
+            "Recurrent",
+            "Test",
+            "#000",
+            1,
+            1,
+            False,
+            1,
+            1,
+            1,
+            4,
+            False,
+            attention_layers=0,
+            linear_attention_layers=1,
+            linear_attention_heads=1,
+            linear_attention_head_dim=4,
         )
         gpu = GPU("fast", "Fast", "nv", 1e12, 1e12, 1e30, 1e30, 1e12, 8)
-        eff = EfficiencyParams(bw_eff=1.0, comp_eff=1.0, overhead=0.0, paged_oh=0.0, moe_imbalance=1.0)
+        eff = EfficiencyParams(
+            bw_eff=1.0, comp_eff=1.0, overhead=0.0, paged_oh=0.0, moe_imbalance=1.0
+        )
         profile = SpeculativeProfile(
-            "parallel", "dflash", 0.0, 0, True, 4, 0.8, 0.0, "https://example.com", "test",
+            "parallel",
+            "dflash",
+            0.0,
+            0,
+            True,
+            4,
+            0.8,
+            0.0,
+            "https://example.com",
+            "test",
         )
         spec = SpecRuntime(profile, 4, 0.8, 1.0, 1, 0.0, 0.0)
         recurrent = per_replica_recurrent_state_bytes(model, "bf16", 1, 1)
@@ -124,8 +179,20 @@ class CoreCapacityMathTests(unittest.TestCase):
 
     def test_attention_residual_scratch_is_tp_and_pp_sharded(self):
         model = Model(
-            "attnres", "AttnRes", "Test", "#000", 1, 1, False, 4, 4, 4, 8, False,
-            hidden_dim=8, attention_residual_block_size=2,
+            "attnres",
+            "AttnRes",
+            "Test",
+            "#000",
+            1,
+            1,
+            False,
+            4,
+            4,
+            4,
+            8,
+            False,
+            hidden_dim=8,
+            attention_residual_block_size=2,
         )
         # Four layers in two blocks retain three residual sources. PP2 owns half
         # the layer sources and TP2 sequence-shards the token activations.
@@ -134,7 +201,18 @@ class CoreCapacityMathTests(unittest.TestCase):
 
     def test_attention_residual_scratch_reduces_prefill_batch_fit(self):
         base = Model(
-            "plain", "Plain", "Test", "#000", 1, 1, False, 4, 4, 4, 8, False,
+            "plain",
+            "Plain",
+            "Test",
+            "#000",
+            1,
+            1,
+            False,
+            4,
+            4,
+            4,
+            8,
+            False,
             hidden_dim=8192,
         )
         attnres = replace(base, key="attnres-fit", attention_residual_block_size=1)
@@ -149,7 +227,18 @@ class CoreCapacityMathTests(unittest.TestCase):
 
     def test_sparse_attention_bounds_selected_tokens_and_models_indexer_work(self):
         model = Model(
-            "sparse", "Sparse", "Test", "#000", 1, 1, False, 4, 8, 8, 16, False,
+            "sparse",
+            "Sparse",
+            "Test",
+            "#000",
+            1,
+            1,
+            False,
+            4,
+            8,
+            8,
+            16,
+            False,
             sparse_attention_top_k=32,
             sparse_indexer_heads=2,
             sparse_indexer_head_dim=4,
@@ -180,7 +269,18 @@ class CoreCapacityMathTests(unittest.TestCase):
 
     def test_local_and_global_kv_heads_are_sharded_independently(self):
         model = Model(
-            "split-kv", "Split KV", "Test", "#000", 1, 1, False, 2, 8, 8, 128, False,
+            "split-kv",
+            "Split KV",
+            "Test",
+            "#000",
+            1,
+            1,
+            False,
+            2,
+            8,
+            8,
+            128,
+            False,
             local_attention_layers=1,
             local_attention_window=10,
             local_kv_heads=2,
@@ -217,7 +317,10 @@ class CoreCapacityMathTests(unittest.TestCase):
         per_collective = msg * 2 * (tp - 1) / (tp * collective_bw)
         expected = model.layers * 2 * (per_collective + 3e-6) * (1 - self.eff.ar_overlap)
 
-        self.assertAlmostEqual(_dense_tp_oh(tp, 1, batch_tokens, model, gpu, self.eff.bw_eff, self.eff.ar_overlap), expected)
+        self.assertAlmostEqual(
+            _dense_tp_oh(tp, 1, batch_tokens, model, gpu, self.eff.bw_eff, self.eff.ar_overlap),
+            expected,
+        )
 
     def test_moe_communication_discloses_unmodeled_expert_parallelism(self):
         model = Model("moe", "MoE", "Test", "#000", 8, 2, True, 2, 2, 2, 8, False)
@@ -235,8 +338,12 @@ class CoreCapacityMathTests(unittest.TestCase):
     def test_decode_does_not_activate_idle_dp_replicas(self):
         model = MODELS["q08"]
         gpu = GPUS["H100"]
-        dp1 = compute_decode(model, 1, 1, 1, 1, gpu, 0.90, 2.0, "bf16", self.chat_in, self.chat_out, self.eff)
-        dp8 = compute_decode(model, 1, 1, 1, 8, gpu, 0.90, 2.0, "bf16", self.chat_in, self.chat_out, self.eff)
+        dp1 = compute_decode(
+            model, 1, 1, 1, 1, gpu, 0.90, 2.0, "bf16", self.chat_in, self.chat_out, self.eff
+        )
+        dp8 = compute_decode(
+            model, 1, 1, 1, 8, gpu, 0.90, 2.0, "bf16", self.chat_in, self.chat_out, self.eff
+        )
 
         self.assertIsNotNone(dp1)
         self.assertIsNotNone(dp8)
@@ -247,9 +354,15 @@ class CoreCapacityMathTests(unittest.TestCase):
     def test_decode_sums_uneven_replica_loads(self):
         model = MODELS["q08"]
         gpu = GPUS["H100"]
-        one = compute_decode(model, 1, 1, 1, 1, gpu, 0.90, 2.0, "bf16", self.chat_in, self.chat_out, self.eff)
-        two = compute_decode(model, 1, 1, 2, 1, gpu, 0.90, 2.0, "bf16", self.chat_in, self.chat_out, self.eff)
-        nine_on_eight = compute_decode(model, 1, 1, 9, 8, gpu, 0.90, 2.0, "bf16", self.chat_in, self.chat_out, self.eff)
+        one = compute_decode(
+            model, 1, 1, 1, 1, gpu, 0.90, 2.0, "bf16", self.chat_in, self.chat_out, self.eff
+        )
+        two = compute_decode(
+            model, 1, 1, 2, 1, gpu, 0.90, 2.0, "bf16", self.chat_in, self.chat_out, self.eff
+        )
+        nine_on_eight = compute_decode(
+            model, 1, 1, 9, 8, gpu, 0.90, 2.0, "bf16", self.chat_in, self.chat_out, self.eff
+        )
 
         self.assertIsNotNone(one)
         self.assertIsNotNone(two)
@@ -259,8 +372,18 @@ class CoreCapacityMathTests(unittest.TestCase):
 
     def test_decode_latency_is_full_inter_token_step(self):
         result = compute_decode(
-            MODELS["q08"], 1, 1, 64, 1, GPUS["H100"], 0.90, 2.0, "bf16",
-            self.chat_in, self.chat_out, self.eff,
+            MODELS["q08"],
+            1,
+            1,
+            64,
+            1,
+            GPUS["H100"],
+            0.90,
+            2.0,
+            "bf16",
+            self.chat_in,
+            self.chat_out,
+            self.eff,
         )
 
         self.assertIsNotNone(result)
@@ -274,16 +397,25 @@ class CoreCapacityMathTests(unittest.TestCase):
 
         for users in (1, 2, 4, 8, 16, 32, 64):
             result = compute_decode(
-                model, 4, 18, users, 1, gpu, 0.90, 2.0, "bf16",
-                self.chat_in, self.chat_out, self.eff,
+                model,
+                4,
+                18,
+                users,
+                1,
+                gpu,
+                0.90,
+                2.0,
+                "bf16",
+                self.chat_in,
+                self.chat_out,
+                self.eff,
             )
             self.assertIsNotNone(result)
             per_user_tps.append(result.tps / users)
 
-        self.assertTrue(all(
-            later <= earlier
-            for earlier, later in zip(per_user_tps, per_user_tps[1:])
-        ))
+        self.assertTrue(
+            all(later <= earlier for earlier, later in zip(per_user_tps, per_user_tps[1:]))
+        )
 
     def test_pipeline_fill_drain_prevents_batch_one_speedup(self):
         model = MODELS["q08"]
@@ -314,14 +446,35 @@ class CoreCapacityMathTests(unittest.TestCase):
     def test_end_to_end_context_rejects_prompt_plus_output(self):
         legacy = MODELS["mi7"]
         result = compute_data(
-            legacy, (1, 1, 1), (1, 1, 1), 1, 32_000, 1_000, GPUS["H100"],
-            0.90, 2.0, "bf16", 0.0, self.eff, self.eff,
+            legacy,
+            (1, 1, 1),
+            (1, 1, 1),
+            1,
+            32_000,
+            1_000,
+            GPUS["H100"],
+            0.90,
+            2.0,
+            "bf16",
+            0.0,
+            self.eff,
+            self.eff,
         )
         self.assertIsNone(result)
 
     def test_full_prefix_hit_is_finite(self):
         result = compute_prefill(
-            MODELS["q08"], 1, 1, 8, 1, 0, GPUS["H100"], 0.90, 2.0, "bf16", self.eff,
+            MODELS["q08"],
+            1,
+            1,
+            8,
+            1,
+            0,
+            GPUS["H100"],
+            0.90,
+            2.0,
+            "bf16",
+            self.eff,
         )
 
         self.assertIsNotNone(result)
@@ -329,8 +482,19 @@ class CoreCapacityMathTests(unittest.TestCase):
         self.assertEqual(result.service_time, 0.0)
 
         end_to_end = compute_data(
-            MODELS["q08"], (1, 1, 1), (1, 1, 1), 8, 2048, 32, GPUS["H100"],
-            0.90, 2.0, "bf16", 1.0, self.eff, self.eff,
+            MODELS["q08"],
+            (1, 1, 1),
+            (1, 1, 1),
+            8,
+            2048,
+            32,
+            GPUS["H100"],
+            0.90,
+            2.0,
+            "bf16",
+            1.0,
+            self.eff,
+            self.eff,
         )
         self.assertIsNotNone(end_to_end)
         self.assertTrue(math.isfinite(end_to_end.rps))
@@ -341,27 +505,53 @@ class CoreCapacityMathTests(unittest.TestCase):
         self.assertIsNone(compute_data(*args, 0.0, self.eff, self.eff))
         self.assertEqual(
             compute_data_capacity(
-                MODELS["q08"], (1, 1, 2), (2, 1, 1), 2048, 32, GPUS["H100"],
-                0.90, 2.0, "bf16", 0.0, self.eff, self.eff,
+                MODELS["q08"],
+                (1, 1, 2),
+                (2, 1, 1),
+                2048,
+                32,
+                GPUS["H100"],
+                0.90,
+                2.0,
+                "bf16",
+                0.0,
+                self.eff,
+                self.eff,
             ),
             0,
         )
 
     def test_retune_co_locates_prefill_and_decode_layouts(self):
-        assignment = ModelAssignment(2, "q08", 1, 2, 2, 1, "bf16", prefill_tp=1, prefill_pp=1, prefill_dp=2)
+        assignment = ModelAssignment(
+            2, "q08", 1, 2, 2, 1, "bf16", prefill_tp=1, prefill_pp=1, prefill_dp=2
+        )
         state = PlannerState(gpus=[GpuPool(1, "H100", 2)], models=[assignment])
 
         self.assertEqual(get_deployed(state, "prefill"), [])
         self.assertEqual(get_deployed(state, "decode"), [])
         retune_models(state, preserve_existing=True)
 
-        self.assertEqual((assignment.prefill_tp, assignment.prefill_pp, assignment.prefill_dp), (assignment.tp, assignment.pp, assignment.dp))
+        self.assertEqual(
+            (assignment.prefill_tp, assignment.prefill_pp, assignment.prefill_dp),
+            (assignment.tp, assignment.pp, assignment.dp),
+        )
         self.assertEqual(len(get_deployed(state, "prefill")), 1)
         self.assertEqual(len(get_deployed(state, "decode")), 1)
 
     def test_embedding_pp_uses_busiest_stage_fraction(self):
         model = Model(
-            "embed", "Embed", "Test", "#000", 3e6, 3e6, False, 3, 3, 3, 8, False,
+            "embed",
+            "Embed",
+            "Test",
+            "#000",
+            3e6,
+            3e6,
+            False,
+            3,
+            3,
+            3,
+            8,
+            False,
             embedding_profile=EmbeddingProfile("Embed", "single", 8, 128, "test", "test"),
         )
         gpu = GPUS["H100"]
@@ -374,7 +564,9 @@ class CoreCapacityMathTests(unittest.TestCase):
         ffn = 2 * model.active_params * seq * pp_fraction
         att = _prefill_attention_work(model, 1, seq, 2)
         compute_time = (ffn + att) / (model_gpu_flops(gpu, model, "bf16") * eff.comp_eff)
-        memory_time = (_active_weight_bytes(model, "bf16") * pp_fraction) / (gpu.effective_bw * eff.bw_eff)
+        memory_time = (_active_weight_bytes(model, "bf16") * pp_fraction) / (
+            gpu.effective_bw * eff.bw_eff
+        )
         output_time = result.output_bytes_per_input / (gpu.effective_bw * eff.bw_eff)
         comm = communication_breakdown(model, 1, 2, seq, seq, gpu, eff)
         expected = (max(compute_time, memory_time) + output_time + comm.total) * (
@@ -389,15 +581,22 @@ class ProjectionMathTests(unittest.TestCase):
         info, effective_pm = _cloud_price_per_m_in_preset(0.10, 0.80, 0.0, profile, 0.0, "current")
 
         self.assertIsNotNone(info)
-        raw_pm = (1000 * info["in_per_m"] + (200 / info["token_efficiency"]) * info["out_per_m"]) / 1200
+        raw_pm = (
+            1000 * info["in_per_m"] + (200 / info["token_efficiency"]) * info["out_per_m"]
+        ) / 1200
         expected_success = success_rate(info["quality"], 0.10)
         self.assertAlmostEqual(info["success_rate"], expected_success)
         self.assertAlmostEqual(effective_pm, raw_pm / expected_success)
 
     def test_cloud_long_context_tier_uses_input_threshold_and_absolute_prices(self):
         cloud = {
-            "vendor": "Test", "quality": 1.0, "token_efficiency": 1.0,
-            "capabilities": (), "in_per_m": 1.0, "cached_in_per_m": 0.5, "out_per_m": 2.0,
+            "vendor": "Test",
+            "quality": 1.0,
+            "token_efficiency": 1.0,
+            "capabilities": (),
+            "in_per_m": 1.0,
+            "cached_in_per_m": 0.5,
+            "out_per_m": 2.0,
             "long_context_threshold_tokens": 1000,
             "long_context_in_per_m": 3.0,
             "long_context_cached_in_per_m": 1.5,
@@ -407,8 +606,12 @@ class ProjectionMathTests(unittest.TestCase):
         above_threshold = {"in_len": 1001, "out_len": 9999, "tokens_per_request": 11000}
 
         with patch("calc.cloud_policy.effective_corpo_models", return_value=[("tiered", cloud)]):
-            normal, normal_pm = _cloud_price_per_m_in_preset(0.0, 0.0, 0.0, at_threshold, 0.5, "test")
-            tiered, tiered_pm = _cloud_price_per_m_in_preset(0.0, 0.0, 0.0, above_threshold, 0.5, "test")
+            normal, normal_pm = _cloud_price_per_m_in_preset(
+                0.0, 0.0, 0.0, at_threshold, 0.5, "test"
+            )
+            tiered, tiered_pm = _cloud_price_per_m_in_preset(
+                0.0, 0.0, 0.0, above_threshold, 0.5, "test"
+            )
 
         self.assertFalse(normal["long_context_pricing_applied"])
         self.assertTrue(tiered["long_context_pricing_applied"])
@@ -461,15 +664,26 @@ class SpeculativeDecodingMathTests(unittest.TestCase):
 
     def decode(self, model, tp, pp, bs, dp, gpu, prec, spec=None):
         return compute_decode(
-            model, tp, pp, bs, dp, gpu, 0.90, 2.0, prec,
-            self.chat_in, self.chat_out, self.eff, spec,
+            model,
+            tp,
+            pp,
+            bs,
+            dp,
+            gpu,
+            0.90,
+            2.0,
+            prec,
+            self.chat_in,
+            self.chat_out,
+            self.eff,
+            spec,
         )
 
     def test_acceptance_len_chain_formula(self):
         # DeepSeek-V3: 87.5% single-token acceptance -> 1.875 tokens per cycle.
         self.assertAlmostEqual(spec_acceptance_len(0.875, 1), 1.875)
         self.assertAlmostEqual(spec_acceptance_len(0.0, 5), 1.0)
-        self.assertAlmostEqual(spec_acceptance_len(0.5, 3), (1 - 0.5 ** 4) / 0.5)
+        self.assertAlmostEqual(spec_acceptance_len(0.5, 3), (1 - 0.5**4) / 0.5)
         self.assertGreater(spec_acceptance_len(0.8, 3), spec_acceptance_len(0.6, 3))
         self.assertGreater(spec_acceptance_len(0.6, 5), spec_acceptance_len(0.6, 3))
         self.assertEqual(spec_acceptance_len(1.0, 3), 4.0)
@@ -478,16 +692,49 @@ class SpeculativeDecodingMathTests(unittest.TestCase):
         model = MODELS["l8"]
         eagle = resolve_spec_runtime(model, "eagle3", 0, 0.0, "bf16")
         one = _compute_decode_core(
-            model, 1, 1, 1, 1, GPUS["H100"], 0.90, 2.0, "bf16",
-            512, 1, self.eff, spec=eagle,
+            model,
+            1,
+            1,
+            1,
+            1,
+            GPUS["H100"],
+            0.90,
+            2.0,
+            "bf16",
+            512,
+            1,
+            self.eff,
+            spec=eagle,
         )
         short = _compute_decode_core(
-            model, 1, 1, 1, 1, GPUS["H100"], 0.90, 2.0, "bf16",
-            512, 4, self.eff, spec=eagle,
+            model,
+            1,
+            1,
+            1,
+            1,
+            GPUS["H100"],
+            0.90,
+            2.0,
+            "bf16",
+            512,
+            4,
+            self.eff,
+            spec=eagle,
         )
         long = _compute_decode_core(
-            model, 1, 1, 1, 1, GPUS["H100"], 0.90, 2.0, "bf16",
-            512, 256, self.eff, spec=eagle,
+            model,
+            1,
+            1,
+            1,
+            1,
+            GPUS["H100"],
+            0.90,
+            2.0,
+            "bf16",
+            512,
+            256,
+            self.eff,
+            spec=eagle,
         )
         self.assertEqual(spec_finite_output_tau(0.8, 3, 1), 1.0)
         self.assertEqual(one.spec_speedup, 1.0)
@@ -497,12 +744,34 @@ class SpeculativeDecodingMathTests(unittest.TestCase):
         l8 = MODELS["l8"]
         eagle = resolve_spec_runtime(l8, "eagle3", 0, 0.0, "bf16")
         short = _compute_decode_core(
-            l8, 1, 1, 1, 1, GPUS["H100"], 0.90, 2.0, "bf16",
-            128, 256, self.eff, spec=eagle,
+            l8,
+            1,
+            1,
+            1,
+            1,
+            GPUS["H100"],
+            0.90,
+            2.0,
+            "bf16",
+            128,
+            256,
+            self.eff,
+            spec=eagle,
         )
         long = _compute_decode_core(
-            l8, 1, 1, 1, 1, GPUS["H100"], 0.90, 2.0, "bf16",
-            65536, 256, self.eff, spec=eagle,
+            l8,
+            1,
+            1,
+            1,
+            1,
+            GPUS["H100"],
+            0.90,
+            2.0,
+            "bf16",
+            65536,
+            256,
+            self.eff,
+            spec=eagle,
         )
         self.assertLess(long.spec_speedup, short.spec_speedup)
 
@@ -531,7 +800,9 @@ class SpeculativeDecodingMathTests(unittest.TestCase):
     def test_spec_off_matches_baseline_exactly(self):
         l8 = MODELS["l8"]
         base = self.decode(l8, 1, 1, 4, 1, GPUS["H100"], "bf16")
-        off = self.decode(l8, 1, 1, 4, 1, GPUS["H100"], "bf16", resolve_spec_runtime(l8, "off", 0, 0.0, "bf16"))
+        off = self.decode(
+            l8, 1, 1, 4, 1, GPUS["H100"], "bf16", resolve_spec_runtime(l8, "off", 0, 0.0, "bf16")
+        )
         self.assertEqual((base.tps, base.lat, base.max_slots), (off.tps, off.lat, off.max_slots))
         self.assertEqual(off.spec_tau, 0.0)
         self.assertEqual(off.spec_speedup, 1.0)
@@ -605,12 +876,35 @@ class SpeculativeDecodingMathTests(unittest.TestCase):
         l8 = MODELS["l8"]
         eagle = resolve_spec_runtime(l8, "eagle3", 0, 0.0, "bf16")
         base = compute_data(
-            l8, (1, 1, 1), (1, 1, 1), 4, 512, 256, GPUS["H100"],
-            0.90, 2.0, "bf16", 0.0, self.eff, self.eff,
+            l8,
+            (1, 1, 1),
+            (1, 1, 1),
+            4,
+            512,
+            256,
+            GPUS["H100"],
+            0.90,
+            2.0,
+            "bf16",
+            0.0,
+            self.eff,
+            self.eff,
         )
         sp = compute_data(
-            l8, (1, 1, 1), (1, 1, 1), 4, 512, 256, GPUS["H100"],
-            0.90, 2.0, "bf16", 0.0, self.eff, self.eff, eagle,
+            l8,
+            (1, 1, 1),
+            (1, 1, 1),
+            4,
+            512,
+            256,
+            GPUS["H100"],
+            0.90,
+            2.0,
+            "bf16",
+            0.0,
+            self.eff,
+            self.eff,
+            eagle,
         )
         self.assertGreater(sp.rps, base.rps)
         self.assertGreater(sp.tps, base.tps)
@@ -624,8 +918,20 @@ class SpeculativeDecodingMathTests(unittest.TestCase):
         )
         model = replace(base_model, speculative_profiles=(profile,))
         selection = optimize_spec_k(
-            model, "eagle3", 0.0, "bf16", 1, 1, 1, GPUS["H100"],
-            0.90, 2.0, self.chat_in, self.chat_out, self.eff, probe_concurrency=7,
+            model,
+            "eagle3",
+            0.0,
+            "bf16",
+            1,
+            1,
+            1,
+            GPUS["H100"],
+            0.90,
+            2.0,
+            self.chat_in,
+            self.chat_out,
+            self.eff,
+            probe_concurrency=7,
         )
 
         self.assertIsNotNone(selection.runtime)
@@ -639,8 +945,19 @@ class SpeculativeDecodingMathTests(unittest.TestCase):
 
     def test_auto_k_bounds_search_by_finite_output_length(self):
         selection = optimize_spec_k(
-            MODELS["l8"], "eagle3", 0.0, "bf16", 1, 1, 1, GPUS["H100"],
-            0.90, 2.0, self.chat_in, [100, 0, 0, 0, 0, 0], self.eff,
+            MODELS["l8"],
+            "eagle3",
+            0.0,
+            "bf16",
+            1,
+            1,
+            1,
+            GPUS["H100"],
+            0.90,
+            2.0,
+            self.chat_in,
+            [100, 0, 0, 0, 0, 0],
+            self.eff,
         )
 
         self.assertIsNotNone(selection.runtime)
@@ -648,8 +965,19 @@ class SpeculativeDecodingMathTests(unittest.TestCase):
 
     def test_auto_k_reports_when_spec_off_is_better(self):
         selection = optimize_spec_k(
-            MODELS["l8"], "eagle3", 0.001, "bf16", 1, 1, 1, GPUS["H100"],
-            0.90, 2.0, self.chat_in, self.chat_out, self.eff,
+            MODELS["l8"],
+            "eagle3",
+            0.001,
+            "bf16",
+            1,
+            1,
+            1,
+            GPUS["H100"],
+            0.90,
+            2.0,
+            self.chat_in,
+            self.chat_out,
+            self.eff,
         )
 
         self.assertIsNotNone(selection.runtime)
@@ -673,7 +1001,15 @@ class SpeculativeDecodingMathTests(unittest.TestCase):
 
     def test_user_pareto_discloses_fixed_auto_spec_configuration(self):
         assignment = ModelAssignment(
-            2, "l8", 1, 1, 1, 1, "bf16", spec_method="eagle3", spec_k=0,
+            2,
+            "l8",
+            1,
+            1,
+            1,
+            1,
+            "bf16",
+            spec_method="eagle3",
+            spec_k=0,
         )
         state = PlannerState(gpus=[GpuPool(1, "H100", 1)], models=[assignment])
         retune_models(state, preserve_existing=True)

@@ -14,11 +14,11 @@ from calc import (
 from data import ASR_WER_PLACEHOLDER, DIST_PRESETS, MODELS, PUBLISHED_ASR_WER
 from placement import retune_models
 from state import (
+    VISIBLE_PLOT_MODES,
     GpuPool,
     ModelAssignment,
     PlannerState,
     Project,
-    VISIBLE_PLOT_MODES,
     normalize_plot_mode,
 )
 
@@ -149,10 +149,15 @@ class RealtimeCapacityTests(unittest.TestCase):
 
         datasets = chart_asr_quality(state)
 
-        self.assertEqual(ASR_WER_PLACEHOLDER, frozenset({
-            "kyutai-stt-1b-en-fr",
-            "fun-asr-nano-2512",
-        }))
+        self.assertEqual(
+            ASR_WER_PLACEHOLDER,
+            frozenset(
+                {
+                    "kyutai-stt-1b-en-fr",
+                    "fun-asr-nano-2512",
+                }
+            ),
+        )
         self.assertEqual(PUBLISHED_ASR_WER["voxtral-realtime-mini-4b"]["en"], 4.90)
         self.assertEqual(PUBLISHED_ASR_WER["voxtral-realtime-mini-4b"]["fr_covost"], 9.68)
         self.assertEqual(PUBLISHED_ASR_WER["voxtral-realtime-mini-4b"]["fr_fleurs"], 8.44)
@@ -166,7 +171,9 @@ class RealtimeCapacityTests(unittest.TestCase):
         self.assertEqual(PUBLISHED_ASR_WER["gemma-4-12b-unified-asr"]["en"], 6.3)
         self.assertEqual(PUBLISHED_ASR_WER["gemma-4-12b-unified-asr"]["fr_fleurs"], 8.1)
         self.assertEqual(PUBLISHED_ASR_WER["nvidia-nemotron-3.5-asr-streaming-0.6b"]["en"], 7.99)
-        self.assertEqual(PUBLISHED_ASR_WER["nvidia-nemotron-3.5-asr-streaming-0.6b"]["fr_fleurs"], 9.45)
+        self.assertEqual(
+            PUBLISHED_ASR_WER["nvidia-nemotron-3.5-asr-streaming-0.6b"]["fr_fleurs"], 9.45
+        )
         self.assertEqual(PUBLISHED_ASR_WER["nvidia-parakeet-tdt-0.6b-v3"]["fr_covost"], 6.38)
         self.assertEqual(PUBLISHED_ASR_WER["nvidia-parakeet-tdt-0.6b-v3"]["fr_fleurs"], 4.76)
         self.assertEqual(PUBLISHED_ASR_WER["nvidia-parakeet-tdt-0.6b-v3"]["fr_mls"], 5.12)
@@ -179,9 +186,21 @@ class RealtimeCapacityTests(unittest.TestCase):
         for key in new_asr_models:
             self.assertIn(key, seen_keys)
 
-        self.assertFalse(next(ds for ds in datasets if ds["_modelKey"] == "nvidia-parakeet-tdt-0.6b-v3")["_asrStreaming"])
-        self.assertTrue(next(ds for ds in datasets if ds["_modelKey"] == "nvidia-nemotron-speech-streaming-0.6b")["_asrStreaming"])
-        self.assertTrue(next(ds for ds in datasets if ds["_modelKey"] == "nvidia-nemotron-3.5-asr-streaming-0.6b")["_asrStreaming"])
+        self.assertFalse(
+            next(ds for ds in datasets if ds["_modelKey"] == "nvidia-parakeet-tdt-0.6b-v3")[
+                "_asrStreaming"
+            ]
+        )
+        self.assertTrue(
+            next(
+                ds for ds in datasets if ds["_modelKey"] == "nvidia-nemotron-speech-streaming-0.6b"
+            )["_asrStreaming"]
+        )
+        self.assertTrue(
+            next(
+                ds for ds in datasets if ds["_modelKey"] == "nvidia-nemotron-3.5-asr-streaming-0.6b"
+            )["_asrStreaming"]
+        )
         for dataset in datasets:
             self.assertEqual(dataset["_placeholder"], dataset["_modelKey"] in ASR_WER_PLACEHOLDER)
             self.assertTrue(dataset["showLine"])

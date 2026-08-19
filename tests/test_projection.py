@@ -22,12 +22,24 @@ class RevenueProjectionTests(unittest.TestCase):
 
     def test_prefix_reuse_is_prompt_token_weighted_across_use_cases(self):
         low = Project(
-            1, "Short input", 0.1, 1_000_000, 10.0,
-            prefix_hit_rate=0.0, in_pre="Classify", out_pre="Long doc",
+            1,
+            "Short input",
+            0.1,
+            1_000_000,
+            10.0,
+            prefix_hit_rate=0.0,
+            in_pre="Classify",
+            out_pre="Long doc",
         )
         high = Project(
-            2, "Long input", 0.1, 1_000_000, 10.0,
-            prefix_hit_rate=1.0, in_pre="Long doc", out_pre="Classify",
+            2,
+            "Long input",
+            0.1,
+            1_000_000,
+            10.0,
+            prefix_hit_rate=1.0,
+            in_pre="Long doc",
+            out_pre="Classify",
         )
         state = PlannerState(projects=[low, high])
 
@@ -42,10 +54,22 @@ class RevenueProjectionTests(unittest.TestCase):
         self.assertAlmostEqual(state.prefix_hit_rate, expected)
 
     def test_cloud_price_uses_each_use_cases_prefix_reuse(self):
-        state = PlannerState(projects=[
-            Project(1, "No reuse", 0.1, 1_000_000, 100.0, min_success_rate=0.5, prefix_hit_rate=0.0),
-            Project(2, "High reuse", 0.1, 1_000_000, 100.0, min_success_rate=0.5, prefix_hit_rate=0.8),
-        ])
+        state = PlannerState(
+            projects=[
+                Project(
+                    1, "No reuse", 0.1, 1_000_000, 100.0, min_success_rate=0.5, prefix_hit_rate=0.0
+                ),
+                Project(
+                    2,
+                    "High reuse",
+                    0.1,
+                    1_000_000,
+                    100.0,
+                    min_success_rate=0.5,
+                    prefix_hit_rate=0.8,
+                ),
+            ]
+        )
 
         projection = compute_revenue_projection(state, include_recommendations=False)
         rows = {row["name"]: row for row in projection["projects"]}

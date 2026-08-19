@@ -214,9 +214,11 @@ class SpecStateTests(unittest.TestCase):
         self.assertEqual(restored.models[0].spec_k, 0)
 
     def test_imported_unsupported_manual_k_migrates_to_auto(self):
-        state = PlannerState(models=[
-            ModelAssignment(2, "q27", 0, 1, 1, 1, "bf16", spec_method="mtp", spec_k=5),
-        ])
+        state = PlannerState(
+            models=[
+                ModelAssignment(2, "q27", 0, 1, 1, 1, "bf16", spec_method="mtp", spec_k=5),
+            ]
+        )
 
         self.assertEqual(state.models[0].spec_method, "mtp")
         self.assertEqual(state.models[0].spec_k, 0)

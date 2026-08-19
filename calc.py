@@ -6,47 +6,46 @@ import copy
 import math
 from collections import defaultdict
 from dataclasses import dataclass, replace
-from typing import Optional
+from typing import Optional, cast
 
+import cloud_policy
 from data import (
-    GPU,
-    Model,
-    Bucket,
-    SpeculativeProfile,
-    CORPO_CLOUD_DEFAULT,
-    DIST_PRESETS,
-    EMBEDDING_DOC_BUCKETS,
-    INPUT_BUCKETS,
-    OUTPUT_BUCKETS,
-    BATCH_SIZES,
-    TASK_PRESETS,
-    DAY_SHAPES,
-    DEFAULT_COUNTRY,
     ASR_WER_LANGUAGE_LABELS,
     ASR_WER_LANGUAGE_SOURCES,
     ASR_WER_LANGUAGES,
     ASR_WER_PLACEHOLDER,
-    PUBLISHED_ASR_WER,
+    BATCH_SIZES,
+    CORPO_CLOUD_DEFAULT,
+    DAY_SHAPES,
+    DEFAULT_COUNTRY,
+    DIST_PRESETS,
     EMBEDDING_DECONTAMINATED_BEIR_SOURCES,
+    EMBEDDING_DOC_BUCKETS,
     EMBEDDING_QUALITY_PLACEHOLDER,
     EMBEDDING_QUALITY_SOURCES,
+    GPU,
+    INPUT_BUCKETS,
+    MODELS,
+    OUTPUT_BUCKETS,
+    PUBLISHED_ASR_WER,
     PUBLISHED_EMBEDDING_DECONTAMINATED_BEIR,
     PUBLISHED_EMBEDDING_QUALITY,
-    normalize_precision,
-    MODELS,
+    QUALITY_DOMAIN_LABELS,
+    Bucket,
+    Model,
+    SpeculativeProfile,
     carbon_intensity_avg,
     effective_quality,
     model_domain_anchor,
     model_profile_quality,
     model_profile_success_rate,
+    normalize_precision,
     normalize_quality_domain,
     normalize_quality_weights,
     quality_weights_label,
     required_quality,
-    QUALITY_DOMAIN_LABELS,
     success_rate,
 )
-import cloud_policy
 
 # Wall-clock accelerator draw as a fraction of published board TDP during saturated
 # inference. The 0.6–0.8 anchor comes primarily from vLLM measurements on H100/MI300
@@ -59,11 +58,47 @@ INTER_NODE_COLLECTIVE_BW = 25e9
 DATA_BATCH_SIZES = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]  # Fixed to match BATCH_SIZES
 EMBEDDING_BATCH_SIZES = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
 USER_EXP_SWEEP = [
-    1, 2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024,
+    1,
+    2,
+    4,
+    8,
+    12,
+    16,
+    24,
+    32,
+    48,
+    64,
+    96,
+    128,
+    192,
+    256,
+    384,
+    512,
+    768,
+    1024,
 ]
 USER_EXP_FRACTIONS = [0.50, 0.75, 0.90, 0.95]
 REALTIME_USER_SWEEP = [
-    1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192, 12288, 16384,
+    1,
+    2,
+    4,
+    8,
+    16,
+    32,
+    64,
+    128,
+    256,
+    512,
+    768,
+    1024,
+    1536,
+    2048,
+    3072,
+    4096,
+    6144,
+    8192,
+    12288,
+    16384,
 ]
 MAX_REALTIME_USERS = 262_144
 UNBOUNDED_BATCH = 1_000_000_000
@@ -71,20 +106,24 @@ LONG_CTX_DCP_SEQ = 32768
 BATCH_AXIS_HEADROOM = 0.12
 PROCESSING_PARETO_COLORS = ["#3266ad", "#1D9E75", "#BA7517", "#7F77DD", "#D85A30", "#A32D2D"]
 NIGHT_HOURS = frozenset({22, 23, 0, 1, 2, 3, 4, 5})
-NVIDIA_FP4_GPU_KEYS = frozenset({
-    "RTXPRO6000_BSE",
-    "RTXPRO6000_BW_WS",
-    "RTXPRO5000_BW_72",
-    "RTX5090",
-    "DGX_SPARK",
-    "GB200",
-    "B200",
-    "B300",
-    "GB300",
-    "DGX_STATION_GB300",
-    "JETSON_AGX_THOR",
-})
-MXFP4_GPU_KEYS = NVIDIA_FP4_GPU_KEYS | frozenset({"MI350X", "MI355X", "MI455X", "HELIOS_MI455X", "MI400"})
+NVIDIA_FP4_GPU_KEYS = frozenset(
+    {
+        "RTXPRO6000_BSE",
+        "RTXPRO6000_BW_WS",
+        "RTXPRO5000_BW_72",
+        "RTX5090",
+        "DGX_SPARK",
+        "GB200",
+        "B200",
+        "B300",
+        "GB300",
+        "DGX_STATION_GB300",
+        "JETSON_AGX_THOR",
+    }
+)
+MXFP4_GPU_KEYS = NVIDIA_FP4_GPU_KEYS | frozenset(
+    {"MI350X", "MI355X", "MI455X", "HELIOS_MI455X", "MI400"}
+)
 
 # Speculative decoding has a real control-plane cost even when draft weights are
 # tiny: launch the draft/verify work, schedule the block, and synchronize the
@@ -171,7 +210,7 @@ def spec_finite_output_tau(alpha: float, k: int, output_tokens: int) -> float:
         for emitted in range(1, cycle_k + 1):
             probability = (alpha ** (emitted - 1)) * (1.0 - alpha)
             total += probability * expected_cycles[remaining - emitted]
-        total += (alpha ** cycle_k) * expected_cycles[max(remaining - cycle_k - 1, 0)]
+        total += (alpha**cycle_k) * expected_cycles[max(remaining - cycle_k - 1, 0)]
         expected_cycles[remaining] = total
     return n / expected_cycles[n]
 
@@ -189,8 +228,14 @@ def resolve_spec_runtime(
     if profile is None:
         return None
     requested_k = min(max(int(spec_k if spec_k > 0 else profile.default_k), 1), 32)
-    supported_ks = tuple(sorted({int(k) for k in getattr(profile, "supported_ks", ()) if 1 <= int(k) <= 32}))
-    k = min(supported_ks, key=lambda candidate: (abs(candidate - requested_k), candidate)) if supported_ks else requested_k
+    supported_ks = tuple(
+        sorted({int(k) for k in getattr(profile, "supported_ks", ()) if 1 <= int(k) <= 32})
+    )
+    k = (
+        min(supported_ks, key=lambda candidate: (abs(candidate - requested_k), candidate))
+        if supported_ks
+        else requested_k
+    )
     calibrated_alphas = dict(getattr(profile, "acceptance_alpha_by_k", ()))
     profile_alpha = calibrated_alphas.get(k, profile.acceptance_alpha)
     alpha = min(max(float(alpha_override if alpha_override > 0 else profile_alpha), 0.0), 1.0)
@@ -455,7 +500,9 @@ def per_tp_linear_attention_state_bytes(m: Model, prec: str, tp: int) -> float:
     cached = _LINEAR_STATE_CACHE.get(cache_key)
     if cached is not None:
         return cached
-    _LINEAR_STATE_CACHE[cache_key] = value = _per_tp_linear_attention_state_bytes_uncached(m, prec, tp)
+    _LINEAR_STATE_CACHE[cache_key] = value = _per_tp_linear_attention_state_bytes_uncached(
+        m, prec, tp
+    )
     return value
 
 
@@ -475,8 +522,7 @@ def _per_tp_linear_attention_state_bytes_uncached(m: Model, prec: str, tp: int) 
 
     recurrent_elems = heads * head_dim * head_dim / head_shards
     conv_elems = conv_len * (
-        (heads * head_dim / head_shards)
-        + (2 * k_heads * k_head_dim / k_head_shards)
+        (heads * head_dim / head_shards) + (2 * k_heads * k_head_dim / k_head_shards)
     )
     return layers * (recurrent_elems + conv_elems) * bpe
 
@@ -484,9 +530,10 @@ def _per_tp_linear_attention_state_bytes_uncached(m: Model, prec: str, tp: int) 
 def kv_cache_bytes_for_sequence(m: Model, seq_len: float, prec: str) -> float:
     seq = max(float(seq_len), 0.0)
     full_layers, local_layers = _split_attention_layers(m.kv_layer_count, m.local_attention_layers)
-    return (
-        full_layers * seq * _kv_bytes_per_layer(m, prec, global_layer=True)
-        + local_layers * _local_context_tokens(m, seq) * _kv_bytes_per_layer(m, prec, global_layer=False)
+    return full_layers * seq * _kv_bytes_per_layer(
+        m, prec, global_layer=True
+    ) + local_layers * _local_context_tokens(m, seq) * _kv_bytes_per_layer(
+        m, prec, global_layer=False
     )
 
 
@@ -502,7 +549,9 @@ def per_replica_kv_cache_bytes(m: Model, seq_len: float, prec: str, pp: int, tp:
     return value
 
 
-def per_replica_token_kv_cache_bytes(m: Model, seq_len: float, prec: str, pp: int, tp: int) -> float:
+def per_replica_token_kv_cache_bytes(
+    m: Model, seq_len: float, prec: str, pp: int, tp: int
+) -> float:
     """Per-rank, token-growing attention KV for one sequence.
 
     Recurrent/linear-attention state is deliberately excluded.  The two kinds of
@@ -515,15 +564,20 @@ def per_replica_token_kv_cache_bytes(m: Model, seq_len: float, prec: str, pp: in
     if m.is_mla:
         token_cache = kv_cache_bytes_for_sequence(m, seq_len, prec) / kv_shards(m, tp)
     else:
-        full_layers, local_layers = _split_attention_layers(m.kv_layer_count, m.local_attention_layers)
-        full_cache = full_layers * max(float(seq_len), 0.0) * _kv_bytes_per_layer(m, prec, global_layer=True)
+        full_layers, local_layers = _split_attention_layers(
+            m.kv_layer_count, m.local_attention_layers
+        )
+        full_cache = (
+            full_layers * max(float(seq_len), 0.0) * _kv_bytes_per_layer(m, prec, global_layer=True)
+        )
         local_cache = (
-            local_layers * _local_context_tokens(m, seq_len) * _kv_bytes_per_layer(m, prec, global_layer=False)
+            local_layers
+            * _local_context_tokens(m, seq_len)
+            * _kv_bytes_per_layer(m, prec, global_layer=False)
         )
-        token_cache = (
-            full_cache / kv_shards_for_heads(_kv_heads_for_layer(m, global_layer=True), tp)
-            + local_cache / kv_shards_for_heads(_kv_heads_for_layer(m, global_layer=False), tp)
-        )
+        token_cache = full_cache / kv_shards_for_heads(
+            _kv_heads_for_layer(m, global_layer=True), tp
+        ) + local_cache / kv_shards_for_heads(_kv_heads_for_layer(m, global_layer=False), tp)
     return token_cache * pp_fraction
 
 
@@ -532,14 +586,17 @@ def per_replica_recurrent_state_bytes(m: Model, prec: str, pp: int, tp: int) -> 
     return per_tp_linear_attention_state_bytes(m, prec, tp) * _pp_peak_fraction(m, max(pp, 1))
 
 
-def _per_replica_kv_cache_bytes_uncached(m: Model, seq_len: float, prec: str, pp: int, tp: int) -> float:
-    return (
-        per_replica_token_kv_cache_bytes(m, seq_len, prec, pp, tp)
-        + per_replica_recurrent_state_bytes(m, prec, pp, tp)
-    )
+def _per_replica_kv_cache_bytes_uncached(
+    m: Model, seq_len: float, prec: str, pp: int, tp: int
+) -> float:
+    return per_replica_token_kv_cache_bytes(
+        m, seq_len, prec, pp, tp
+    ) + per_replica_recurrent_state_bytes(m, prec, pp, tp)
 
 
-def attention_residual_scratch_bytes(m: Model, seq_len: float, prec: str, pp: int, tp: int) -> float:
+def attention_residual_scratch_bytes(
+    m: Model, seq_len: float, prec: str, pp: int, tp: int
+) -> float:
     """Conservative per-rank prefill scratch for block attention residuals.
 
     AttnRes retains several full-width activation sources across layer blocks.  The
@@ -623,7 +680,9 @@ def _sparse_indexer_work(m: Model, pr: int, seq_len: float, *, prefill: bool) ->
 
 
 def _decode_attention_work(m: Model, pr: int, avg_seq: float, pp: int) -> float:
-    full_layers, local_layers = _split_attention_layers(m.attention_layer_count, m.local_attention_layers)
+    full_layers, local_layers = _split_attention_layers(
+        m.attention_layer_count, m.local_attention_layers
+    )
     full_width = m.attention_query_head_count * m.head_dim
     local_width = m.local_attention_head_count * m.local_attention_head_size
     full_work = full_layers * full_width * _sparse_attention_context(m, avg_seq)
@@ -657,7 +716,9 @@ def _realtime_audio_encoder_work(profile, pr: int, pp: int) -> float:
 
 def _prefill_attention_work(m: Model, pr: int, seq_len: int, pp: int) -> float:
     seq = max(float(seq_len), 0.0)
-    full_layers, local_layers = _split_attention_layers(m.attention_layer_count, m.local_attention_layers)
+    full_layers, local_layers = _split_attention_layers(
+        m.attention_layer_count, m.local_attention_layers
+    )
     full_width = m.attention_query_head_count * m.head_dim
     local_width = m.local_attention_head_count * m.local_attention_head_size
     full_work = full_layers * full_width * seq * _sparse_attention_context(m, seq)
@@ -684,8 +745,10 @@ def gpu_flops(g: GPU, prec: str) -> float:
     if prec == "fp8":
         return g.fp8
     if prec == "mxfp4" and gpu_supports_mxfp4(g):
+        assert g.fp4 is not None
         return g.fp4
     if prec == "nvfp4" and gpu_supports_nvfp4(g):
+        assert g.fp4 is not None
         return g.fp4
 
     # Non-native FP4 paths still benefit from compressed weight traffic, but the
@@ -761,14 +824,14 @@ def decode_paged_oh(in_dist: list[int], out_dist: list[int], eff: EfficiencyPara
     in_mean, in_std = dist_stats(in_dist, INPUT_BUCKETS)
     out_mean, out_std = dist_stats(out_dist, OUTPUT_BUCKETS)
     avg_seq = in_mean + out_mean / 2.0
-    seq_std = math.sqrt(in_std ** 2 + (out_std / 2.0) ** 2)
+    seq_std = math.sqrt(in_std**2 + (out_std / 2.0) ** 2)
     heterogeneity = min(1.5, seq_std / max(avg_seq, 1.0))
     short_share = 0.65 * dist_share_leq(in_dist, INPUT_BUCKETS, 1024)
     short_share += 0.35 * dist_share_leq(out_dist, OUTPUT_BUCKETS, 128)
     return eff.paged_oh * _paged_kv_pressure(avg_seq, heterogeneity, short_share)
 
 
-def fixed_paged_oh(seq_len: int, eff: EfficiencyParams, scale: float = 1.0) -> float:
+def fixed_paged_oh(seq_len: float, eff: EfficiencyParams, scale: float = 1.0) -> float:
     short_share = 1.0 / (1.0 + (seq_len / 2048.0))
     return eff.paged_oh * scale * _paged_kv_pressure(seq_len, 0.0, short_share)
 
@@ -805,7 +868,10 @@ def tp_supported(m: Model, tp: int) -> bool:
         kv_head_counts.add(m.global_kv_heads)
     if m.local_attention_layers > 0:
         kv_head_counts.add(m.local_kv_head_count)
-    return all(tp <= heads and heads % tp == 0 or tp > heads and tp % heads == 0 for heads in kv_head_counts)
+    return all(
+        tp <= heads and heads % tp == 0 or tp > heads and tp % heads == 0
+        for heads in kv_head_counts
+    )
 
 
 def kv_duplication_groups_for_heads(kv_heads: int, tp: int) -> int:
@@ -918,8 +984,12 @@ def default_strategy(
     requested = g.mem * mu
     for tp, pp, dp in candidates:
         profiled_non_kv = profiled_non_kv_bytes(tp, profiled_non_kv_gb)
-        resident_weights = m.weight_bytes(prec) + (spec.draft_weight_bytes if spec is not None else 0.0)
-        kv_headroom = max(0.0, requested - (resident_weights * _pp_peak_fraction(m, pp) / tp) - profiled_non_kv)
+        resident_weights = m.weight_bytes(prec) + (
+            spec.draft_weight_bytes if spec is not None else 0.0
+        )
+        kv_headroom = max(
+            0.0, requested - (resident_weights * _pp_peak_fraction(m, pp) / tp) - profiled_non_kv
+        )
         score = (
             1 if tp <= g.node_size else 0,
             min(tp, g.node_size),
@@ -964,7 +1034,9 @@ def _pp_boundary_counts(tp: int, pp: int, g: GPU) -> tuple[int, int]:
     return intra, cross
 
 
-def _dense_tp_oh(tp: int, pp: int, batch_tokens: int, m: Model, g: GPU, bw_eff: float, overlap: float) -> float:
+def _dense_tp_oh(
+    tp: int, pp: int, batch_tokens: float, m: Model, g: GPU, bw_eff: float, overlap: float
+) -> float:
     if tp <= 1:
         return 0.0
     collective_bw = _eff_collective_bw(tp, g) * bw_eff
@@ -978,7 +1050,9 @@ def _dense_tp_oh(tp: int, pp: int, batch_tokens: int, m: Model, g: GPU, bw_eff: 
     return (comm_time + latency) * (1 - overlap)
 
 
-def _pp_boundary_oh(tp: int, pp: int, batch_tokens: int, m: Model, g: GPU, bw_eff: float) -> tuple[float, int]:
+def _pp_boundary_oh(
+    tp: int, pp: int, batch_tokens: float, m: Model, g: GPU, bw_eff: float
+) -> tuple[float, int]:
     intra, cross = _pp_boundary_counts(tp, pp, g)
     if intra + cross <= 0:
         return 0.0, 0
@@ -993,7 +1067,7 @@ def communication_breakdown(
     m: Model,
     tp: int,
     pp: int,
-    batch_tokens: int,
+    batch_tokens: float,
     avg_seq: float,
     g: GPU,
     eff: EfficiencyParams,
@@ -1091,12 +1165,10 @@ def _decode_step_time(
         draft_positions = spec.k if spec.profile.parallel_draft else 1
         draft_bt = (
             spec.draft_weight_bytes * pp_fraction / tp
-            + (
-                base_token_kv_read_bytes + recurrent_state_bytes
-            ) * spec.profile.kv_overhead * draft_positions
-        ) / (
-            g.effective_bw * eff.bw_eff
-        )
+            + (base_token_kv_read_bytes + recurrent_state_bytes)
+            * spec.profile.kv_overhead
+            * draft_positions
+        ) / (g.effective_bw * eff.bw_eff)
         draft_ct = (2 * spec.draft_active_params * pr * pp_fraction * draft_positions) / (
             model_gpu_flops(g, m, prec) * tp * eff.comp_eff
         )
@@ -1178,17 +1250,23 @@ def _compute_decode_core(
     # Sum independently loaded replica throughput. For realtime audio, callers pass
     # per-request extra work so uneven replicas receive proportional encoder work.
     replica_cycles = [
-        _decode_step_time(m, tp, pp, load, g, prec, avg_seq, eff, paged_oh, extra_flops * load, active_spec)
+        _decode_step_time(
+            m, tp, pp, load, g, prec, avg_seq, eff, paged_oh, extra_flops * load, active_spec
+        )
         for load in replica_loads
     ]
     tau = active_spec.tau if active_spec is not None else 1.0
-    total_tps = sum(load * tau / cycle for load, cycle in zip(replica_loads, replica_cycles) if cycle > 0)
+    total_tps = sum(
+        load * tau / cycle for load, cycle in zip(replica_loads, replica_cycles) if cycle > 0
+    )
     slowest_cycle = max(replica_cycles)
     # step_ms/lat stay per-token: with spec, one cycle emits tau tokens.
     per_token = slowest_cycle / tau
     spec_speedup = 1.0
     if spec is not None:
-        baseline_step = _decode_step_time(m, tp, pp, pr, g, prec, avg_seq, eff, paged_oh, extra_flops * pr)
+        baseline_step = _decode_step_time(
+            m, tp, pp, pr, g, prec, avg_seq, eff, paged_oh, extra_flops * pr
+        )
         spec_speedup = baseline_step / per_token if per_token > 0 else 1.0
     return DecodeResult(
         tps=round(total_tps),
@@ -1271,34 +1349,71 @@ def optimize_spec_k(
     # Discover capacity at one user first so an Auto @ 32 probe degrades to the
     # largest feasible declared operating point rather than failing wholesale.
     baseline_one = compute_decode(
-        m, tp, pp, 1, dp, g, mu, profiled_non_kv_gb, prec, in_dist, out_dist, eff,
+        m,
+        tp,
+        pp,
+        1,
+        dp,
+        g,
+        mu,
+        profiled_non_kv_gb,
+        prec,
+        in_dist,
+        out_dist,
+        eff,
     )
     if baseline_one is None or baseline_one.max_slots < 1:
         return SpecOptimization(None, 0, 1.0, False, "baseline topology is infeasible", 1)
     effective_probe = min(requested_probe, baseline_one.max_slots)
     baseline = compute_decode(
-        m, tp, pp, effective_probe, dp, g, mu, profiled_non_kv_gb, prec, in_dist, out_dist, eff,
+        m,
+        tp,
+        pp,
+        effective_probe,
+        dp,
+        g,
+        mu,
+        profiled_non_kv_gb,
+        prec,
+        in_dist,
+        out_dist,
+        eff,
     )
     if baseline is None or baseline.tps <= 0:
-        return SpecOptimization(None, 0, 1.0, False, "baseline probe is infeasible", effective_probe)
+        return SpecOptimization(
+            None, 0, 1.0, False, "baseline probe is infeasible", effective_probe
+        )
 
     best_runtime: Optional[SpecRuntime] = None
     best_speedup = 0.0
     profile_supported_ks = tuple(getattr(profile_runtime.profile, "supported_ks", ()))
-    supported_ks = tuple(sorted({
-        int(k) for k in profile_supported_ks
-        if 1 <= int(k) <= max_k
-    }))
+    supported_ks = tuple(sorted({int(k) for k in profile_supported_ks if 1 <= int(k) <= max_k}))
     if profile_supported_ks and not supported_ks:
         return SpecOptimization(
-            None, 0, 1.0, False, "no calibrated k fits the output length", effective_probe,
+            None,
+            0,
+            1.0,
+            False,
+            "no calibrated k fits the output length",
+            effective_probe,
         )
     candidate_ks = supported_ks or tuple(range(1, max_k + 1))
     for k in candidate_ks:
         runtime = resolve_spec_runtime(m, method, k, alpha_override, prec)
         candidate = compute_decode(
-            m, tp, pp, effective_probe, dp, g, mu, profiled_non_kv_gb, prec,
-            in_dist, out_dist, eff, runtime,
+            m,
+            tp,
+            pp,
+            effective_probe,
+            dp,
+            g,
+            mu,
+            profiled_non_kv_gb,
+            prec,
+            in_dist,
+            out_dist,
+            eff,
+            runtime,
         )
         if candidate is None:
             continue
@@ -1308,7 +1423,9 @@ def optimize_spec_k(
             best_speedup = speedup
 
     if best_runtime is None:
-        return SpecOptimization(None, 0, 1.0, False, "no speculative k fits the topology", effective_probe)
+        return SpecOptimization(
+            None, 0, 1.0, False, "no speculative k fits the topology", effective_probe
+        )
 
     beneficial = best_speedup >= SPEC_MIN_BENEFICIAL_SPEEDUP
     selected = replace(
@@ -1345,7 +1462,9 @@ def compute_decode_capacity(
     eff: EfficiencyParams,
     spec: Optional[SpecRuntime] = None,
 ) -> int:
-    result = compute_decode(m, tp, pp, max(dp, 1), dp, g, mu, profiled_non_kv_gb, prec, in_dist, out_dist, eff, spec)
+    result = compute_decode(
+        m, tp, pp, max(dp, 1), dp, g, mu, profiled_non_kv_gb, prec, in_dist, out_dist, eff, spec
+    )
     return result.max_slots if result else 0
 
 
@@ -1371,7 +1490,9 @@ def compute_prefill(
     if seq_len <= 0:
         # A 100% prefix hit removes prefill work. Use the planner's finite sentinel
         # instead of infinity so charts/JSON remain numerically well-defined.
-        return PrefillResult(tps=0, service_time=0.0, rps=float(UNBOUNDED_BATCH), max_batch=UNBOUNDED_BATCH)
+        return PrefillResult(
+            tps=0, service_time=0.0, rps=float(UNBOUNDED_BATCH), max_batch=UNBOUNDED_BATCH
+        )
 
     pr = math.ceil(bs / dp)
     seq_kv = per_replica_kv_cache_bytes(m, seq_len, prec, pp, tp)
@@ -1433,7 +1554,11 @@ def embedding_output_bytes_per_input(m: Model, seq_len: int) -> float:
     if profile is None:
         return 0.0
     vectors = embedding_vectors_per_input(m, seq_len)
-    dim = int(profile.late_interaction_dim or profile.output_dim) if profile.supports_late_interaction else int(profile.output_dim)
+    dim = (
+        int(profile.late_interaction_dim or profile.output_dim)
+        if profile.supports_late_interaction
+        else int(profile.output_dim)
+    )
     return vectors * max(dim, 1) * max(float(profile.vector_bytes_per_elem), 0.25)
 
 
@@ -1472,9 +1597,15 @@ def embedding_doc_stats(
         return EmbeddingDocStats(0.0, 0, 0, 0, 0.0, 0.0, 0.0)
 
     mean_seq = sum(share * seq for share, seq, _bucket in weighted)
-    mean_vectors = sum(share * embedding_vectors_per_input(m, seq) for share, seq, _bucket in weighted)
-    mean_output = sum(share * embedding_output_bytes_per_input(m, seq) for share, seq, _bucket in weighted)
-    mean_scratch = sum(share * embedding_scratch_bytes_per_input(m, seq, prec) for share, seq, _bucket in weighted)
+    mean_vectors = sum(
+        share * embedding_vectors_per_input(m, seq) for share, seq, _bucket in weighted
+    )
+    mean_output = sum(
+        share * embedding_output_bytes_per_input(m, seq) for share, seq, _bucket in weighted
+    )
+    mean_scratch = sum(
+        share * embedding_scratch_bytes_per_input(m, seq, prec) for share, seq, _bucket in weighted
+    )
     return EmbeddingDocStats(
         mean_seq_len=mean_seq,
         p50_seq_len=_embedding_percentile(weighted, 0.50),
@@ -1536,7 +1667,9 @@ def compute_embedding(
     output_time = (embedding_output_bytes_per_input(m, seq) * pr) / (g.effective_bw * eff.bw_eff)
     comm = communication_breakdown(m, tp, pp, pr * seq, seq, g, eff)
 
-    t = (max(ct, mt) + output_time + comm.total) * (1 + eff.overhead * 1.2 + fixed_paged_oh(seq, eff, 0.20))
+    t = (max(ct, mt) + output_time + comm.total) * (
+        1 + eff.overhead * 1.2 + fixed_paged_oh(seq, eff, 0.20)
+    )
     if t <= 0:
         return None
 
@@ -1585,7 +1718,11 @@ def compute_embedding_distribution(
         return None
 
     pr = math.ceil(bs / max(dp, 1))
-    max_per_replica = int(mem.kv_budget / stats.mean_scratch_bytes_per_input) if stats.mean_scratch_bytes_per_input > 0 else UNBOUNDED_BATCH
+    max_per_replica = (
+        int(mem.kv_budget / stats.mean_scratch_bytes_per_input)
+        if stats.mean_scratch_bytes_per_input > 0
+        else UNBOUNDED_BATCH
+    )
     if pr > max_per_replica:
         return None
 
@@ -1636,7 +1773,9 @@ def compute_embedding_capacity(
     prec: str,
     eff: EfficiencyParams,
 ) -> int:
-    result = compute_embedding(m, strat, max(strat[2], 1), seq_len, g, mu, profiled_non_kv_gb, prec, eff)
+    result = compute_embedding(
+        m, strat, max(strat[2], 1), seq_len, g, mu, profiled_non_kv_gb, prec, eff
+    )
     return result.max_batch if result else 0
 
 
@@ -1942,7 +2081,9 @@ def compute_realtime_max_users(
     best = 0
     high = 1
     while high <= MAX_REALTIME_USERS:
-        result = compute_realtime_capacity(m, decode_strat, high, g, mu, profiled_non_kv_gb, prec, eff)
+        result = compute_realtime_capacity(
+            m, decode_strat, high, g, mu, profiled_non_kv_gb, prec, eff
+        )
         if result is not None and result.realtime_factor >= 1.0:
             best = high
             high *= 2
@@ -1956,7 +2097,9 @@ def compute_realtime_max_users(
     hi = max(best, high - 1)
     while lo <= hi:
         mid = (lo + hi) // 2
-        result = compute_realtime_capacity(m, decode_strat, mid, g, mu, profiled_non_kv_gb, prec, eff)
+        result = compute_realtime_capacity(
+            m, decode_strat, mid, g, mu, profiled_non_kv_gb, prec, eff
+        )
         if result is not None and result.realtime_factor >= 1.0:
             best = mid
             lo = mid + 1
@@ -2000,11 +2143,16 @@ def _spec_chart_selection(state, am, model: Model) -> tuple[Optional[SpecRuntime
     auto = method != "off" and getattr(am, "spec_k", 0) == 0
     selection = spec_optimization_for(state, am, model) if auto else None
     runtime = (
-        selection.runtime if selection is not None and selection.beneficial
-        else None if selection is not None
+        selection.runtime
+        if selection is not None and selection.beneficial
+        else None
+        if selection is not None
         else resolve_spec_runtime(
-            model, method, getattr(am, "spec_k", 0),
-            getattr(state, "spec_acceptance", 0.0), am.prec,
+            model,
+            method,
+            getattr(am, "spec_k", 0),
+            getattr(state, "spec_acceptance", 0.0),
+            am.prec,
         )
     )
     disclosed_runtime = selection.runtime if selection is not None else runtime
@@ -2013,9 +2161,9 @@ def _spec_chart_selection(state, am, model: Model) -> tuple[Optional[SpecRuntime
         "spec_k": disclosed_runtime.k if disclosed_runtime is not None else 0,
         "spec_alpha": disclosed_runtime.alpha if disclosed_runtime is not None else 0.0,
         "spec_auto": auto,
-        "spec_speedup": selection.speedup if selection is not None else (
-            disclosed_runtime.probe_speedup if disclosed_runtime is not None else 1.0
-        ),
+        "spec_speedup": selection.speedup
+        if selection is not None
+        else (disclosed_runtime.probe_speedup if disclosed_runtime is not None else 1.0),
         "spec_beneficial": selection.beneficial if selection is not None else runtime is not None,
         "spec_probe_concurrency": selection.probe_concurrency if selection is not None else 0,
         "spec_reason": selection.reason if selection is not None else "",
@@ -2046,7 +2194,10 @@ def _embedding_doc_dist_for_state(state) -> list[int]:
         return dist
 
     seq_len = max(int(getattr(state, "task_il", 2048) or 2048), 1)
-    nearest = min(range(len(EMBEDDING_DOC_BUCKETS)), key=lambda i: abs(EMBEDDING_DOC_BUCKETS[i].length - seq_len))
+    nearest = min(
+        range(len(EMBEDDING_DOC_BUCKETS)),
+        key=lambda i: abs(EMBEDDING_DOC_BUCKETS[i].length - seq_len),
+    )
     fallback = [0] * len(EMBEDDING_DOC_BUCKETS)
     fallback[nearest] = 100
     return fallback
@@ -2211,7 +2362,9 @@ def spec_optimization_for(state, am, m: Model) -> SpecOptimization:
         gp = state.find_gpu(am.gpu_uid) if hasattr(state, "find_gpu") else None
         gpu = gp.gpu if gp is not None else None
     if gpu is None:
-        return SpecOptimization(None, 0, 1.0, False, "GPU unavailable", SPEC_AUTO_K_PROBE_CONCURRENCY)
+        return SpecOptimization(
+            None, 0, 1.0, False, "GPU unavailable", SPEC_AUTO_K_PROBE_CONCURRENCY
+        )
     return optimize_spec_k(
         m,
         getattr(am, "spec_method", "off"),
@@ -2277,7 +2430,7 @@ def _user_exp_curve(
     decode_eff: EfficiencyParams,
     spec: Optional[SpecRuntime] = None,
 ) -> list[dict]:
-    points = []
+    points: list[dict] = []
     for users in USER_EXP_SWEEP:
         result = compute_user_experience(
             m,
@@ -2347,7 +2500,9 @@ def _sample_user_exp_curve(points: list[dict], target_rps: float) -> Optional[di
     }
 
 
-def chart_decode(state, batch_sizes: Optional[list[int]] = None, panel_suffix: str = "") -> list[dict]:
+def chart_decode(
+    state, batch_sizes: Optional[list[int]] = None, panel_suffix: str = ""
+) -> list[dict]:
     from placement import get_deployed
 
     datasets = []
@@ -2380,25 +2535,29 @@ def chart_decode(state, batch_sizes: Optional[list[int]] = None, panel_suffix: s
                 eff,
                 spec,
             )
-            pts.append({
-                "x": bs,
-                "y": result.tps if result else None,
+            pts.append(
+                {
+                    "x": bs,
+                    "y": result.tps if result else None,
+                    **spec_meta,
+                    "spec_speedup": result.spec_speedup if result else spec_meta["spec_speedup"],
+                }
+            )
+        datasets.append(
+            {
+                "label": _label(am, model, panel_suffix, include_prefill=True, spec_meta=spec_meta),
+                "data": pts,
                 **spec_meta,
-                "spec_speedup": result.spec_speedup if result else spec_meta["spec_speedup"],
-            })
-        datasets.append({
-            "label": _label(am, model, panel_suffix, include_prefill=True, spec_meta=spec_meta),
-            "data": pts,
-            **spec_meta,
-            "borderColor": model.color,
-            "backgroundColor": model.color + "12",
-            "borderWidth": 1.5 if is_b else 2,
-            "borderDash": [5, 3] if is_b else [],
-            "fill": not is_b,
-            "tension": 0.3,
-            "pointRadius": 2.5,
-            "spanGaps": False,
-        })
+                "borderColor": model.color,
+                "backgroundColor": model.color + "12",
+                "borderWidth": 1.5 if is_b else 2,
+                "borderDash": [5, 3] if is_b else [],
+                "fill": not is_b,
+                "tension": 0.3,
+                "pointRadius": 2.5,
+                "spanGaps": False,
+            }
+        )
     return datasets
 
 
@@ -2435,27 +2594,36 @@ def chart_pareto(state, panel_suffix: str = "") -> list[dict]:
                 spec,
             )
             if result:
-                pts.append({
-                    "x": result.lat, "y": result.tps, "bs": bs,
-                    **spec_meta, "spec_speedup": result.spec_speedup,
-                })
+                pts.append(
+                    {
+                        "x": result.lat,
+                        "y": result.tps,
+                        "bs": bs,
+                        **spec_meta,
+                        "spec_speedup": result.spec_speedup,
+                    }
+                )
         if pts:
-            datasets.append({
-                "label": _label(am, model, panel_suffix, spec_meta=spec_meta),
-                "data": pts,
-                **spec_meta,
-                "borderColor": model.color,
-                "backgroundColor": model.color + "AA",
-                "borderWidth": 1.5 if is_b else 2,
-                "borderDash": [5, 3] if is_b else [],
-                "showLine": True,
-                "tension": 0.3,
-                "pointRadius": 3.5,
-            })
+            datasets.append(
+                {
+                    "label": _label(am, model, panel_suffix, spec_meta=spec_meta),
+                    "data": pts,
+                    **spec_meta,
+                    "borderColor": model.color,
+                    "backgroundColor": model.color + "AA",
+                    "borderWidth": 1.5 if is_b else 2,
+                    "borderDash": [5, 3] if is_b else [],
+                    "showLine": True,
+                    "tension": 0.3,
+                    "pointRadius": 3.5,
+                }
+            )
     return datasets
 
 
-def chart_user_pareto(state, batch_sizes: Optional[list[int]] = None, panel_suffix: str = "") -> list[dict]:
+def chart_user_pareto(
+    state, batch_sizes: Optional[list[int]] = None, panel_suffix: str = ""
+) -> list[dict]:
     from placement import get_deployed
 
     datasets = []
@@ -2489,32 +2657,38 @@ def chart_user_pareto(state, batch_sizes: Optional[list[int]] = None, panel_suff
                 spec,
             )
             if result:
-                pts.append({
-                    "x": users,
-                    "y": round((result.tps / users) * 100) / 100,
-                    "users": users,
-                    "total_tps": result.tps,
-                    "lat": result.lat,
-                    "spec_speedup": result.spec_speedup,
-                    **{k: v for k, v in spec_meta.items() if k != "spec_speedup"},
-                })
+                pts.append(
+                    {
+                        "x": users,
+                        "y": round((result.tps / users) * 100) / 100,
+                        "users": users,
+                        "total_tps": result.tps,
+                        "lat": result.lat,
+                        "spec_speedup": result.spec_speedup,
+                        **{k: v for k, v in spec_meta.items() if k != "spec_speedup"},
+                    }
+                )
         if pts:
-            datasets.append({
-                "label": _label(am, model, panel_suffix, spec_meta=spec_meta),
-                "data": pts,
-                **spec_meta,
-                "borderColor": model.color,
-                "backgroundColor": model.color + "AA",
-                "borderWidth": 1.5 if is_b else 2,
-                "borderDash": [5, 3] if is_b else [],
-                "showLine": True,
-                "tension": 0.3,
-                "pointRadius": 3.5,
-            })
+            datasets.append(
+                {
+                    "label": _label(am, model, panel_suffix, spec_meta=spec_meta),
+                    "data": pts,
+                    **spec_meta,
+                    "borderColor": model.color,
+                    "backgroundColor": model.color + "AA",
+                    "borderWidth": 1.5 if is_b else 2,
+                    "borderDash": [5, 3] if is_b else [],
+                    "showLine": True,
+                    "tension": 0.3,
+                    "pointRadius": 3.5,
+                }
+            )
     return datasets
 
 
-def chart_aggregate(state, batch_sizes: Optional[list[int]] = None, panel_suffix: str = "") -> list[dict]:
+def chart_aggregate(
+    state, batch_sizes: Optional[list[int]] = None, panel_suffix: str = ""
+) -> list[dict]:
     from placement import get_deployed
 
     datasets = []
@@ -2551,19 +2725,21 @@ def chart_aggregate(state, batch_sizes: Optional[list[int]] = None, panel_suffix
             if result:
                 total += result.tps
         agg.append({"x": bs, "y": total or None})
-    datasets.append({
-        "label": f"Node total{panel_suffix}",
-        "data": agg,
-        "borderColor": "#ddd",
-        "backgroundColor": "rgba(255,255,255,0.04)",
-        "borderWidth": 2.5,
-        "borderDash": [5, 3] if is_b else [],
-        "fill": not is_b,
-        "tension": 0.3,
-        "pointRadius": 2.5,
-        "spanGaps": False,
-        "_isAggregate": True,
-    })
+    datasets.append(
+        {
+            "label": f"Node total{panel_suffix}",
+            "data": agg,
+            "borderColor": "#ddd",
+            "backgroundColor": "rgba(255,255,255,0.04)",
+            "borderWidth": 2.5,
+            "borderDash": [5, 3] if is_b else [],
+            "fill": not is_b,
+            "tension": 0.3,
+            "pointRadius": 2.5,
+            "spanGaps": False,
+            "_isAggregate": True,
+        }
+    )
 
     for am in deployed:
         model = am.model
@@ -2590,21 +2766,25 @@ def chart_aggregate(state, batch_sizes: Optional[list[int]] = None, panel_suffix
                 spec_runtime_for(state, am, model),
             )
             pts.append({"x": bs, "y": result.tps if result else None})
-        datasets.append({
-            "label": f"{model.name}{panel_suffix}",
-            "data": pts,
-            "borderColor": model.color + ("44" if is_b else "77"),
-            "borderWidth": 1,
-            "borderDash": [4, 2] if is_b else [],
-            "fill": False,
-            "tension": 0.3,
-            "pointRadius": 1.5,
-            "spanGaps": False,
-        })
+        datasets.append(
+            {
+                "label": f"{model.name}{panel_suffix}",
+                "data": pts,
+                "borderColor": model.color + ("44" if is_b else "77"),
+                "borderWidth": 1,
+                "borderDash": [4, 2] if is_b else [],
+                "fill": False,
+                "tension": 0.3,
+                "pointRadius": 1.5,
+                "spanGaps": False,
+            }
+        )
     return datasets
 
 
-def chart_data_processing(state, batch_sizes: Optional[list[int]] = None, panel_suffix: str = "") -> list[dict]:
+def chart_data_processing(
+    state, batch_sizes: Optional[list[int]] = None, panel_suffix: str = ""
+) -> list[dict]:
     datasets = []
     is_b = panel_suffix != ""
     il, ol = state.task_il, state.task_ol
@@ -2633,18 +2813,20 @@ def chart_data_processing(state, batch_sizes: Optional[list[int]] = None, panel_
                 spec_runtime_for(state, am, model),
             )
             pts.append({"x": bs, "y": result.tps if result else None})
-        datasets.append({
-            "label": _label(am, model, panel_suffix),
-            "data": pts,
-            "borderColor": model.color,
-            "backgroundColor": model.color + "12",
-            "borderWidth": 1.5 if is_b else 2,
-            "borderDash": [5, 3] if is_b else [],
-            "fill": not is_b,
-            "tension": 0.3,
-            "pointRadius": 2.5,
-            "spanGaps": False,
-        })
+        datasets.append(
+            {
+                "label": _label(am, model, panel_suffix),
+                "data": pts,
+                "borderColor": model.color,
+                "backgroundColor": model.color + "12",
+                "borderWidth": 1.5 if is_b else 2,
+                "borderDash": [5, 3] if is_b else [],
+                "fill": not is_b,
+                "tension": 0.3,
+                "pointRadius": 2.5,
+                "spanGaps": False,
+            }
+        )
 
     agg = []
     for bs in batch_sizes:
@@ -2672,22 +2854,26 @@ def chart_data_processing(state, batch_sizes: Optional[list[int]] = None, panel_
             if result:
                 total += result.tps
         agg.append({"x": bs, "y": total or None})
-    datasets.append({
-        "label": f"Node total{panel_suffix}",
-        "data": agg,
-        "borderColor": "#ddd",
-        "borderWidth": 2,
-        "borderDash": [5, 3],
-        "fill": False,
-        "tension": 0.3,
-        "pointRadius": 1.5,
-        "spanGaps": False,
-        "_isAggregate": True,
-    })
+    datasets.append(
+        {
+            "label": f"Node total{panel_suffix}",
+            "data": agg,
+            "borderColor": "#ddd",
+            "borderWidth": 2,
+            "borderDash": [5, 3],
+            "fill": False,
+            "tension": 0.3,
+            "pointRadius": 1.5,
+            "spanGaps": False,
+            "_isAggregate": True,
+        }
+    )
     return datasets
 
 
-def chart_embedding_throughput(state, batch_sizes: Optional[list[int]] = None, panel_suffix: str = "") -> list[dict]:
+def chart_embedding_throughput(
+    state, batch_sizes: Optional[list[int]] = None, panel_suffix: str = ""
+) -> list[dict]:
     datasets = []
     is_b = panel_suffix != ""
     batch_sizes = batch_sizes or EMBEDDING_BATCH_SIZES
@@ -2715,46 +2901,52 @@ def chart_embedding_throughput(state, batch_sizes: Optional[list[int]] = None, p
                 state.prefill_efficiency,
             )
             if result is None:
-                pts.append({
-                    "x": bs,
-                    "y": None,
-                    "seq_len": round(stats.mean_seq_len),
-                    "p50_seq_len": stats.p50_seq_len,
-                    "p90_seq_len": stats.p90_seq_len,
-                    "p99_seq_len": stats.p99_seq_len,
-                    "mode": profile.mode_label,
-                    "max_batch": 0,
-                })
+                pts.append(
+                    {
+                        "x": bs,
+                        "y": None,
+                        "seq_len": round(stats.mean_seq_len),
+                        "p50_seq_len": stats.p50_seq_len,
+                        "p90_seq_len": stats.p90_seq_len,
+                        "p99_seq_len": stats.p99_seq_len,
+                        "mode": profile.mode_label,
+                        "max_batch": 0,
+                    }
+                )
                 continue
-            pts.append({
-                "x": bs,
-                "y": result.rps,
-                "rps": result.rps,
-                "tps": result.tps,
-                "vectors_per_second": result.vectors_per_second,
-                "vectors_per_input": result.vectors_per_input,
-                "output_mb_s": result.output_mb_s,
-                "seq_len": result.seq_len,
-                "p50_seq_len": result.p50_seq_len,
-                "p90_seq_len": result.p90_seq_len,
-                "p99_seq_len": result.p99_seq_len,
-                "mode": profile.mode_label,
-                "max_batch": result.max_batch,
-            })
+            pts.append(
+                {
+                    "x": bs,
+                    "y": result.rps,
+                    "rps": result.rps,
+                    "tps": result.tps,
+                    "vectors_per_second": result.vectors_per_second,
+                    "vectors_per_input": result.vectors_per_input,
+                    "output_mb_s": result.output_mb_s,
+                    "seq_len": result.seq_len,
+                    "p50_seq_len": result.p50_seq_len,
+                    "p90_seq_len": result.p90_seq_len,
+                    "p99_seq_len": result.p99_seq_len,
+                    "mode": profile.mode_label,
+                    "max_batch": result.max_batch,
+                }
+            )
 
-        datasets.append({
-            "label": _label(am, model, panel_suffix, include_prefill=True),
-            "data": pts,
-            "borderColor": model.color,
-            "backgroundColor": model.color + "12",
-            "borderWidth": 1.5 if is_b else 2,
-            "borderDash": [5, 3] if is_b else [],
-            "fill": False,
-            "tension": 0.3,
-            "pointRadius": 2.5,
-            "spanGaps": False,
-            "_isEmbedding": True,
-        })
+        datasets.append(
+            {
+                "label": _label(am, model, panel_suffix, include_prefill=True),
+                "data": pts,
+                "borderColor": model.color,
+                "backgroundColor": model.color + "12",
+                "borderWidth": 1.5 if is_b else 2,
+                "borderDash": [5, 3] if is_b else [],
+                "fill": False,
+                "tension": 0.3,
+                "pointRadius": 2.5,
+                "spanGaps": False,
+                "_isEmbedding": True,
+            }
+        )
     return datasets
 
 
@@ -2824,10 +3016,13 @@ def chart_embedding_quality(state, panel_suffix: str = "") -> list[dict]:
             "max_batch": best.max_batch,
             "mode": profile.mode_label,
             "quality": quality,
-            "quality_metric": "Decontaminated BEIR nDCG@10" if uses_decontaminated_beir else "Published retrieval nDCG@10 fallback",
+            "quality_metric": "Decontaminated BEIR nDCG@10"
+            if uses_decontaminated_beir
+            else "Published retrieval nDCG@10 fallback",
             "source": (
                 EMBEDDING_DECONTAMINATED_BEIR_SOURCES.get(model.key, "")
-                if uses_decontaminated_beir else EMBEDDING_QUALITY_SOURCES.get(model.key, "")
+                if uses_decontaminated_beir
+                else EMBEDDING_QUALITY_SOURCES.get(model.key, "")
             ),
             "published_quality": fallback_quality,
             "published_quality_source": EMBEDDING_QUALITY_SOURCES.get(model.key, ""),
@@ -2837,25 +3032,29 @@ def chart_embedding_quality(state, panel_suffix: str = "") -> list[dict]:
             "placeholder": is_placeholder,
         }
 
-        datasets.append({
-            "label": _label(am, model, panel_suffix, include_prefill=True),
-            "data": [point],
-            "borderColor": model.color,
-            "backgroundColor": (model.color + "12") if is_placeholder else (model.color + "AA"),
-            "borderWidth": 1.5 if is_b else 2,
-            "borderDash": [5, 3] if is_b else [],
-            "showLine": False,
-            "fill": False,
-            "tension": 0,
-            "pointRadius": 5,
-            "spanGaps": False,
-            "_isEmbeddingQuality": True,
-            "_placeholder": is_placeholder,
-        })
+        datasets.append(
+            {
+                "label": _label(am, model, panel_suffix, include_prefill=True),
+                "data": [point],
+                "borderColor": model.color,
+                "backgroundColor": (model.color + "12") if is_placeholder else (model.color + "AA"),
+                "borderWidth": 1.5 if is_b else 2,
+                "borderDash": [5, 3] if is_b else [],
+                "showLine": False,
+                "fill": False,
+                "tension": 0,
+                "pointRadius": 5,
+                "spanGaps": False,
+                "_isEmbeddingQuality": True,
+                "_placeholder": is_placeholder,
+            }
+        )
     return datasets
 
 
-def embedding_quality_axis_range(datasets: list[dict], margin_ratio: float = 0.08, min_margin: float = 0.01) -> dict[str, float]:
+def embedding_quality_axis_range(
+    datasets: list[dict], margin_ratio: float = 0.08, min_margin: float = 0.01
+) -> dict[str, float]:
     values: list[float] = []
     for dataset in datasets:
         for point in dataset.get("data", []):
@@ -2879,7 +3078,9 @@ def embedding_quality_axis_range(datasets: list[dict], margin_ratio: float = 0.0
     }
 
 
-def chart_processing_pareto(state, batch_sizes: Optional[list[int]] = None, panel_suffix: str = "") -> list[dict]:
+def chart_processing_pareto(
+    state, batch_sizes: Optional[list[int]] = None, panel_suffix: str = ""
+) -> list[dict]:
     datasets = []
     is_b = panel_suffix != ""
     batch_sizes = batch_sizes or DATA_BATCH_SIZES
@@ -2914,29 +3115,33 @@ def chart_processing_pareto(state, batch_sizes: Optional[list[int]] = None, pane
                 if result:
                     total_tps += result.tps
             total_rps = (total_tps / tokens_per_req) if tokens_per_req > 0 else 0.0
-            pts.append({
-                "x": bs,
-                "y": round(total_rps * 100) / 100 if total_tps else None,
-                "rps": round(total_rps * 100) / 100 if total_tps else None,
-                "tps": total_tps or None,
-                "in_len": in_len,
-                "out_len": out_len,
-                "workload": preset_name,
-            })
+            pts.append(
+                {
+                    "x": bs,
+                    "y": round(total_rps * 100) / 100 if total_tps else None,
+                    "rps": round(total_rps * 100) / 100 if total_tps else None,
+                    "tps": total_tps or None,
+                    "in_len": in_len,
+                    "out_len": out_len,
+                    "workload": preset_name,
+                }
+            )
 
         color = PROCESSING_PARETO_COLORS[idx % len(PROCESSING_PARETO_COLORS)]
-        datasets.append({
-            "label": f"{preset_name}{panel_suffix}",
-            "data": pts,
-            "borderColor": color,
-            "backgroundColor": color + "12",
-            "borderWidth": 1.5 if is_b else 2,
-            "borderDash": [5, 3] if is_b else [],
-            "fill": False,
-            "tension": 0.3,
-            "pointRadius": 2.5,
-            "spanGaps": False,
-        })
+        datasets.append(
+            {
+                "label": f"{preset_name}{panel_suffix}",
+                "data": pts,
+                "borderColor": color,
+                "backgroundColor": color + "12",
+                "borderWidth": 1.5 if is_b else 2,
+                "borderDash": [5, 3] if is_b else [],
+                "fill": False,
+                "tension": 0.3,
+                "pointRadius": 2.5,
+                "spanGaps": False,
+            }
+        )
     return datasets
 
 
@@ -2963,22 +3168,26 @@ def chart_user_experience(state, panel_suffix: str = "") -> list[dict]:
             state.decode_efficiency,
             spec_runtime_for(state, am, model),
         )
-        datasets.append({
-            "label": _label(am, model, panel_suffix, include_prefill=True),
-            "data": points,
-            "borderColor": model.color,
-            "borderWidth": 1.5 if is_b else 2,
-            "borderDash": [5, 3] if is_b else [],
-            "fill": False,
-            "tension": 0.3,
-            "pointRadius": 3,
-            "showLine": True,
-            "spanGaps": False,
-        })
+        datasets.append(
+            {
+                "label": _label(am, model, panel_suffix, include_prefill=True),
+                "data": points,
+                "borderColor": model.color,
+                "borderWidth": 1.5 if is_b else 2,
+                "borderDash": [5, 3] if is_b else [],
+                "fill": False,
+                "tension": 0.3,
+                "pointRadius": 3,
+                "showLine": True,
+                "spanGaps": False,
+            }
+        )
     return datasets
 
 
-def chart_realtime_capacity(state, batch_sizes: Optional[list[int]] = None, panel_suffix: str = "") -> list[dict]:
+def chart_realtime_capacity(
+    state, batch_sizes: Optional[list[int]] = None, panel_suffix: str = ""
+) -> list[dict]:
     datasets = []
     is_b = panel_suffix != ""
     batch_sizes = batch_sizes or REALTIME_USER_SWEEP
@@ -3011,42 +3220,48 @@ def chart_realtime_capacity(state, batch_sizes: Optional[list[int]] = None, pane
                 state.decode_efficiency,
             )
             if result is None:
-                pts.append({
-                    "x": users,
-                    "y": None,
-                    "users": users,
-                    "max_users": max_users,
-                    "required_tps": profile.tokens_per_second,
-                    "target_delay_ms": profile.target_delay_ms,
-                })
+                pts.append(
+                    {
+                        "x": users,
+                        "y": None,
+                        "users": users,
+                        "max_users": max_users,
+                        "required_tps": profile.tokens_per_second,
+                        "target_delay_ms": profile.target_delay_ms,
+                    }
+                )
                 continue
 
-            pts.append({
-                "x": users,
-                "y": result.realtime_factor,
-                "users": users,
-                "max_users": max_users,
-                "per_user_tps": result.per_user_tps,
-                "required_tps": result.required_tps,
-                "total_tps": result.total_tps,
-                "step_ms": result.step_ms,
-                "max_slots": result.max_slots,
-                "target_delay_ms": profile.target_delay_ms,
-            })
+            pts.append(
+                {
+                    "x": users,
+                    "y": result.realtime_factor,
+                    "users": users,
+                    "max_users": max_users,
+                    "per_user_tps": result.per_user_tps,
+                    "required_tps": result.required_tps,
+                    "total_tps": result.total_tps,
+                    "step_ms": result.step_ms,
+                    "max_slots": result.max_slots,
+                    "target_delay_ms": profile.target_delay_ms,
+                }
+            )
         if pts:
-            datasets.append({
-                "label": _label(am, model, panel_suffix),
-                "data": pts,
-                "borderColor": model.color,
-                "backgroundColor": model.color + "12",
-                "borderWidth": 1.5 if is_b else 2,
-                "borderDash": [5, 3] if is_b else [],
-                "fill": False,
-                "tension": 0.3,
-                "pointRadius": 2.5,
-                "spanGaps": False,
-                "_isRealtime": True,
-            })
+            datasets.append(
+                {
+                    "label": _label(am, model, panel_suffix),
+                    "data": pts,
+                    "borderColor": model.color,
+                    "backgroundColor": model.color + "12",
+                    "borderWidth": 1.5 if is_b else 2,
+                    "borderDash": [5, 3] if is_b else [],
+                    "fill": False,
+                    "tension": 0.3,
+                    "pointRadius": 2.5,
+                    "spanGaps": False,
+                    "_isRealtime": True,
+                }
+            )
     return datasets
 
 
@@ -3088,39 +3303,45 @@ def chart_asr_quality(state, panel_suffix: str = "") -> list[dict]:
             wer = wer_by_language.get(language)
             if wer is None:
                 continue
-            pts.append({
-                "x": wer,
-                "y": max_users,
-                "language": ASR_WER_LANGUAGE_LABELS.get(language, language),
-                "source": sources.get(language, ""),
-                "wer": wer,
-                "max_users": max_users,
-                "placeholder": is_placeholder,
-                "asr_mode": "streaming" if getattr(profile, "streaming", True) else "non-streaming",
-            })
+            pts.append(
+                {
+                    "x": wer,
+                    "y": max_users,
+                    "language": ASR_WER_LANGUAGE_LABELS.get(language, language),
+                    "source": sources.get(language, ""),
+                    "wer": wer,
+                    "max_users": max_users,
+                    "placeholder": is_placeholder,
+                    "asr_mode": "streaming"
+                    if getattr(profile, "streaming", True)
+                    else "non-streaming",
+                }
+            )
         if not pts:
             continue
-        pts.sort(key=lambda p: p["x"])
+        pts.sort(key=lambda p: cast(float, p["x"]))
 
-        datasets.append({
-            "label": _label(am, model, panel_suffix),
-            "data": pts,
-            "borderColor": model.color,
-            "backgroundColor": (model.color + "12") if is_placeholder else (model.color + "AA"),
-            "borderWidth": 1.5 if is_b else 2,
-            "borderDash": [5, 3] if is_b else [],
-            "showLine": True,
-            "fill": False,
-            "tension": 0,
-            "pointRadius": 5,
-            "spanGaps": False,
-            "_isAsrQuality": True,
-            "_placeholder": is_placeholder,
-            "_asrStreaming": bool(getattr(profile, "streaming", True)),
-            "_modelKey": model.key,
-            "_assignmentUid": am.uid,
-            "_seriesId": f"asrquality:{'b' if is_b else 'a'}:{am.uid}:{model.key}",
-        })
+        datasets.append(
+            {
+                "label": _label(am, model, panel_suffix),
+                "data": pts,
+                "borderColor": model.color,
+                "backgroundColor": (model.color + "12") if is_placeholder else (model.color + "AA"),
+                "borderWidth": 1.5 if is_b else 2,
+                "borderDash": [5, 3] if is_b else [],
+                "showLine": True,
+                "fill": False,
+                "tension": 0,
+                "pointRadius": 5,
+                "spanGaps": False,
+                "_isAsrQuality": True,
+                "_placeholder": is_placeholder,
+                "_asrStreaming": bool(getattr(profile, "streaming", True)),
+                "_modelKey": model.key,
+                "_assignmentUid": am.uid,
+                "_seriesId": f"asrquality:{'b' if is_b else 'a'}:{am.uid}:{model.key}",
+            }
+        )
     return datasets
 
 
@@ -3193,26 +3414,30 @@ def compute_user_exp_table(state) -> list[dict]:
         if not points:
             continue
         peak = points[-1]
-        cells = []
+        cells: list[dict | None] = []
         for frac in USER_EXP_FRACTIONS:
             sample = _sample_user_exp_curve(points, peak["arrival_rps"] * frac)
             if sample is None:
                 cells.append(None)
                 continue
-            cells.append({
-                "lat": round(sample["decode_step_ms"], 1),
-                "resp_s": round(sample["response_s"], 2),
-                "ttft_ms": round(sample["ttft_ms"], 1),
-            })
-        rows.append({
-            "model": model,
-            "config": f"{strategy_label(am.tp, am.pp, am.dp)} {am.prec.upper()}",
-            "prec": am.prec,
-            "peak_rps": round(peak["arrival_rps"] * 100) / 100,
-            "peak_resp_s": round(peak["response_s"] * 100) / 100,
-            "peak_inflight": round(peak["inflight"], 1),
-            "cells": cells,
-        })
+            cells.append(
+                {
+                    "lat": round(sample["decode_step_ms"], 1),
+                    "resp_s": round(sample["response_s"], 2),
+                    "ttft_ms": round(sample["ttft_ms"], 1),
+                }
+            )
+        rows.append(
+            {
+                "model": model,
+                "config": f"{strategy_label(am.tp, am.pp, am.dp)} {am.prec.upper()}",
+                "prec": am.prec,
+                "peak_rps": round(peak["arrival_rps"] * 100) / 100,
+                "peak_resp_s": round(peak["response_s"] * 100) / 100,
+                "peak_inflight": round(peak["inflight"], 1),
+                "cells": cells,
+            }
+        )
     return rows
 
 
@@ -3236,8 +3461,8 @@ def _project_workload_profile(project, fallback: dict) -> dict:
     """
     in_preset = DIST_PRESETS.get(getattr(project, "in_pre", "")) or DIST_PRESETS["Chat"]
     out_preset = DIST_PRESETS.get(getattr(project, "out_pre", "")) or DIST_PRESETS["Chat"]
-    in_len = avg_dist(in_preset["in"], INPUT_BUCKETS)
-    out_len = avg_dist(out_preset["out"], OUTPUT_BUCKETS)
+    in_len: float = avg_dist(in_preset["in"], INPUT_BUCKETS)
+    out_len: float = avg_dist(out_preset["out"], OUTPUT_BUCKETS)
     if in_len <= 0 or out_len <= 0:
         in_len = float(fallback["in_len"])
         out_len = float(fallback["out_len"])
@@ -3257,7 +3482,11 @@ def _best_deployment_result_for_model(
     batch_sizes: list[int],
     prefix_hit_rate: Optional[float] = None,
 ) -> Optional[DeploymentPeakResult]:
-    prefix_rate = state.prefix_hit_rate if prefix_hit_rate is None else min(max(float(prefix_hit_rate), 0.0), 1.0)
+    prefix_rate = (
+        state.prefix_hit_rate
+        if prefix_hit_rate is None
+        else min(max(float(prefix_hit_rate), 0.0), 1.0)
+    )
     best: Optional[DeploymentPeakResult] = None
     spec = spec_runtime_for(state, am, am.model)
     for bs in batch_sizes:
@@ -3314,7 +3543,11 @@ def _deployment_capacity_for_profile(
     """
     in_len = int(profile["in_len"])
     out_len = int(profile["out_len"])
-    prefix_rate = state.prefix_hit_rate if prefix_hit_rate is None else min(max(float(prefix_hit_rate), 0.0), 1.0)
+    prefix_rate = (
+        state.prefix_hit_rate
+        if prefix_hit_rate is None
+        else min(max(float(prefix_hit_rate), 0.0), 1.0)
+    )
     cap = compute_data_capacity(
         am.model,
         (am.prefill_tp, am.prefill_pp, am.prefill_dp),
@@ -3332,13 +3565,20 @@ def _deployment_capacity_for_profile(
     )
     batch_sizes = _batch_axis_sweep([cap], DATA_BATCH_SIZES)
     best = _best_deployment_result_for_model(
-        state, am, gpu, in_len, out_len, batch_sizes, prefix_rate,
+        state,
+        am,
+        gpu,
+        in_len,
+        out_len,
+        batch_sizes,
+        prefix_rate,
     )
     peak_rps = best.rps if best and best.rps > 0 else 0.0
     tokens_per_request = max(float(profile["tokens_per_request"]), 1.0)
     daily_tokens = (
         peak_rps * 86400.0 * tokens_per_request / max(float(peak_factor), 1.0)
-        if peak_rps > 0 else 0.0
+        if peak_rps > 0
+        else 0.0
     )
     return daily_tokens, peak_rps
 
@@ -3381,6 +3621,7 @@ def _cloud_price_per_m_in_preset(
             continue
         threshold = max(float(cloud.get("long_context_threshold_tokens", 0.0) or 0.0), 0.0)
         long_context_pricing = threshold > 0.0 and in_len > threshold
+
         def tier_price(field: str, base_field: str) -> float:
             value = cloud.get(field) if long_context_pricing else None
             return max(float(cloud[base_field] if value is None else value), 0.0)
@@ -3398,14 +3639,18 @@ def _cloud_price_per_m_in_preset(
         # success probability p consumes 1/p attempts per completed useful task.
         price_pm = sticker / (tokens_per_req / 1e6) / max(cloud_success, 1e-6)
         if best is None or price_pm < best[0]:
-            best = (price_pm, cloud | {
-                "key": key,
-                "success_rate": cloud_success,
-                "long_context_pricing_applied": long_context_pricing,
-                "effective_in_per_m": input_price,
-                "effective_cached_in_per_m": cached_input_price,
-                "effective_out_per_m": output_price,
-            })
+            best = (
+                price_pm,
+                cloud
+                | {
+                    "key": key,
+                    "success_rate": cloud_success,
+                    "long_context_pricing_applied": long_context_pricing,
+                    "effective_in_per_m": input_price,
+                    "effective_cached_in_per_m": cached_input_price,
+                    "effective_out_per_m": output_price,
+                },
+            )
 
     if best is None:
         return None, math.inf
@@ -3469,12 +3714,17 @@ def _build_model_supply(state, profile, prefix_hit_rate, peak_factor_eff) -> lis
     tokens_per_req = max(1.0, profile["tokens_per_request"])
     pool_rate = {gp.uid: gp.cost_per_gpu_hour * 24.0 for gp in state.gpus}
     pool_country = {gp.uid: getattr(gp, "country", DEFAULT_COUNTRY) for gp in state.gpus}
-    day_shape = DAY_SHAPES.get(getattr(state, "projection_day_shape", "workday")) or DAY_SHAPES["workday"]
-    day_weights = day_shape["weights"] or [1.0] * 24
+    day_shape = (
+        DAY_SHAPES.get(getattr(state, "projection_day_shape", "workday")) or DAY_SHAPES["workday"]
+    )
+    day_weights = cast(list[float], day_shape["weights"]) or [1.0] * 24
     night_weights = [1.0 if h in NIGHT_HOURS else 0.0 for h in range(24)]
     supply = []
     for am, gpu in _iter_resolved_models(state):
-        if getattr(am.model, "is_realtime_only", False) or getattr(am.model, "embedding_profile", None) is not None:
+        if (
+            getattr(am.model, "is_realtime_only", False)
+            or getattr(am.model, "embedding_profile", None) is not None
+        ):
             continue
         cap = compute_data_capacity(
             am.model,
@@ -3499,42 +3749,45 @@ def _build_model_supply(state, profile, prefix_hit_rate, peak_factor_eff) -> lis
         # Sustainable daily token capacity: honor peak-hour headroom so we don't promise
         # throughput the day-shape can't actually sustain without thrashing.
         daily_tokens_cap = (
-            peak_rps * 3600.0 * 24.0 * tokens_per_req / peak_factor_eff
-            if peak_rps > 0 else 0.0
+            peak_rps * 3600.0 * 24.0 * tokens_per_req / peak_factor_eff if peak_rps > 0 else 0.0
         )
         gpu_cost_day = pool_rate.get(am.gpu_uid, 0.0) * am.gpu_count
         internal_pm = (gpu_cost_day * 1e6 / daily_tokens_cap) if daily_tokens_cap > 0 else math.inf
         country = pool_country.get(am.gpu_uid, DEFAULT_COUNTRY)
         grid_day = carbon_intensity_avg(country, day_weights)
         grid_night = carbon_intensity_avg(country, night_weights)
-        supply.append({
-            "am": am,
-            "am_uid": am.uid,
-            "gpu": gpu,
-            "gpu_uid": am.gpu_uid,
-            "gpu_count": am.gpu_count,
-            "model": am.model,
-            "quality": float(am.model.quality),
-            "effective_quality": effective_quality(am.model),
-            "quality_confidence": min(max(float(getattr(am.model, "quality_confidence", 1.0)), 0.0), 1.0),
-            "token_efficiency": max(float(am.model.token_efficiency), 1e-6),
-            "peak_rps": peak_rps,
-            "daily_tokens_cap": daily_tokens_cap,
-            "remaining_cap": daily_tokens_cap,
-            "remaining_fraction": 1.0,
-            "used_fraction": 0.0,
-            "served_tokens": 0.0,
-            "gpu_cost_day": gpu_cost_day,
-            "internal_pm": internal_pm,
-            # These are accumulated with each project's own task shape while routing.
-            "served_tasks": 0.0,
-            "served_co2_g_day": 0.0,
-            "served_co2_g_night": 0.0,
-            "country": country,
-            "grid_gco2_per_kwh_day": grid_day,
-            "grid_gco2_per_kwh_night": grid_night,
-            "runnable": peak_rps > 0,
-        })
+        supply.append(
+            {
+                "am": am,
+                "am_uid": am.uid,
+                "gpu": gpu,
+                "gpu_uid": am.gpu_uid,
+                "gpu_count": am.gpu_count,
+                "model": am.model,
+                "quality": float(am.model.quality),
+                "effective_quality": effective_quality(am.model),
+                "quality_confidence": min(
+                    max(float(getattr(am.model, "quality_confidence", 1.0)), 0.0), 1.0
+                ),
+                "token_efficiency": max(float(am.model.token_efficiency), 1e-6),
+                "peak_rps": peak_rps,
+                "daily_tokens_cap": daily_tokens_cap,
+                "remaining_cap": daily_tokens_cap,
+                "remaining_fraction": 1.0,
+                "used_fraction": 0.0,
+                "served_tokens": 0.0,
+                "gpu_cost_day": gpu_cost_day,
+                "internal_pm": internal_pm,
+                # These are accumulated with each project's own task shape while routing.
+                "served_tasks": 0.0,
+                "served_co2_g_day": 0.0,
+                "served_co2_g_night": 0.0,
+                "country": country,
+                "grid_gco2_per_kwh_day": grid_day,
+                "grid_gco2_per_kwh_night": grid_night,
+                "runnable": peak_rps > 0,
+            }
+        )
     return supply
 
 
@@ -3551,10 +3804,9 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
     The returned dict powers the Internal market panel."""
     profile = _workload_profile(state)
     prefix_hit_rate = min(max(state.prefix_hit_rate, 0.0), 1.0)
-    tokens_per_req = max(1.0, profile["tokens_per_request"])
     corpo_cloud = getattr(state, "corpo_cloud", CORPO_CLOUD_DEFAULT)
     day_shape = DAY_SHAPES.get(state.projection_day_shape) or DAY_SHAPES["workday"]
-    weights = day_shape["weights"] or [1.0]
+    weights = cast(list[float], day_shape["weights"]) or [1.0]
     mean_w = sum(weights) / len(weights)
     peak_factor = (max(weights) / mean_w) if mean_w > 0 else 1.0
 
@@ -3604,10 +3856,17 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
         project_prefix_hit_rate = min(max(float(getattr(p, "prefix_hit_rate", 0.0)), 0.0), 1.0)
         project_profile = _project_workload_profile(p, profile)
         cloud_info, cloud_pm = _cloud_price_per_m_in_preset(
-            difficulty, slo, quality_floor, project_profile, project_prefix_hit_rate, corpo_cloud,
-            required_caps, quality_domain,
+            difficulty,
+            slo,
+            quality_floor,
+            project_profile,
+            project_prefix_hit_rate,
+            corpo_cloud,
+            required_caps,
+            quality_domain,
         )
         cloud_blocked = cloud_info is None
+        cloud_details = cloud_info or {}
         wtp = float(p.wtp_per_m)
         total = max(0.0, float(p.tokens_day))
 
@@ -3644,35 +3903,49 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
             retry_mult = 1.0 / max(sr, 1e-6)
             project_peak_factor = 1.0 if (night_batching and p.batch_eligible) else peak_factor
             shape_daily_cap, shape_peak_rps = _deployment_capacity_for_profile(
-                state, me["am"], me["gpu"], project_profile, project_peak_factor,
+                state,
+                me["am"],
+                me["gpu"],
+                project_profile,
+                project_peak_factor,
                 project_prefix_hit_rate,
             )
             if shape_daily_cap <= 0:
                 continue
             shape_internal_pm = me["gpu_cost_day"] * 1e6 / shape_daily_cap
             project_tpt = tokens_per_task(
-                me["model"], int(project_profile["in_len"]), int(project_profile["out_len"]),
+                me["model"],
+                int(project_profile["in_len"]),
+                int(project_profile["out_len"]),
             )
             project_tokens_per_sec = shape_peak_rps * project_tpt
-            candidates.append({
-                "me": me,
-                "success_rate": sr,
-                "retry_mult": retry_mult,
-                "token_mult": token_mult * retry_mult,
-                "shape_daily_cap": shape_daily_cap,
-                "shape_peak_rps": shape_peak_rps,
-                "shape_internal_pm": shape_internal_pm,
-                "effective_pm": shape_internal_pm * token_mult * retry_mult,
-                "tokens_per_task": project_tpt,
-                "co2_g_per_task_day": co2_g_per_task(
-                    me["gpu"], me["gpu_count"], project_tpt, project_tokens_per_sec,
-                    me["grid_gco2_per_kwh_day"],
-                ),
-                "co2_g_per_task_night": co2_g_per_task(
-                    me["gpu"], me["gpu_count"], project_tpt, project_tokens_per_sec,
-                    me["grid_gco2_per_kwh_night"],
-                ),
-            })
+            candidates.append(
+                {
+                    "me": me,
+                    "success_rate": sr,
+                    "retry_mult": retry_mult,
+                    "token_mult": token_mult * retry_mult,
+                    "shape_daily_cap": shape_daily_cap,
+                    "shape_peak_rps": shape_peak_rps,
+                    "shape_internal_pm": shape_internal_pm,
+                    "effective_pm": shape_internal_pm * token_mult * retry_mult,
+                    "tokens_per_task": project_tpt,
+                    "co2_g_per_task_day": co2_g_per_task(
+                        me["gpu"],
+                        me["gpu_count"],
+                        project_tpt,
+                        project_tokens_per_sec,
+                        me["grid_gco2_per_kwh_day"],
+                    ),
+                    "co2_g_per_task_night": co2_g_per_task(
+                        me["gpu"],
+                        me["gpu_count"],
+                        project_tpt,
+                        project_tokens_per_sec,
+                        me["grid_gco2_per_kwh_night"],
+                    ),
+                }
+            )
         candidates.sort(key=lambda c: c["effective_pm"])
 
         # Latent demand activates smoothly around the unlock price. This keeps the configured
@@ -3681,7 +3954,9 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
         latent_pool = max(0.0, float(getattr(p, "latent_jobs_day", 0.0)))
         unlock_price = float(getattr(p, "unlock_price_per_m", 0.0))
         cheapest_pm = candidates[0]["effective_pm"] if candidates else float("inf")
-        latent_activation = latent_activation_share(cheapest_pm, unlock_price) if candidates else 0.0
+        latent_activation = (
+            latent_activation_share(cheapest_pm, unlock_price) if candidates else 0.0
+        )
         latent_active = latent_pool * latent_activation
         latent_unlocked = latent_active > 1.0
         total = baseline_tokens + latent_active
@@ -3749,21 +4024,31 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
         # when cloud is blocked there's no substitute, so use WTP as the realized value.
         value_basis = wtp if cloud_blocked else cloud_pm
         # useful_t is completed work; retry cost and capacity were already charged.
-        value_served = sum((useful_t / 1e6) * value_basis for _, useful_t, _, _sr in per_model_served)
+        value_served = sum(
+            (useful_t / 1e6) * value_basis for _, useful_t, _, _sr in per_model_served
+        )
         baseline_tokens_per_task = max(float(project_profile["tokens_per_request"]), 1.0)
         tasks_served_day = served / baseline_tokens_per_task
-        co2_g_per_task_project = (co2_g_day_project / tasks_served_day) if tasks_served_day > 0 else 0.0
+        co2_g_per_task_project = (
+            (co2_g_day_project / tasks_served_day) if tasks_served_day > 0 else 0.0
+        )
         routed[p.uid] = {
             "project": p,
             "name": p.name,
             "difficulty": difficulty,
             "tokens_day": total,
             "cloud_pm": 0.0 if cloud_blocked else cloud_pm,
-            "cloud_label": "blocked — no compatible cloud" if cloud_blocked else cloud_info["label"],
-            "cloud_vendor": "" if cloud_blocked else cloud_info["vendor"],
-            "cloud_regions": () if cloud_blocked else cloud_info.get("regions", ()),
-            "cloud_grid_gco2_per_kwh": 0.0 if cloud_blocked else cloud_info.get("grid_gco2_per_kwh", 0.0),
-            "cloud_price_source": "" if cloud_blocked else cloud_info.get("price_source", "catalog"),
+            "cloud_label": "blocked — no compatible cloud"
+            if cloud_blocked
+            else cloud_details["label"],
+            "cloud_vendor": "" if cloud_blocked else cloud_details["vendor"],
+            "cloud_regions": () if cloud_blocked else cloud_details.get("regions", ()),
+            "cloud_grid_gco2_per_kwh": 0.0
+            if cloud_blocked
+            else cloud_details.get("grid_gco2_per_kwh", 0.0),
+            "cloud_price_source": ""
+            if cloud_blocked
+            else cloud_details.get("price_source", "catalog"),
             "cloud_blocked": cloud_blocked,
             "served": served,
             "spilled": spilled,
@@ -3829,8 +4114,8 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
                     ),
                     "quality_anchor": " · ".join(
                         (
-                            model_domain_anchor(me["model"], domain).benchmark
-                            if model_domain_anchor(me["model"], domain) is not None
+                            anchor.benchmark
+                            if (anchor := model_domain_anchor(me["model"], domain)) is not None
                             else f"{QUALITY_DOMAIN_LABELS[domain]} global fallback"
                         )
                         for domain in quality_weights
@@ -3842,8 +4127,8 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
                             "weight": weight,
                             "effective_quality": effective_quality(me["model"], domain),
                             "benchmark": (
-                                model_domain_anchor(me["model"], domain).benchmark
-                                if model_domain_anchor(me["model"], domain) is not None
+                                anchor.benchmark
+                                if (anchor := model_domain_anchor(me["model"], domain)) is not None
                                 else "Global quality fallback"
                             ),
                             "anchored": model_domain_anchor(me["model"], domain) is not None,
@@ -3899,8 +4184,10 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
     total_actual_served = sum(me["served_tokens"] for me in supply)
     total_gpu_weight = sum(max(me["gpu_count"], 0) for me in supply)
     time_utilization = (
-        sum(me.get("used_fraction", 0.0) * max(me["gpu_count"], 0) for me in supply) / total_gpu_weight
-        if total_gpu_weight > 0 else 0.0
+        sum(me.get("used_fraction", 0.0) * max(me["gpu_count"], 0) for me in supply)
+        / total_gpu_weight
+        if total_gpu_weight > 0
+        else 0.0
     )
     for me in supply:
         cap = me["daily_tokens_cap"]
@@ -3910,47 +4197,54 @@ def compute_revenue_projection(state, include_recommendations: bool = True) -> d
         tpt = me["served_tokens"] / served_tasks if served_tasks > 0 else 0.0
         co2_day_g = me["served_co2_g_day"] / served_tasks if served_tasks > 0 else 0.0
         co2_night_g = me["served_co2_g_night"] / served_tasks if served_tasks > 0 else 0.0
-        model_rows.append({
-            "am_uid": me["am_uid"],
-            "model": me["model"],
-            "name": me["model"].name,
-            "color": me["model"].color,
-            "quality": me["quality"],
-            "effective_quality": me["effective_quality"],
-            "quality_confidence": me["quality_confidence"],
-            "token_efficiency": me["token_efficiency"],
-            "gpu_count": me["gpu_count"],
-            "peak_rps": me["peak_rps"],
-            "daily_tokens_cap": cap,
-            "served_tokens": me["served_tokens"],
-            "utilization": util,
-            "internal_pm": 0.0 if math.isinf(me["internal_pm"]) else me["internal_pm"],
-            "internal_input_pm": 0.0 if math.isinf(me["internal_pm"]) else me["internal_pm"],
-            "internal_output_pm": (
-                0.0 if math.isinf(me["internal_pm"])
-                else me["internal_pm"] / max(me["token_efficiency"], 1e-6)
-            ),
-            "gpu_cost_day": me["gpu_cost_day"],
-            "tokens_per_task": tpt,
-            "country": me.get("country", DEFAULT_COUNTRY),
-            "grid_gco2_per_kwh_day": me.get("grid_gco2_per_kwh_day", 0.0),
-            "grid_gco2_per_kwh_night": me.get("grid_gco2_per_kwh_night", 0.0),
-            "co2_g_per_task_day": co2_day_g,
-            "co2_g_per_task_night": co2_night_g,
-            "co2_kg_day": me["served_co2_g_day"] / 1000.0,
-            "saturated": saturated,
-            "runnable": me["runnable"],
-            "status": (
-                "NOT RUNNABLE" if not me["runnable"]
-                else "SATURATED" if saturated
-                else "IDLE" if util < 0.05
-                else "OK"
-            ),
-        })
+        model_rows.append(
+            {
+                "am_uid": me["am_uid"],
+                "model": me["model"],
+                "name": me["model"].name,
+                "color": me["model"].color,
+                "quality": me["quality"],
+                "effective_quality": me["effective_quality"],
+                "quality_confidence": me["quality_confidence"],
+                "token_efficiency": me["token_efficiency"],
+                "gpu_count": me["gpu_count"],
+                "peak_rps": me["peak_rps"],
+                "daily_tokens_cap": cap,
+                "served_tokens": me["served_tokens"],
+                "utilization": util,
+                "internal_pm": 0.0 if math.isinf(me["internal_pm"]) else me["internal_pm"],
+                "internal_input_pm": 0.0 if math.isinf(me["internal_pm"]) else me["internal_pm"],
+                "internal_output_pm": (
+                    0.0
+                    if math.isinf(me["internal_pm"])
+                    else me["internal_pm"] / max(me["token_efficiency"], 1e-6)
+                ),
+                "gpu_cost_day": me["gpu_cost_day"],
+                "tokens_per_task": tpt,
+                "country": me.get("country", DEFAULT_COUNTRY),
+                "grid_gco2_per_kwh_day": me.get("grid_gco2_per_kwh_day", 0.0),
+                "grid_gco2_per_kwh_night": me.get("grid_gco2_per_kwh_night", 0.0),
+                "co2_g_per_task_day": co2_day_g,
+                "co2_g_per_task_night": co2_night_g,
+                "co2_kg_day": me["served_co2_g_day"] / 1000.0,
+                "saturated": saturated,
+                "runnable": me["runnable"],
+                "status": (
+                    "NOT RUNNABLE"
+                    if not me["runnable"]
+                    else "SATURATED"
+                    if saturated
+                    else "IDLE"
+                    if util < 0.05
+                    else "OK"
+                ),
+            }
+        )
 
     recommendations = (
         _marginal_gpu_recommendations(state, margin_day, value_cloud, value_destroyed, total_served)
-        if include_recommendations else []
+        if include_recommendations
+        else []
     )
 
     return {
@@ -4048,8 +4342,13 @@ def _marginal_gpu_recommendations(
             sim_spec,
         )
         if not valid_strategies(
-            sim_am.model, sim_am.gpu_count, sim_gp.gpu, sim.mu,
-            sim.profiled_non_kv_gb, sim_am.prec, sim_spec,
+            sim_am.model,
+            sim_am.gpu_count,
+            sim_gp.gpu,
+            sim.mu,
+            sim.profiled_non_kv_gb,
+            sim_am.prec,
+            sim_spec,
         ):
             continue
         sim_am.tp, sim_am.pp, sim_am.dp = strategy
@@ -4062,19 +4361,23 @@ def _marginal_gpu_recommendations(
         score = margin_gain + 0.25 * cloud_reduced + 0.50 * destroyed_reduced
         if score <= 0 and margin_gain <= 0 and cloud_reduced <= 0 and destroyed_reduced <= 0:
             continue
-        rows.append({
-            "model_name": sim_am.model.name,
-            "gpu_name": sim_gp.gpu.name,
-            "gpu_uid": sim_gp.uid,
-            "am_uid": sim_am.uid,
-            "added_gpus": 1,
-            "new_gpu_count": sim_am.gpu_count,
-            "margin_gain_day": margin_gain,
-            "cloud_reduced_day": cloud_reduced,
-            "destroyed_reduced_day": destroyed_reduced,
-            "served_gain_tokens": max(0.0, projected["fates"]["served_tokens"] - base_served_tokens),
-            "score": score,
-        })
+        rows.append(
+            {
+                "model_name": sim_am.model.name,
+                "gpu_name": sim_gp.gpu.name,
+                "gpu_uid": sim_gp.uid,
+                "am_uid": sim_am.uid,
+                "added_gpus": 1,
+                "new_gpu_count": sim_am.gpu_count,
+                "margin_gain_day": margin_gain,
+                "cloud_reduced_day": cloud_reduced,
+                "destroyed_reduced_day": destroyed_reduced,
+                "served_gain_tokens": max(
+                    0.0, projected["fates"]["served_tokens"] - base_served_tokens
+                ),
+                "score": score,
+            }
+        )
 
     rows.sort(key=lambda r: (-r["score"], -r["margin_gain_day"], r["model_name"]))
     return rows[:MARGINAL_RECOMMENDATION_LIMIT]
@@ -4111,15 +4414,20 @@ def _portfolio_domain_quality(model: Model, projects) -> tuple[float, str, float
         return effective_quality(model), QUALITY_DOMAIN_LABELS["general"], 0.0
 
     total = sum(weights.values())
-    score = sum(effective_quality(model, domain) * weight for domain, weight in weights.items()) / total
-    anchored = sum(
-        weight for domain, weight in weights.items()
-        if model_domain_anchor(model, domain) is not None
-    ) / total
+    score = (
+        sum(effective_quality(model, domain) * weight for domain, weight in weights.items()) / total
+    )
+    anchored = (
+        sum(
+            weight
+            for domain, weight in weights.items()
+            if model_domain_anchor(model, domain) is not None
+        )
+        / total
+    )
     ranked = sorted(weights.items(), key=lambda item: (-item[1], item[0]))
     labels = [
-        f"{QUALITY_DOMAIN_LABELS[domain]} {weight / total:.0%}"
-        for domain, weight in ranked[:3]
+        f"{QUALITY_DOMAIN_LABELS[domain]} {weight / total:.0%}" for domain, weight in ranked[:3]
     ]
     return score, " · ".join(labels), anchored
 
@@ -4225,8 +4533,13 @@ def _marginal_model_swap_recommendations(
                 sim_am.prec = prec
                 spec = spec_runtime_for(sim, sim_am, sim_am.model)
                 if valid_strategies(
-                    sim_am.model, sim_am.gpu_count, sim_gp.gpu, sim.mu,
-                    sim.profiled_non_kv_gb, prec, spec,
+                    sim_am.model,
+                    sim_am.gpu_count,
+                    sim_gp.gpu,
+                    sim.mu,
+                    sim.profiled_non_kv_gb,
+                    prec,
+                    spec,
                 ):
                     chosen_prec = prec
                     chosen_spec = spec
@@ -4235,8 +4548,13 @@ def _marginal_model_swap_recommendations(
                 continue
             evaluated += 1
             strategy = default_strategy(
-                sim_am.model, sim_am.gpu_count, sim_gp.gpu, sim.mu,
-                sim.profiled_non_kv_gb, chosen_prec, chosen_spec,
+                sim_am.model,
+                sim_am.gpu_count,
+                sim_gp.gpu,
+                sim.mu,
+                sim.profiled_non_kv_gb,
+                chosen_prec,
+                chosen_spec,
             )
             sim_am.tp, sim_am.pp, sim_am.dp = strategy
             sim_am.prefill_tp, sim_am.prefill_pp, sim_am.prefill_dp = strategy
@@ -4251,35 +4569,39 @@ def _marginal_model_swap_recommendations(
             score = margin_gain + 0.25 * cloud_reduced + 0.50 * destroyed_reduced
             if score <= 0 and margin_gain <= 0 and cloud_reduced <= 0 and destroyed_reduced <= 0:
                 continue
-            rows.append({
-                "current_key": am.model_key,
-                "current_name": current.name,
-                "candidate_key": cand_key,
-                "candidate_name": cand.name,
-                "gpu_name": sim_gp.gpu.name,
-                "gpu_count": sim_am.gpu_count,
-                "current_quality": current_portfolio_quality,
-                "candidate_quality": candidate_portfolio_quality,
-                "current_global_quality": effective_quality(current),
-                "candidate_global_quality": effective_quality(cand),
-                "quality_mix": quality_mix,
-                "current_anchor_share": current_anchor_share,
-                "candidate_anchor_share": candidate_anchor_share,
-                "prec": chosen_prec,
-                "margin_gain_day": margin_gain,
-                "cloud_reduced_day": cloud_reduced,
-                "destroyed_reduced_day": destroyed_reduced,
-                "served_gain_tokens": max(0.0, projected["fates"]["served_tokens"] - base_served_tokens),
-                "margin_before_day": base_margin,
-                "margin_after_day": projected["margin_day"],
-                "cloud_before_day": base_cloud,
-                "cloud_after_day": projected["value_cloud_day"],
-                "destroyed_before_day": base_destroyed,
-                "destroyed_after_day": projected["value_destroyed_day"],
-                "served_before_tokens": base_served_tokens,
-                "served_after_tokens": projected["fates"]["served_tokens"],
-                "score": score,
-            })
+            rows.append(
+                {
+                    "current_key": am.model_key,
+                    "current_name": current.name,
+                    "candidate_key": cand_key,
+                    "candidate_name": cand.name,
+                    "gpu_name": sim_gp.gpu.name,
+                    "gpu_count": sim_am.gpu_count,
+                    "current_quality": current_portfolio_quality,
+                    "candidate_quality": candidate_portfolio_quality,
+                    "current_global_quality": effective_quality(current),
+                    "candidate_global_quality": effective_quality(cand),
+                    "quality_mix": quality_mix,
+                    "current_anchor_share": current_anchor_share,
+                    "candidate_anchor_share": candidate_anchor_share,
+                    "prec": chosen_prec,
+                    "margin_gain_day": margin_gain,
+                    "cloud_reduced_day": cloud_reduced,
+                    "destroyed_reduced_day": destroyed_reduced,
+                    "served_gain_tokens": max(
+                        0.0, projected["fates"]["served_tokens"] - base_served_tokens
+                    ),
+                    "margin_before_day": base_margin,
+                    "margin_after_day": projected["margin_day"],
+                    "cloud_before_day": base_cloud,
+                    "cloud_after_day": projected["value_cloud_day"],
+                    "destroyed_before_day": base_destroyed,
+                    "destroyed_after_day": projected["value_destroyed_day"],
+                    "served_before_tokens": base_served_tokens,
+                    "served_after_tokens": projected["fates"]["served_tokens"],
+                    "score": score,
+                }
+            )
 
     rows.sort(key=lambda r: (-r["score"], -r["margin_gain_day"], r["candidate_name"]))
     return rows[:MARGINAL_RECOMMENDATION_LIMIT]

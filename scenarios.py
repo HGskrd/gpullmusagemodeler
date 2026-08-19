@@ -16,10 +16,10 @@ from data import (
     INPUT_BUCKETS,
     MODELS,
     OUTPUT_BUCKETS,
-    normalize_quality_domain,
-    normalize_quality_weights,
     normalize_gpu_count,
     normalize_precision,
+    normalize_quality_domain,
+    normalize_quality_weights,
 )
 from placement import retune_models
 from state import (
@@ -74,7 +74,11 @@ def replace_use_case_defs(state: PlannerState, payload: Any) -> int:
     for idx, item in enumerate(items):
         if not isinstance(item, dict):
             raise ValueError("Each use case must be a JSON object.")
-        raw = dict(item.get("definition", item)) if isinstance(item.get("definition"), dict) else dict(item)
+        raw = (
+            dict(item.get("definition", item))
+            if isinstance(item.get("definition"), dict)
+            else dict(item)
+        )
         # Accept the earlier selected-instance export shape by folding scale into seed values.
         scale = item.get("scale") if isinstance(item.get("scale"), dict) else {}
         if "tokens_day" not in raw and "tokens_day" in scale:
@@ -83,7 +87,13 @@ def replace_use_case_defs(state: PlannerState, payload: Any) -> int:
             raw["scale_value"] = scale["value"]
         if "latent_jobs_day" not in raw and "latent_jobs_day" in scale:
             raw["latent_jobs_day"] = scale["latent_jobs_day"]
-        raw["key"] = item.get("kind_key") or item.get("key") or raw.get("key") or item.get("name") or f"use_case_{idx + 1}"
+        raw["key"] = (
+            item.get("kind_key")
+            or item.get("key")
+            or raw.get("key")
+            or item.get("name")
+            or f"use_case_{idx + 1}"
+        )
         raw["name"] = item.get("name") or raw.get("name") or raw["key"]
         normalized_item = _normalize_use_case_def(raw, fallback_key=f"use_case_{idx + 1}")
         base_key = normalized_item["key"]
@@ -123,7 +133,13 @@ def _project_definition_payload(proj: Project) -> dict:
 
 def _project_scale_payload(proj: Project) -> dict:
     return {
-        "value": float(getattr(proj, "scale_value", tokens_to_scale_value(proj.tokens_day, getattr(proj, "scale_kind", {})))),
+        "value": float(
+            getattr(
+                proj,
+                "scale_value",
+                tokens_to_scale_value(proj.tokens_day, getattr(proj, "scale_kind", {})),
+            )
+        ),
         "tokens_day": float(proj.tokens_day),
         "latent_jobs_day": float(proj.latent_jobs_day),
     }
@@ -220,7 +236,9 @@ def _project_from_payload(state: PlannerState, item: dict) -> Project:
         requires=requires,
         min_success_rate=_bounded_project_value(
             "min_success_rate",
-            _payload_float(definition, "min_success_rate", float(base.get("min_success_rate", 0.85))),
+            _payload_float(
+                definition, "min_success_rate", float(base.get("min_success_rate", 0.85))
+            ),
         ),
         quality_floor=_bounded_project_value(
             "quality_floor",
@@ -233,17 +251,24 @@ def _project_from_payload(state: PlannerState, item: dict) -> Project:
             definition.get("quality_weights", base.get("quality_weights")),
             definition.get("quality_domain", base.get("quality_domain", "general")),
         ),
-        prefix_hit_rate=min(max(
-            _payload_float(definition, "prefix_hit_rate", float(base.get("prefix_hit_rate", 0.0))),
-            0.0,
-        ), 1.0),
+        prefix_hit_rate=min(
+            max(
+                _payload_float(
+                    definition, "prefix_hit_rate", float(base.get("prefix_hit_rate", 0.0))
+                ),
+                0.0,
+            ),
+            1.0,
+        ),
         latent_jobs_day=_bounded_project_value(
             "latent_jobs_day",
             _payload_float(scale, "latent_jobs_day", float(base.get("latent_jobs_day", 0.0))),
         ),
         unlock_price_per_m=_bounded_project_value(
             "unlock_price_per_m",
-            _payload_float(definition, "unlock_price_per_m", float(base.get("unlock_price_per_m", 0.0))),
+            _payload_float(
+                definition, "unlock_price_per_m", float(base.get("unlock_price_per_m", 0.0))
+            ),
         ),
         in_pre=str(definition.get("in_pre", base.get("in_pre", "Chat"))),
         out_pre=str(definition.get("out_pre", base.get("out_pre", "Chat"))),
@@ -378,17 +403,21 @@ def deserialize_planner_state(payload: Any) -> PlannerState:
         country = str(row.get("country", "FR"))
         if country not in COUNTRIES:
             country = "FR"
-        state.gpus.append(GpuPool(
-            new_uid, gpu_type, count,
-            _scenario_float(
-                row,
-                "cost_per_gpu_hour",
-                GPUS[gpu_type].default_tco_per_gpu_hour,
-                0.0,
-                1_000_000.0,
-            ),
-            country,
-        ))
+        state.gpus.append(
+            GpuPool(
+                new_uid,
+                gpu_type,
+                count,
+                _scenario_float(
+                    row,
+                    "cost_per_gpu_hour",
+                    GPUS[gpu_type].default_tco_per_gpu_hour,
+                    0.0,
+                    1_000_000.0,
+                ),
+                country,
+            )
+        )
 
     model_rows = payload.get("models", [])
     if not isinstance(model_rows, list) or len(model_rows) > 512:
@@ -404,7 +433,10 @@ def deserialize_planner_state(payload: Any) -> PlannerState:
         available = max(0, pool.count - state.used_gpu_for_pool(pool.uid))
         gpu_count = min(_scenario_int(row, "gpu_count", 0, 0, pool.count), available)
         assignment = ModelAssignment(
-            _next_uid(), str(row["model_key"]), pool.uid, gpu_count,
+            _next_uid(),
+            str(row["model_key"]),
+            pool.uid,
+            gpu_count,
             _scenario_int(row, "tp", 1, 1, max(1, gpu_count)),
             _scenario_int(row, "dp", 1, 1, max(1, gpu_count)),
             normalize_precision(str(row.get("prec", "bf16"))),
@@ -418,15 +450,22 @@ def deserialize_planner_state(payload: Any) -> PlannerState:
         state.models.append(assignment)
 
     for key, default, lo, hi in (
-        ("mu", 0.90, 0.01, 1.0), ("profiled_non_kv_gb", 4.0, 0.0, 4096.0),
-        ("kv_slack", 0.02, 0.0, 1.0), ("moe_imbalance", 1.15, 0.1, 10.0),
+        ("mu", 0.90, 0.01, 1.0),
+        ("profiled_non_kv_gb", 4.0, 0.0, 4096.0),
+        ("kv_slack", 0.02, 0.0, 1.0),
+        ("moe_imbalance", 1.15, 0.1, 10.0),
         ("pd_interference", 0.0, 0.0, 1.0),
         ("spec_acceptance", 0.0, 0.0, 0.99),
-        ("prefill_bw_eff", 0.80, 0.01, 1.0), ("prefill_comp_eff", 0.75, 0.01, 1.0),
-        ("prefill_overhead", 0.08, 0.0, 1.0), ("prefill_paged_oh", 0.10, 0.0, 1.0),
-        ("prefill_ar_overlap", 0.30, 0.0, 1.0), ("decode_bw_eff", 0.80, 0.01, 1.0),
-        ("decode_comp_eff", 0.75, 0.01, 1.0), ("decode_overhead", 0.08, 0.0, 1.0),
-        ("decode_paged_oh", 0.10, 0.0, 1.0), ("decode_ar_overlap", 0.30, 0.0, 1.0),
+        ("prefill_bw_eff", 0.80, 0.01, 1.0),
+        ("prefill_comp_eff", 0.75, 0.01, 1.0),
+        ("prefill_overhead", 0.08, 0.0, 1.0),
+        ("prefill_paged_oh", 0.10, 0.0, 1.0),
+        ("prefill_ar_overlap", 0.30, 0.0, 1.0),
+        ("decode_bw_eff", 0.80, 0.01, 1.0),
+        ("decode_comp_eff", 0.75, 0.01, 1.0),
+        ("decode_overhead", 0.08, 0.0, 1.0),
+        ("decode_paged_oh", 0.10, 0.0, 1.0),
+        ("decode_ar_overlap", 0.30, 0.0, 1.0),
         ("projection_demand_level", 0.65, 0.05, 1.20),
         ("projection_night_discount", 0.30, 0.0, 0.80),
         ("projection_batch_eligible", 0.35, 0.0, 1.0),
@@ -436,15 +475,27 @@ def deserialize_planner_state(payload: Any) -> PlannerState:
     state.decode_sched_budget = _scenario_int(payload, "decode_sched_budget", 16384, 1, 10_000_000)
     state.task_il = _scenario_int(payload, "task_il", 2048, 1, 10_000_000)
     state.task_ol = _scenario_int(payload, "task_ol", 32, 0, 10_000_000)
-    state.in_dist = _scenario_dist(payload.get("in_dist"), len(INPUT_BUCKETS), list(DIST_PRESETS["Chat"]["in"]))
-    state.out_dist = _scenario_dist(payload.get("out_dist"), len(OUTPUT_BUCKETS), list(DIST_PRESETS["Chat"]["out"]))
-    state.embedding_doc_dist = _scenario_dist(
-        payload.get("embedding_doc_dist"), len(EMBEDDING_DOC_BUCKETS), list(EMBEDDING_DOC_PRESETS["Doc"])
+    state.in_dist = _scenario_dist(
+        payload.get("in_dist"), len(INPUT_BUCKETS), list(DIST_PRESETS["Chat"]["in"])
     )
-    state.in_pre = str(payload.get("in_pre", "Chat")) if payload.get("in_pre") in DIST_PRESETS else ""
-    state.out_pre = str(payload.get("out_pre", "Chat")) if payload.get("out_pre") in DIST_PRESETS else ""
+    state.out_dist = _scenario_dist(
+        payload.get("out_dist"), len(OUTPUT_BUCKETS), list(DIST_PRESETS["Chat"]["out"])
+    )
+    state.embedding_doc_dist = _scenario_dist(
+        payload.get("embedding_doc_dist"),
+        len(EMBEDDING_DOC_BUCKETS),
+        list(EMBEDDING_DOC_PRESETS["Doc"]),
+    )
+    state.in_pre = (
+        str(payload.get("in_pre", "Chat")) if payload.get("in_pre") in DIST_PRESETS else ""
+    )
+    state.out_pre = (
+        str(payload.get("out_pre", "Chat")) if payload.get("out_pre") in DIST_PRESETS else ""
+    )
     state.embedding_doc_pre = (
-        str(payload.get("embedding_doc_pre")) if payload.get("embedding_doc_pre") in EMBEDDING_DOC_PRESETS else ""
+        str(payload.get("embedding_doc_pre"))
+        if payload.get("embedding_doc_pre") in EMBEDDING_DOC_PRESETS
+        else ""
     )
     state.mode = normalize_plot_mode(payload.get("mode"))
     state.projection_day_shape = normalize_day_shape(payload.get("projection_day_shape"))
@@ -453,7 +504,9 @@ def deserialize_planner_state(payload: Any) -> PlannerState:
     state.auto_mode = bool(payload.get("auto_mode", False))
     state.auto_strategy = normalize_auto_strategy(payload.get("auto_strategy"))
     excluded = payload.get("auto_excluded", [])
-    state.auto_excluded = [str(key) for key in excluded if key in MODELS] if isinstance(excluded, list) else []
+    state.auto_excluded = (
+        [str(key) for key in excluded if key in MODELS] if isinstance(excluded, list) else []
+    )
     # Ignore the legacy user-controlled panel rate and derive the portfolio
     # value from the imported use-case priors.
     _sync_aggregate_distribution(state)
