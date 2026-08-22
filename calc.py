@@ -439,6 +439,51 @@ def _kv_bytes_per_layer(m: Model, prec: str, global_layer: bool = False) -> floa
     return value
 
 
+def _attention_compression_ratios(m: Model) -> tuple[int, ...]:
+    """Return target-layer compression ratios, excluding attached draft layers."""
+    ratios = tuple(max(int(ratio), 0) for ratio in m.attention_compression_ratios)
+    return ratios[: max(int(m.attention_layer_count), 0)]
+
+
+def _compressed_attention_rows(m: Model, seq_len: float, ratio: int) -> float:
+    """Resident main-KV rows for one compressed-attention layer.
+
+    DeepSeek V4 keeps an uncompressed live window beside each compressed pool.
+    Compression happens at complete ratio-sized boundaries, so ``floor`` keeps
+    short sequences from receiving a compressed row before one exists.
+    """
+    seq = max(float(seq_len), 0.0)
+    window = min(seq, float(max(int(m.compressed_attention_window), 0)))
+    if ratio <= 0:
+        return window if m.compressed_attention_window > 0 else seq
+    return window + math.floor(seq / ratio)
+
+
+def _compressed_attention_main_read_rows(m: Model, seq_len: float, ratio: int) -> float:
+    """Main-attention rows gathered for one query at one target layer."""
+    seq = max(float(seq_len), 0.0)
+    window = min(seq, float(max(int(m.compressed_attention_window), 0)))
+    if ratio <= 0:
+        return window if m.compressed_attention_window > 0 else seq
+    compressed = float(math.floor(seq / ratio))
+    if ratio == m.compressed_attention_indexer_ratio and m.sparse_attention_top_k > 0:
+        compressed = min(compressed, float(m.sparse_attention_top_k))
+    return window + compressed
+
+
+def _compressed_indexer_cache_bytes(m: Model, seq_len: float) -> float:
+    """Resident/read bytes for compact sparse-indexer keys over full context."""
+    ratio = max(int(m.compressed_attention_indexer_ratio), 0)
+    bytes_per_key = max(float(m.sparse_indexer_cache_bytes_per_token), 0.0)
+    if ratio <= 0 or bytes_per_key <= 0:
+        return 0.0
+    compressed_rows = math.floor(max(float(seq_len), 0.0) / ratio)
+    indexer_layers = sum(
+        1 for layer_ratio in _attention_compression_ratios(m) if layer_ratio == ratio
+    )
+    return indexer_layers * compressed_rows * bytes_per_key
+
+
 def linear_attention_state_bytes(m: Model, prec: str) -> float:
     layers = m.linear_attention_layer_count
     if layers <= 0:
@@ -502,12 +547,35 @@ def _per_tp_linear_attention_state_bytes_uncached(m: Model, prec: str, tp: int) 
 
 def kv_cache_bytes_for_sequence(m: Model, seq_len: float, prec: str) -> float:
     seq = max(float(seq_len), 0.0)
+    compression_ratios = _attention_compression_ratios(m)
+    if compression_ratios:
+        main_kv = sum(
+            _compressed_attention_rows(m, seq, ratio) for ratio in compression_ratios
+        ) * _kv_bytes_per_layer(m, prec, global_layer=True)
+        return main_kv + _compressed_indexer_cache_bytes(m, seq)
     full_layers, local_layers = _split_attention_layers(m.kv_layer_count, m.local_attention_layers)
     return full_layers * seq * _kv_bytes_per_layer(
         m, prec, global_layer=True
     ) + local_layers * _local_context_tokens(m, seq) * _kv_bytes_per_layer(
         m, prec, global_layer=False
     )
+
+
+def attention_kv_read_bytes_for_sequence(m: Model, seq_len: float, prec: str) -> float:
+    """Per-query attention/indexer HBM reads for one sequence.
+
+    Residency and read traffic coincide for ordinary dense attention. Explicit
+    compressed sparse layouts instead gather only their live window plus selected
+    or heavily-compressed main-KV rows, while the compact indexer cache still scans
+    the full compressed context.
+    """
+    compression_ratios = _attention_compression_ratios(m)
+    if not compression_ratios:
+        return kv_cache_bytes_for_sequence(m, seq_len, prec)
+    main_kv = sum(
+        _compressed_attention_main_read_rows(m, seq_len, ratio) for ratio in compression_ratios
+    ) * _kv_bytes_per_layer(m, prec, global_layer=True)
+    return main_kv + _compressed_indexer_cache_bytes(m, seq_len)
 
 
 def per_replica_kv_cache_bytes(m: Model, seq_len: float, prec: str, pp: int, tp: int) -> float:
@@ -552,6 +620,15 @@ def per_replica_token_kv_cache_bytes(
             _kv_heads_for_layer(m, global_layer=True), tp
         ) + local_cache / kv_shards_for_heads(_kv_heads_for_layer(m, global_layer=False), tp)
     return token_cache * pp_fraction
+
+
+def per_replica_token_kv_read_bytes(m: Model, seq_len: float, prec: str, pp: int, tp: int) -> float:
+    """Per-rank HBM reads for one sequence and one decode query position."""
+    if not _attention_compression_ratios(m):
+        return per_replica_token_kv_cache_bytes(m, seq_len, prec, pp, tp)
+    pp_fraction = _pp_peak_fraction(m, max(pp, 1))
+    read_bytes = attention_kv_read_bytes_for_sequence(m, seq_len, prec)
+    return read_bytes * pp_fraction / kv_shards(m, tp)
 
 
 def per_replica_recurrent_state_bytes(m: Model, prec: str, pp: int, tp: int) -> float:
@@ -632,6 +709,14 @@ def _sparse_attention_context(m: Model, seq_len: float) -> float:
     return min(seq, float(top_k)) if top_k > 0 else seq
 
 
+def _compressed_attention_context_sum(m: Model, seq_len: float) -> float:
+    """Sum the main-attention context rows across compressed target layers."""
+    return sum(
+        _compressed_attention_main_read_rows(m, seq_len, ratio)
+        for ratio in _attention_compression_ratios(m)
+    )
+
+
 def _sparse_indexer_work(m: Model, pr: int, seq_len: float, *, prefill: bool) -> float:
     """Closed-form DSA indexer work under the estimator's attention conventions.
 
@@ -641,28 +726,58 @@ def _sparse_indexer_work(m: Model, pr: int, seq_len: float, *, prefill: bool) ->
     layers that evaluate an indexer, with other layers reusing their selected KV
     positions.
     """
-    layers = max(int(m.sparse_indexer_layers), 0)
     heads = max(int(m.sparse_indexer_heads), 0)
     head_dim = max(int(m.sparse_indexer_head_dim), 0)
+    layers = max(int(m.sparse_indexer_layers), 0)
     if layers <= 0 or heads <= 0 or head_dim <= 0:
         return 0.0
     seq = max(seq_len, 0.0)
     query_positions = seq if prefill else 1.0
+    ratios = _attention_compression_ratios(m)
+    indexer_ratio = max(int(m.compressed_attention_indexer_ratio), 0)
+    if ratios and indexer_ratio > 0:
+        indexed_layers = sum(1 for ratio in ratios if ratio == indexer_ratio)
+        indexed_context = math.floor(seq / indexer_ratio)
+        scan_work = float(indexed_layers * indexed_context)
+    else:
+        scan_work = layers * seq
     # One QK matmul at two FLOPs per multiply-add.
-    return 2 * pr * layers * heads * head_dim * query_positions * seq
+    return 2 * pr * heads * head_dim * query_positions * scan_work
+
+
+def _attention_row_flops_per_head(m: Model) -> float:
+    """QK + AV FLOPs charged per query head per attended KV row.
+
+    Dense attention pays 4*head_dim (two multiply-adds of head_dim width: one
+    QK score dot, one AV output accumulation).  Absorbed-MLA decode instead
+    scores each query head against the joint latent+rope key
+    (mla_kv_dim + mla_rope_dim multiply-adds) and accumulates the softmax
+    output over the latent value (mla_kv_dim multiply-adds), so the row width
+    follows the latent geometry, not head_dim.
+    """
+    if m.is_mla and m.mla_kv_dim > 0:
+        return 2.0 * (2 * m.mla_kv_dim + m.mla_rope_dim)
+    return 4.0 * m.head_dim
 
 
 def _decode_attention_work(m: Model, pr: int, avg_seq: float, pp: int) -> float:
+    compressed_context = _compressed_attention_context_sum(m, avg_seq)
+    if compressed_context > 0:
+        main_work = m.attention_query_head_count * _attention_row_flops_per_head(m)
+        dot_product_work = pr * main_work * compressed_context
+        indexer_work = _sparse_indexer_work(m, pr, avg_seq, prefill=False)
+        return (dot_product_work + indexer_work) * _pp_peak_fraction(m, pp)
+
     full_layers, local_layers = _split_attention_layers(
         m.attention_layer_count, m.local_attention_layers
     )
-    full_width = m.attention_query_head_count * m.head_dim
-    local_width = m.local_attention_head_count * m.local_attention_head_size
-    full_work = full_layers * full_width * _sparse_attention_context(m, avg_seq)
-    local_work = local_layers * local_width * _local_context_tokens(m, avg_seq)
+    full_row = m.attention_query_head_count * _attention_row_flops_per_head(m)
+    local_row = 4.0 * m.local_attention_head_count * m.local_attention_head_size
+    full_work = full_layers * full_row * _sparse_attention_context(m, avg_seq)
+    local_work = local_layers * local_row * _local_context_tokens(m, avg_seq)
     linear_work = _linear_attention_work(m, 1.0)
     # QK and AV are each one matrix multiply (2 FLOPs per multiply-add).
-    dot_product_work = 4 * pr * (full_work + local_work)
+    dot_product_work = pr * (full_work + local_work)
     indexer_work = _sparse_indexer_work(m, pr, avg_seq, prefill=False)
     recurrent_work = 2 * pr * linear_work
     return (dot_product_work + indexer_work + recurrent_work) * _pp_peak_fraction(m, pp)
@@ -687,15 +802,49 @@ def _realtime_audio_encoder_work(profile, pr: int, pp: int) -> float:
     return ffn_work + attention_work
 
 
-def _prefill_attention_work(m: Model, pr: int, seq_len: int, pp: int) -> float:
+def _causal_attention_pairs(seq_len: float, window: float) -> float:
+    """Key positions summed over causal queries: sum_p min(p + 1, window).
+
+    A decoder prompt attends only to positions at or before each query, so its
+    prefill attention rectangle is a triangle: seq*(seq+1)/2 pairs at full
+    window, and seq*window - window*(window-1)/2 once the window is shorter
+    than the prompt.
+    """
     seq = max(float(seq_len), 0.0)
+    window = max(float(window), 0.0)
+    if window <= 0 or window >= seq:
+        return seq * (seq + 1) / 2.0
+    return seq * window - window * (window - 1) / 2.0
+
+
+def _prefill_attention_work(m: Model, pr: int, seq_len: int, pp: int, causal: bool = True) -> float:
+    seq = max(float(seq_len), 0.0)
+    compressed_context = _compressed_attention_context_sum(m, seq)
+    if compressed_context > 0:
+        # Closed-form upper bound: charge every prompt query the final prompt's
+        # compressed context rather than simulating each compression boundary.
+        main_work = m.attention_query_head_count * m.head_dim * seq * compressed_context
+        dot_product_work = 4 * pr * main_work
+        indexer_work = _sparse_indexer_work(m, pr, seq, prefill=True)
+        return (dot_product_work + indexer_work) * _pp_peak_fraction(m, pp)
+
     full_layers, local_layers = _split_attention_layers(
         m.attention_layer_count, m.local_attention_layers
     )
     full_width = m.attention_query_head_count * m.head_dim
     local_width = m.local_attention_head_count * m.local_attention_head_size
-    full_work = full_layers * full_width * seq * _sparse_attention_context(m, seq)
-    local_work = local_layers * local_width * seq * _local_context_tokens(m, seq)
+    if causal:
+        # Decoder prefill is causal: QK^T and AV each cost half the rectangle.
+        # Top-k sparse selection and sliding windows keep the same bound shape
+        # because early queries cannot select or see more than precede them.
+        full_pairs = _causal_attention_pairs(seq, _sparse_attention_context(m, seq))
+        local_pairs = _causal_attention_pairs(seq, _local_context_tokens(m, seq))
+    else:
+        # Bidirectional encoders (embedding models) attend the full rectangle.
+        full_pairs = seq * _sparse_attention_context(m, seq)
+        local_pairs = seq * _local_context_tokens(m, seq)
+    full_work = full_layers * full_width * full_pairs
+    local_work = local_layers * local_width * local_pairs
     linear_work = _linear_attention_work(m, seq)
     dot_product_work = 4 * pr * (full_work + local_work)
     indexer_work = _sparse_indexer_work(m, pr, seq, prefill=True)
@@ -1084,9 +1233,19 @@ def _decode_step_time(
 ) -> float:
     aw = _active_weight_bytes(m, prec)
     pp_fraction = _pp_peak_fraction(m, pp)
+    stages = max(int(pp), 1)
+    # A pipelined decode iteration splits the running batch so that every stage
+    # holds a different microbatch in flight.  Batch-proportional work (KV
+    # reads, activation FLOPs, collective payloads) is therefore charged per
+    # microbatch and then once per stage by the traversal below, which nets out
+    # to charging it once per iteration.  Stage-resident weights are read once
+    # per stage regardless of microbatch size, so they are charged ``stages``
+    # times -- that asymmetry is exactly why PP amortizes weights worse than TP
+    # at equal GPU count, and it must survive this change.
+    mb = max(1, math.ceil(pr / stages))
     wt = (aw * pp_fraction / tp) / (g.effective_bw * eff.bw_eff)
-    base_token_kv_read_bytes = pr * per_replica_token_kv_cache_bytes(m, avg_seq, prec, pp, tp)
-    recurrent_state_bytes = pr * per_replica_recurrent_state_bytes(m, prec, pp, tp)
+    base_token_kv_read_bytes = mb * per_replica_token_kv_read_bytes(m, avg_seq, prec, pp, tp)
+    recurrent_state_bytes = mb * per_replica_recurrent_state_bytes(m, prec, pp, tp)
     # A speculative verification pass forwards the k drafted positions. The
     # already-available target logit verifies the first draft and the final
     # forwarded position supplies the bonus token, so this is k (not k+1)
@@ -1102,26 +1261,33 @@ def _decode_step_time(
     kv_time = kv_traffic_bytes / (g.effective_bw * eff.bw_eff)
     bt = wt + kv_time
 
-    wf = 2 * m.active_params * pr * pp_fraction
-    af = _decode_attention_work(m, pr, avg_seq, pp)
+    wf = 2 * m.active_params * mb * pp_fraction
+    af = _decode_attention_work(m, mb, avg_seq, pp)
     flops = wf + af
     if spec is not None:
         # Verification reuses weights, but performs k positions of target work.
         flops *= verify_positions
-    ct = (flops + max(extra_flops, 0.0)) / (model_gpu_flops(g, m, prec) * tp * eff.comp_eff)
+    # Callers pass ``extra_flops`` for the whole replica batch (realtime audio
+    # charges per-request encoder work), so scale it to the microbatch as well.
+    stage_extra_flops = max(extra_flops, 0.0) * mb / max(pr, 1)
+    ct = (flops + stage_extra_flops) / (model_gpu_flops(g, m, prec) * tp * eff.comp_eff)
 
-    comm = communication_breakdown(m, tp, pp, pr * verify_positions, avg_seq, g, eff)
-    # ``pr`` is the number of sequences in one continuous decode batch, not a
-    # count of independent pipeline microbatches.  Treating it as the latter
-    # makes the fill/drain multiplier shrink with concurrency and can therefore
-    # claim that every user's autoregressive token latency improves when more
-    # users arrive.  A decode iteration has a dependency barrier before those
-    # sequences can request their next token, so model its end-to-end traversal
-    # across all pipeline stages.  This is a conservative closed-form latency
-    # approximation; it intentionally does not turn aggregate PP utilization
-    # into a per-request latency reduction.
-    base = max(bt, ct) * max(int(pp), 1)
-    stage = base + comm.total
+    comm = communication_breakdown(m, tp, pp, mb * verify_positions, avg_seq, g, eff)
+    # A decode iteration has a dependency barrier before these sequences can
+    # request their next token, so one token's latency is the end-to-end
+    # traversal of every pipeline stage.  ``_pp_bubble_multiplier`` is
+    # deliberately not used here: ``pr`` is the number of sequences in one
+    # continuous decode batch, not a count of independent microbatches, and
+    # shrinking the fill/drain tax with concurrency would claim that every
+    # user's autoregressive token latency improves when more users arrive.
+    # Throughput remains ``pr / step``, so ``tps == pr / lat`` holds by
+    # construction; the pipeline's aggregate gain enters through ``mb`` instead,
+    # which keeps every stage busy with its own microbatch.
+    #
+    # ``_dense_tp_oh`` is already scaled to a single stage's layer count, so it
+    # belongs inside the traversal.  PP boundary sends are counted once for the
+    # whole trip (``stages - 1`` hops) and stay outside it.
+    stage = (max(bt, ct) + comm.dense_tp) * stages + comm.pp_boundary
     if spec is not None:
         # Draft stage, sequential with verification: one pass for parallel
         # (block-diffusion) drafters, k autoregressive passes otherwise. The
@@ -1142,10 +1308,10 @@ def _decode_step_time(
             * spec.profile.kv_overhead
             * draft_positions
         ) / (g.effective_bw * eff.bw_eff)
-        draft_ct = (2 * spec.draft_active_params * pr * pp_fraction * draft_positions) / (
+        draft_ct = (2 * spec.draft_active_params * mb * pp_fraction * draft_positions) / (
             model_gpu_flops(g, m, prec) * tp * eff.comp_eff
         )
-        stage += max(draft_bt, draft_ct) * max(int(pp), 1) * spec.passes
+        stage += max(draft_bt, draft_ct) * stages * spec.passes
         draft_ratio = min(max(spec.draft_active_params / max(m.active_params, 1.0), 0.0), 1.0)
         # ``comm`` already carries k verification positions. Both an AR drafter
         # (k one-position passes) and a parallel drafter (one k-position pass)
@@ -1208,6 +1374,10 @@ def _compute_decode_core(
     base_load, extra_replicas = divmod(int(bs), active_replicas)
     replica_loads = [base_load + (1 if i < extra_replicas else 0) for i in range(active_replicas)]
     pr = max(replica_loads)
+    # Steady-state continuous batching: a sequence's resident KV grows from
+    # avg_in to avg_in + avg_out over its lifetime, so mean residency is
+    # in + out/2 and slot counts are average-occupancy figures.  A fully
+    # synchronized cohort would peak at in + out per sequence.
     avg_seq = avg_in + avg_out / 2.0
     avg_kv = per_replica_kv_cache_bytes(m, avg_seq, prec, pp, tp)
     if active_spec is not None:
@@ -1454,21 +1624,24 @@ def compute_prefill(
     prec: str,
     eff: EfficiencyParams,
     spec: Optional[SpecRuntime] = None,
+    kv_residency_seq_len: int = 0,
 ) -> Optional[PrefillResult]:
-    if not context_supported(m, seq_len):
+    # ``seq_len`` is the compute length (after the prefix-cache miss).  The
+    # full prompt — cached prefix included — still has to be resident, so
+    # callers that model prefix hits pass the untouched prompt length in
+    # ``kv_residency_seq_len`` for the memory fit.
+    kv_residency_seq_len = max(int(kv_residency_seq_len or 0), 0)
+    if not context_supported(m, max(int(seq_len), kv_residency_seq_len)):
         return None
     mem = compute_memory(m, tp, pp, g, mu, profiled_non_kv_gb, prec, eff, spec)
     if mem is None:
         return None
-    if seq_len <= 0:
-        # A 100% prefix hit removes prefill work. Use the planner's finite sentinel
-        # instead of infinity so charts/JSON remain numerically well-defined.
-        return PrefillResult(
-            tps=0, service_time=0.0, rps=float(UNBOUNDED_BATCH), max_batch=UNBOUNDED_BATCH
-        )
 
-    pr = math.ceil(bs / dp)
-    seq_kv = per_replica_kv_cache_bytes(m, seq_len, prec, pp, tp)
+    # Prefix-cache hits remove compute but not residency.  Sharing of one
+    # cached prefix across concurrent sequences is not simulated, so KV is
+    # charged at the full prompt length per sequence: the conservative bound.
+    kv_len = max(int(seq_len), kv_residency_seq_len)
+    seq_kv = per_replica_kv_cache_bytes(m, kv_len, prec, pp, tp)
     if spec is not None:
         # Reserve the drafter's prompt/hidden-state cache consistently with
         # decode capacity. Some attached drafters reuse target hidden states;
@@ -1476,18 +1649,43 @@ def compute_prefill(
         seq_kv *= 1.0 + spec.profile.kv_overhead
     # AttnRes activations are temporary rather than KV, but they scale with
     # batch×sequence and therefore must participate in the prefill fit check.
+    # They are only allocated for the tokens actually (re-)prefilled.
     per_sequence_memory = seq_kv + attention_residual_scratch_bytes(m, seq_len, prec, pp, tp)
-    max_per_replica = int(mem.kv_budget / per_sequence_memory) if per_sequence_memory > 0 else 0
+    if per_sequence_memory > 0:
+        max_per_replica = int(mem.kv_budget / per_sequence_memory)
+    elif kv_len <= 0:
+        # A 100% prefix hit with nothing resident removes prefill work. Use the
+        # planner's finite sentinel instead of infinity so charts/JSON remain
+        # numerically well-defined.
+        max_per_replica = UNBOUNDED_BATCH
+    else:
+        max_per_replica = 0
+    if seq_len <= 0:
+        return PrefillResult(
+            tps=0, service_time=0.0, rps=float(UNBOUNDED_BATCH), max_batch=max_per_replica * dp
+        )
+
+    pr = math.ceil(bs / dp)
     if pr > max_per_replica:
         return None
 
     pp_fraction = _pp_peak_fraction(m, pp)
     ffn = 2 * m.active_params * pr * seq_len * pp_fraction
+    if spec is not None and spec.profile.method not in ("mtp", "ngram"):
+        # Attached drafters (EAGLE-3, DFlash, DSpark, draft models) run their
+        # own prompt forward to seed drafter KV and hidden states.  MTP reuses
+        # the target's final hidden state and n-gram drafting has no weights,
+        # so neither pays a prompt-length drafter pass.
+        ffn += 2 * spec.draft_active_params * pr * seq_len * pp_fraction
     att = _prefill_attention_work(m, pr, seq_len, pp)
     tf = ffn + att
     ct = tf / (model_gpu_flops(g, m, prec) * tp * eff.comp_eff)
 
     aw = _active_weight_bytes(m, prec)
+    if spec is not None:
+        # Drafter weights are resident whenever speculation is on, and are
+        # read at least once per prefill forward.
+        aw += spec.draft_weight_bytes
     mt = (aw * pp_fraction / tp) / (g.effective_bw * eff.bw_eff)
 
     comm = communication_breakdown(m, tp, pp, pr * seq_len, seq_len, g, eff)
@@ -1632,7 +1830,7 @@ def compute_embedding(
 
     pp_fraction = _pp_peak_fraction(m, pp)
     ffn = 2 * m.active_params * pr * seq * pp_fraction
-    att = _prefill_attention_work(m, pr, seq, pp)
+    att = _prefill_attention_work(m, pr, seq, pp, causal=False)
     ct = (ffn + att) / (model_gpu_flops(g, m, prec) * max(tp, 1) * eff.comp_eff)
 
     aw = _active_weight_bytes(m, prec)
@@ -1702,7 +1900,7 @@ def compute_embedding_distribution(
     pp_fraction = _pp_peak_fraction(m, pp)
     ffn = 2 * m.active_params * pr * stats.mean_seq_len * pp_fraction
     att = sum(
-        share * _prefill_attention_work(m, pr, seq, pp)
+        share * _prefill_attention_work(m, pr, seq, pp, causal=False)
         for share, seq, _bucket in _embedding_weighted_sequences(m, doc_dist, buckets)
     )
     ct = (ffn + att) / (model_gpu_flops(g, m, prec) * max(tp, 1) * eff.comp_eff)
@@ -1817,6 +2015,7 @@ def compute_data(
         prec,
         prefill_eff,
         spec,
+        kv_residency_seq_len=in_len,
     )
     if pf is None:
         return None
@@ -1887,6 +2086,7 @@ def compute_data_capacity(
         prec,
         prefill_eff,
         spec,
+        kv_residency_seq_len=in_len,
     )
     if pf is None:
         return 0
@@ -1967,10 +2167,14 @@ def compute_user_experience(
         prec,
         prefill_eff,
         spec,
+        kv_residency_seq_len=int(avg_in),
     )
     if pf is None:
         return None
 
+    # The batch-prefill makespan is the last user's first token; users whose
+    # prompt completes earlier see less.  Reporting the makespan keeps TTFT and
+    # response time conservative (a p100 rather than a mean).
     ttft_ms = pf.service_time * 1000
     decode_time = avg_out * dec.step_ms / 1000
     response_s = (ttft_ms / 1000) + decode_time

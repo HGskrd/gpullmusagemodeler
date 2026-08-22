@@ -66,6 +66,21 @@ def _style(model: Model, is_b: bool) -> dict:
     }
 
 
+def _hardware_label(am, gpu: GPU) -> str:
+    """Compact hardware disclosure shared by chart tooltips."""
+    return f"{am.gpu_count}× {gpu.name}"
+
+
+def _fleet_hardware_label(deployed: list[tuple]) -> str:
+    """Summarize the hardware behind aggregate processing series."""
+    hardware: dict[str, int] = {}
+    for am, gpu in deployed:
+        if getattr(am.model, "embedding_profile", None) is not None:
+            continue
+        hardware[gpu.name] = hardware.get(gpu.name, 0) + am.gpu_count
+    return " + ".join(f"{count}× {name}" for name, count in hardware.items())
+
+
 def chart_embedding_quality(state, panel_suffix: str = "") -> list[dict]:
     """Peak docs/s vs published retrieval quality, one dot per embedding model.
 
@@ -151,6 +166,7 @@ def chart_embedding_quality(state, panel_suffix: str = "") -> list[dict]:
         datasets.append(
             {
                 "label": _label(am, model, panel_suffix, include_prefill=True),
+                "hardware": _hardware_label(am, gpu),
                 "data": [point],
                 **_style(model, is_b),
                 "backgroundColor": (model.color + "12") if is_placeholder else (model.color + "AA"),
@@ -228,6 +244,7 @@ def chart_embedding_throughput(
         datasets.append(
             {
                 "label": _label(am, model, panel_suffix, include_prefill=True),
+                "hardware": _hardware_label(am, gpu),
                 "data": pts,
                 **_style(model, is_b),
                 "_isEmbedding": True,
@@ -270,6 +287,7 @@ def chart_data_processing(
         datasets.append(
             {
                 "label": _label(am, model, panel_suffix),
+                "hardware": _hardware_label(am, gpu),
                 "data": pts,
                 **_style(model, is_b),
                 "fill": not is_b,
@@ -384,6 +402,7 @@ def chart_realtime_capacity(
             datasets.append(
                 {
                     "label": _label(am, model, panel_suffix),
+                    "hardware": _hardware_label(am, gpu),
                     "data": pts,
                     **_style(model, is_b),
                     "_isRealtime": True,
@@ -697,6 +716,7 @@ def chart_user_experience(state, panel_suffix: str = "") -> list[dict]:
         datasets.append(
             {
                 "label": _label(am, model, panel_suffix, include_prefill=True),
+                "hardware": _hardware_label(am, gpu),
                 "data": points,
                 "borderColor": model.color,
                 "borderWidth": 1.5 if is_b else 2,
@@ -755,6 +775,7 @@ def chart_pareto(state, panel_suffix: str = "", *, deployment: Deployment) -> li
             datasets.append(
                 {
                     "label": _label(am, model, panel_suffix, spec_meta=spec_meta),
+                    "hardware": _hardware_label(am, gpu),
                     "data": pts,
                     **spec_meta,
                     "borderColor": model.color,
@@ -878,6 +899,7 @@ def chart_asr_quality(state, panel_suffix: str = "") -> list[dict]:
         datasets.append(
             {
                 "label": _label(am, model, panel_suffix),
+                "hardware": _hardware_label(am, gpu),
                 "data": pts,
                 **_style(model, is_b),
                 "backgroundColor": (model.color + "12") if is_placeholder else (model.color + "AA"),
@@ -948,6 +970,7 @@ def chart_user_pareto(
             datasets.append(
                 {
                     "label": _label(am, model, panel_suffix, spec_meta=spec_meta),
+                    "hardware": _hardware_label(am, gpu),
                     "data": pts,
                     **spec_meta,
                     "borderColor": model.color,
@@ -1015,6 +1038,7 @@ def chart_processing_pareto(
         datasets.append(
             {
                 "label": f"{preset_name}{panel_suffix}",
+                "hardware": _fleet_hardware_label(deployed),
                 "data": pts,
                 "borderColor": color,
                 "backgroundColor": color + "12",

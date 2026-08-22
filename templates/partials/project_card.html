@@ -30,7 +30,7 @@
                name="value"
                hx-post="/project/set"
                hx-target="#main-content"
-               hx-trigger="change, keyup[key=='Enter']"
+               hx-trigger="change"
                hx-vals='{"panel":"{{ panel }}","uid":"{{ proj.uid }}","field":"scale_value"}' />
         <span class="T">{{ scale_cfg.unit }}</span>
       </div>

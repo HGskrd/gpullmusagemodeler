@@ -2,8 +2,8 @@ import unittest
 import uuid
 
 from app_factory import create_test_app
+from flask import render_template
 
-import app as app_module
 from data import (
     MODEL_DOMAIN_QUALITY_ANCHORS,
     MODELS,
@@ -30,6 +30,7 @@ from state import (
     Project,
     _normalize_use_case_def,
 )
+from web.middleware import VISITOR_COOKIE
 
 
 class DomainQualityCatalogTests(unittest.TestCase):
@@ -138,9 +139,14 @@ class DomainQualityPlannerTests(unittest.TestCase):
         self.assertTrue(_model_serves_project(MODELS["laguna-s-2-1"], project))
 
     def test_equal_value_routing_protects_harder_coding_work_before_generic_chat(self):
+        # This fixture must stay genuinely capacity-scarce, otherwise every
+        # project is served and the routing preference under test is never
+        # exercised.  Six H100s at TP2xPP3 stopped being scarce once pipelined
+        # decode throughput was corrected, so shrink the pool instead of
+        # weakening the assertion below.
         state = create_default_state()
-        state.gpus = [GpuPool(1, "H100", 6, cost_per_gpu_hour=1.32)]
-        state.models = [ModelAssignment(2, "laguna-s-2-1", 1, 6, 2, 1, "bf16", pp=3)]
+        state.gpus = [GpuPool(1, "H100", 4, cost_per_gpu_hour=1.32)]
+        state.models = [ModelAssignment(2, "laguna-s-2-1", 1, 4, 2, 1, "bf16", pp=2)]
         state.projects = [
             project
             for project in state.projects
@@ -253,7 +259,7 @@ class DomainQualityPlannerTests(unittest.TestCase):
         }
         app = create_test_app()
         with app.test_request_context("/econ/swaps"):
-            html = app_module.render_template(
+            html = render_template(
                 "partials/econ/swaps.html",
                 swap_recs=[rec],
                 gpu_recs=[],
@@ -266,7 +272,7 @@ class DomainQualityPlannerTests(unittest.TestCase):
 
     def test_economics_routes_render_domain_aware_swap_output(self):
         client = create_test_app().test_client()
-        client.set_cookie(app_module.VISITOR_COOKIE, str(uuid.uuid4()))
+        client.set_cookie(VISITOR_COOKIE, str(uuid.uuid4()))
         headers = {"X-Tab-ID": str(uuid.uuid4())}
         for path in ("/econ/", "/econ/flow", "/econ/dashboard", "/econ/brief", "/econ/supply"):
             with self.subTest(path=path):

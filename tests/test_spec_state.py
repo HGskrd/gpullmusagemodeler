@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from data import MODELS
 from placement import get_deployed
 from planner_service import deserialize_scenario, set_model_spec
+from presentation.model_cards import get_model_info
 from scenarios import serialize_scenario
 from state import (
     GpuPool,
@@ -12,7 +13,6 @@ from state import (
     PlannerState,
     set_spec_acceptance,
 )
-from viewmodels import get_model_info
 
 
 def _fake_profile(method, supported_ks=()):

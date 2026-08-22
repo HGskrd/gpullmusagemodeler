@@ -3,7 +3,6 @@ import unittest
 
 from app_factory import create_test_app
 
-import app as app_module
 from data import MODELS, PROJECT_PRESETS, effective_quality, required_quality
 from state import _normalize_use_case_def
 from use_case_evidence import (
@@ -11,6 +10,7 @@ from use_case_evidence import (
     USE_CASE_RESEARCH_CAPTURED_AT,
     USE_CASE_SOURCES,
 )
+from web.helpers import use_case_detail_for
 
 
 class UseCaseCatalogTests(unittest.TestCase):
@@ -70,15 +70,15 @@ class UseCaseCatalogTests(unittest.TestCase):
 
     def test_evidence_is_hidden_after_edit_or_key_collision(self):
         canonical = _normalize_use_case_def(PROJECT_PRESETS[0])
-        self.assertTrue(app_module.use_case_detail_for(canonical).get("source_ids"))
+        self.assertTrue(use_case_detail_for(canonical).get("source_ids"))
 
         edited = copy.deepcopy(canonical)
         edited["wtp_per_m"] += 1.0
-        self.assertEqual(app_module.use_case_detail_for(edited), {})
+        self.assertEqual(use_case_detail_for(edited), {})
 
         collision = copy.deepcopy(canonical)
         collision["name"] = "Imported custom definition"
-        self.assertEqual(app_module.use_case_detail_for(collision), {})
+        self.assertEqual(use_case_detail_for(collision), {})
 
     def test_use_case_page_renders_evidence_and_new_presets(self):
         response = create_test_app().test_client().get("/use-cases")

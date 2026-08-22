@@ -13,7 +13,10 @@ from pathlib import Path
 from flask import Flask, current_app, g, jsonify, request
 from werkzeug.security import safe_join
 
-from state import allow_visitor_scope, get_scope_lock
+from web.session_store import (
+    allow_visitor_scope,
+    get_scope_lock,
+)
 
 VISITOR_COOKIE = "planner_vid"
 TAB_PARAM = "tab_id"

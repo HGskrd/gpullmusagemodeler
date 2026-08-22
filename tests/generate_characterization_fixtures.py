@@ -12,6 +12,7 @@ from characterization_support import (  # noqa: E402
     canonical_json,
     chart_outputs,
     projection_outputs,
+    report_outputs,
 )
 
 
@@ -20,6 +21,7 @@ def main() -> None:
     fixtures = {
         "charts.json": chart_outputs(),
         "projections.json": projection_outputs(),
+        "reports.json": report_outputs(),
     }
     for name, output in fixtures.items():
         path = FIXTURE_DIR / name

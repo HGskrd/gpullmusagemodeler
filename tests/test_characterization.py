@@ -10,17 +10,19 @@ from characterization_support import (
     chart_outputs,
     chart_state,
     projection_outputs,
+    report_outputs,
 )
 from flask import render_template
 
-import app as app_module
-from econ_variants import _chart_payload, econ_payload
+from data import INPUT_BUCKETS
+from presentation.econ import _chart_payload, econ_payload
+from presentation.model_cards import get_model_info, get_model_infos
 from use_case_evidence import (
     USE_CASE_RESEARCH_CAPTURED_AT,
     USE_CASE_SOURCES,
     enrich_use_case_details,
 )
-from viewmodels import get_model_info, get_model_infos
+from web.helpers import _template_context
 
 
 class GoldenOutputTests(unittest.TestCase):
@@ -30,6 +32,16 @@ class GoldenOutputTests(unittest.TestCase):
 
     def test_revenue_projection_goldens(self):
         self.assert_matches_fixture("projections.json", projection_outputs())
+
+    def test_canonical_json_ignores_sub_precision_float_noise(self):
+        self.assertEqual(
+            canonical_json({"value": 1.0000000000000002}),
+            canonical_json({"value": 1.0}),
+        )
+
+    def test_projection_report_goldens(self):
+        """The copy-out text report: wording and numbers are both observable."""
+        self.assert_matches_fixture("reports.json", report_outputs())
 
     def test_all_chart_builder_goldens(self):
         outputs = chart_outputs()
@@ -96,7 +108,7 @@ class PartialRenderSmokeTests(unittest.TestCase):
                         "partials/task.html",
                         state=state,
                         panel="A",
-                        **app_module._template_context(),
+                        **_template_context(),
                     )
 
                 self.app.view_functions["api.healthz"] = render_task_partial
@@ -111,8 +123,8 @@ class PartialRenderSmokeTests(unittest.TestCase):
                         pre=state.in_pre,
                         panel="A",
                         kind="in",
-                        buckets=app_module.INPUT_BUCKETS,
-                        **app_module._template_context(),
+                        buckets=INPUT_BUCKETS,
+                        **_template_context(),
                     )
 
                 self.app.view_functions["api.healthz"] = render_distribution_partial

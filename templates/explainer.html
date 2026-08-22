@@ -141,6 +141,16 @@
     drops off a cliff when the KV cache runs out of room (OOM — shown as a break in the line).
     Hover any point to see total tok/s and ms/token for that operating point.
   </p>
+  <p class="note">
+    Two conservative semantics on this chart. <strong>TTFT is the batch-prefill makespan</strong> —
+    the last user in a cohort of N sees their first token after the whole prompt batch is
+    ingested; users whose prompts finish earlier see less, so treat the reported value as a
+    p100 rather than a mean. And <strong>slot counts are average-occupancy figures</strong>: under
+    steady-state continuous batching a sequence's resident KV averages
+    <code>input + output/2</code>, so the OOM cliff marks where the average fits — a fully
+    synchronized cohort (every user arriving and finishing together) peaks at
+    <code>input + output</code> and breaks earlier.
+  </p>
 
   <h3>Processing Pareto</h3>
   <p>
@@ -328,7 +338,10 @@
     average weighted by prompt-token volume, while routing and cloud pricing use each use case's
     own rate. Replace these priors with observed prefix-cache telemetry; vLLM query-token hits are one supported calibration source.
     Prefix reuse affects prefill-sensitive metrics only; pure decode is unchanged. Effective
-    prefill length = input_len × (1 − hit_rate).
+    prefill length = input_len × (1 − hit_rate). The cached prefix still has to be resident:
+    prefill capacity keeps charging KV at the full prompt length per sequence (prefix sharing
+    across concurrent requests is not simulated), so a higher hit rate speeds prompts up
+    without inflating how many fit.
   </p>
 </section>
 

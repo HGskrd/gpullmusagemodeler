@@ -14,7 +14,10 @@ from app_factory import create_test_app
 
 import app as app_module
 import web.middleware as middleware
+from presentation.formatting import fmt_money, fmt_num
 from tracking import SnapshotStore
+from web.config import ADMIN_SESSION_KEY
+from web.middleware import VISITOR_COOKIE
 
 
 class EngineeringHardeningTests(unittest.TestCase):
@@ -25,7 +28,7 @@ class EngineeringHardeningTests(unittest.TestCase):
         self.client = self.app.test_client()
         self.visitor_id = str(uuid.uuid4())
         self.tab_id = str(uuid.uuid4())
-        self.client.set_cookie(app_module.VISITOR_COOKIE, self.visitor_id)
+        self.client.set_cookie(VISITOR_COOKIE, self.visitor_id)
         self.headers = {"X-Tab-ID": self.tab_id}
 
     def tearDown(self):
@@ -130,7 +133,7 @@ class EngineeringHardeningTests(unittest.TestCase):
     def test_admin_rejects_invalid_pagination(self):
         with patch.dict("os.environ", {"PLANNER_ADMIN_PASSWORD": "strong"}):
             with self.client.session_transaction() as session:
-                session[app_module.ADMIN_SESSION_KEY] = True
+                session[ADMIN_SESSION_KEY] = True
             response = self.client.get("/admin?page=not-a-number")
         self.assertEqual(response.status_code, 400)
 
@@ -259,6 +262,20 @@ class EngineeringHardeningTests(unittest.TestCase):
                 self.assertIn("object-src 'none'", csp)
                 self.assertIn("base-uri 'self'", csp)
                 self.assertIn("form-action 'self'", csp)
+                self.assertNotIn("'unsafe-eval'", csp)
+
+    def test_htmx_does_not_require_eval_or_external_fonts(self):
+        response = self.client.get("/", headers={"X-Tab-ID": str(uuid.uuid4())})
+        body = response.get_data(as_text=True)
+        self.assertIn('name="htmx-config"', body)
+        self.assertIn('content=\'{"allowEval":false,"allowScriptTags":false}\'', body)
+        self.assertNotIn("fonts.googleapis.com", body)
+
+        repo_root = Path(app_module.__file__).resolve().parent
+        templates = repo_root / "templates"
+        for template in templates.rglob("*.html"):
+            source = template.read_text(encoding="utf-8")
+            self.assertNotIn("keyup[key==", source, template)
 
     def test_default_port_matches_the_deployment_config(self):
         # app.py's __main__ default drifted from .env.example/compose/Dockerfile
@@ -273,16 +290,16 @@ class EngineeringHardeningTests(unittest.TestCase):
         self.assertTrue(self.app.config["SESSION_COOKIE_HTTPONLY"])
         response = self.app.test_client().get("/")
         cookie = response.headers.get("Set-Cookie", "")
-        self.assertIn(app_module.VISITOR_COOKIE, cookie)
+        self.assertIn(VISITOR_COOKIE, cookie)
         self.assertIn("SameSite=Lax", cookie)
         self.assertIn("HttpOnly", cookie)
 
     def test_fmt_num_uses_b_unit_above_a_billion(self):
         # Supply capacities in the tens of billions must not render as "31795.8M".
-        self.assertEqual(app_module.fmt_num(31_795_800_000), "31.8B")
-        self.assertEqual(app_module.fmt_num(1_048_576), "1.0M")
-        self.assertEqual(app_module.fmt_num(131_072), "131.1k")
-        self.assertEqual(app_module.fmt_num(999), "999")
+        self.assertEqual(fmt_num(31_795_800_000), "31.8B")
+        self.assertEqual(fmt_num(1_048_576), "1.0M")
+        self.assertEqual(fmt_num(131_072), "131.1k")
+        self.assertEqual(fmt_num(999), "999")
 
     def test_prefix_panel_reflects_workload_distribution_basis(self):
         # The model card probes prefill capacity at max(task_il, avg in-dist);
@@ -302,7 +319,8 @@ class EngineeringHardeningTests(unittest.TestCase):
         self.assertNotIn('hx-post="/settings/prefix-hit"', html)
 
     def test_cloud_only_use_case_shows_money_paid_to_cloud(self):
-        from state import PlannerState, Project, replace_scope_states
+        from state import PlannerState, Project
+        from web.session_store import replace_scope_states
 
         state = PlannerState(
             projects=[
@@ -328,7 +346,7 @@ class EngineeringHardeningTests(unittest.TestCase):
 
         projection = compute_revenue_projection(state)
         self.assertGreater(projection["value_cloud_day"], 0)
-        self.assertIn(app_module.fmt_money(projection["value_cloud_day"]), html)
+        self.assertIn(fmt_money(projection["value_cloud_day"]), html)
         self.assertIn("To cloud", html)
 
     def test_unserved_sublabel_is_neutral_without_demand(self):

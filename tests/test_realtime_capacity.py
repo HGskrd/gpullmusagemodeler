@@ -75,6 +75,7 @@ class RealtimeCapacityTests(unittest.TestCase):
         datasets = chart_realtime_capacity(state, [1, 8, 16])
 
         self.assertEqual(len(datasets), 1)
+        self.assertEqual(datasets[0]["hardware"], "1× H100 80GB SXM")
         point = datasets[0]["data"][1]
         self.assertEqual(point["users"], 8)
         self.assertGreater(point["required_tps"], 0.0)
@@ -105,6 +106,7 @@ class RealtimeCapacityTests(unittest.TestCase):
             get_decode_bs([text_only], deployments=[resolve_deployment(text_only)]),
         )
         self.assertEqual(len(datasets), 1)
+        self.assertEqual(datasets[0]["hardware"], "1× H100 80GB SXM")
         self.assertTrue(any("Qwen 3.5 0.8B" in label for label in labels))
         self.assertFalse(any("Voxtral" in label for label in labels))
 

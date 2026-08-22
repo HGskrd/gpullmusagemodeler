@@ -94,6 +94,7 @@ function disposeChart() {
 
 function chartTheme() {
   const dk = colorSchemeQuery.matches;
+  const cssSans = getComputedStyle(document.documentElement).getPropertyValue('--sans').trim();
   return {
     dk,
     gc: dk ? 'rgba(255,255,255,.05)' : 'rgba(0,0,0,.04)',
@@ -101,7 +102,7 @@ function chartTheme() {
     bg: dk ? '#1a1a18' : '#ffffff',
     border: dk ? 'rgba(255,255,255,.12)' : 'rgba(0,0,0,.1)',
     text: dk ? '#e4e4e0' : '#1a1a18',
-    fontFamily: 'IBM Plex Sans',
+    fontFamily: cssSans || "'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif",
   };
 }
 
@@ -128,6 +129,7 @@ function makeSeries(ds, showPoints) {
     data: (ds.data || []).map(point => ({
       value: [Number(point.x), point.y == null ? null : Number(point.y)],
       raw: point,
+      hardware: ds.hardware || '',
       specDisclosure: ds.spec_disclosure || '',
     })),
     connectNulls: Boolean(ds.spanGaps),
@@ -178,6 +180,22 @@ function specDisclosureHtml(p, theme) {
     : '';
 }
 
+function escapeTooltipHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function hardwareDisclosureHtml(p, theme) {
+  const hardware = p?.data?.hardware;
+  return hardware
+    ? `<div style="margin:0 0 2px 17px;color:${theme.tc};font-family:${theme.fontFamily};font-size:8px;line-height:1.25;">${escapeTooltipHtml(hardware)}</div>`
+    : '';
+}
+
 function axisCommon(theme, title, formatter, extra = {}) {
   return {
     scale: true,
@@ -205,12 +223,13 @@ function tooltipBase(theme, trigger, formatter) {
   const shadow = theme.dk ? 'rgba(0,0,0,.55)' : 'rgba(0,0,0,.14)';
   return {
     trigger,
+    renderMode: 'html',
     backgroundColor: theme.bg,
     borderColor: theme.border,
     borderWidth: 1,
     padding: [9, 13],
     confine: true,
-    extraCssText: `box-shadow:0 6px 24px ${shadow};border-radius:7px;`,
+    extraCssText: `box-shadow:0 6px 24px ${shadow};border-radius:7px;font-family:${theme.fontFamily};line-height:1.35;max-width:min(460px,calc(100vw - 24px));overflow-wrap:anywhere;`,
     textStyle: { color: theme.text, fontFamily: theme.fontFamily, fontSize: 11 },
     axisPointer: trigger === 'axis' ? {
       type: 'cross',
@@ -240,7 +259,7 @@ function axisRow(p, theme, yStr) {
   const oom = yStr === 'OOM';
   return `<div style="display:flex;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
     `<span style="display:inline-block;width:10px;height:2.5px;border-radius:2px;background:${p.color};flex-shrink:0;"></span>` +
-    `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px;color:${theme.text};">${p.seriesName}</span>` +
+    `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px;color:${theme.text};">${escapeTooltipHtml(p.seriesName)}</span>` +
     `<span style="font-weight:600;margin-left:4px;color:${oom ? 'var(--red)' : theme.text};">${yStr}</span>` +
     `</div>`;
 }
@@ -444,9 +463,10 @@ function renderChart(data) {
             const oom = raw?.y == null;
             html += `<div style="display:flex;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
               `<span style="display:inline-block;width:10px;height:2.5px;border-radius:2px;background:${p.color};flex-shrink:0;"></span>` +
-              `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px;color:${theme.text};">${p.seriesName}</span>` +
+              `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px;color:${theme.text};">${escapeTooltipHtml(p.seriesName)}</span>` +
               `<span style="margin-left:4px;text-align:right;font-weight:600;color:${oom ? 'var(--red)' : theme.text};">${yStr}${detail}</span>` +
               `</div>`;
+            html += hardwareDisclosureHtml(p, theme);
             html += specDisclosureHtml(p, theme);
           });
         return html;
@@ -481,9 +501,10 @@ function renderChart(data) {
             const oom = raw?.y == null;
             html += `<div style="display:flex;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
               `<span style="display:inline-block;width:10px;height:2.5px;border-radius:2px;background:${p.color};flex-shrink:0;"></span>` +
-              `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px;color:${theme.text};">${p.seriesName}</span>` +
+              `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px;color:${theme.text};">${escapeTooltipHtml(p.seriesName)}</span>` +
               `<span style="margin-left:4px;text-align:right;font-weight:600;color:${oom ? 'var(--red)' : theme.text};">${yStr}${detail}</span>` +
               `</div>`;
+            html += hardwareDisclosureHtml(p, theme);
             html += specDisclosureHtml(p, theme);
           });
         return html;
@@ -535,9 +556,10 @@ function renderChart(data) {
               : '';
             html += `<div style="display:flex;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
               `<span style="display:inline-block;width:10px;height:2.5px;border-radius:2px;background:${p.color};flex-shrink:0;"></span>` +
-              `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px;color:${theme.text};">${p.seriesName}</span>` +
+              `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px;color:${theme.text};">${escapeTooltipHtml(p.seriesName)}</span>` +
               `<span style="margin-left:4px;text-align:right;font-weight:600;color:${raw?.y == null ? 'var(--red)' : (ok ? theme.text : 'var(--amber)')};">${yStr}${detail}</span>` +
               `</div>`;
+            html += hardwareDisclosureHtml(p, theme);
           });
         return html;
       }, 'axis'),
@@ -579,9 +601,10 @@ function renderChart(data) {
         let html = axisHeader(theme, 'WER', `${fmtWer(raw.wer)} · ${raw.language || 'Benchmark'}`);
         html += `<div style="display:flex;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
           `<span style="display:inline-block;width:10px;height:10px;${markerStyle}flex-shrink:0;"></span>` +
-          `<span style="flex:1;color:${theme.text};">${params.seriesName}</span>` +
+          `<span style="flex:1;color:${theme.text};">${escapeTooltipHtml(params.seriesName)}</span>` +
           `<span style="margin-left:8px;font-weight:600;color:${theme.text};">${fmtBatch(Number(raw.max_users))} streams</span>` +
           `</div>`;
+        html += hardwareDisclosureHtml(params, theme);
         html += `<div style="margin-top:5px;font-size:10px;color:${theme.tc};">${isStreaming ? 'Streaming ASR' : 'Non-streaming ASR'}</div>`;
         if (raw.source) html += `<div style="margin-top:5px;font-size:10px;color:${theme.tc};">${raw.source}</div>`;
         if (raw.placeholder) html += `<div style="margin-top:5px;font-size:10px;color:var(--amber);">Placeholder WER - not yet sourced</div>`;
@@ -614,7 +637,11 @@ function renderChart(data) {
           showSymbol: true,
           symbol: isStreaming ? 'circle' : 'diamond',
           symbolSize: isStreaming ? 11 : 12,
-          data: (ds.data || []).map(p => ({ value: [Number(p.x), Number(p.y)], raw: p })),
+          data: (ds.data || []).map(p => ({
+            value: [Number(p.x), Number(p.y)],
+            raw: p,
+            hardware: ds.hardware || '',
+          })),
           lineStyle: { color: ds.borderColor, width: Number(ds.borderWidth || 2), type: dashStyle(ds.borderDash), opacity: 0.55 },
           itemStyle: placeholder
             ? { color: 'transparent', borderColor: ds.borderColor, borderWidth: 2 }
@@ -652,9 +679,10 @@ function renderChart(data) {
         let html = axisHeader(theme, 'Peak throughput', `${fmtRate(Number(raw.docs_per_second))} docs/s`);
         html += `<div style="display:flex;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
           `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${params.color};flex-shrink:0;"></span>` +
-          `<span style="flex:1;color:${theme.text};">${params.seriesName}</span>` +
+          `<span style="flex:1;color:${theme.text};">${escapeTooltipHtml(params.seriesName)}</span>` +
           `<span style="margin-left:8px;font-weight:600;color:${theme.text};">${raw.quality_metric || 'quality'} ${fmtQuality(raw.quality)}</span>` +
           `</div>`;
+        html += hardwareDisclosureHtml(params, theme);
         const vpi = Number(raw.vectors_per_input || 1);
         const multiVec = vpi > 1 ? ` · ${vpi.toLocaleString()} vec/doc → ${fmtRate(Number(raw.vectors_per_second || 0))} vec/s` : '';
         html += `<div style="margin-top:4px;font-size:10px;color:${theme.tc};">` +
@@ -701,6 +729,7 @@ function renderChart(data) {
             data: (ds.data || []).map(p => ({
               value: [Number(p.x), Number(p.y)],
               raw: p,
+              hardware: ds.hardware || '',
               symbolSize: dotSize(p.bytes_per_doc),
             })),
             itemStyle: placeholder

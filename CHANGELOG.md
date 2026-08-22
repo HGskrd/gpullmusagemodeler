@@ -4,6 +4,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2026-08-21
+
+### Fixed
+
+- Corrected pipelined decode throughput. `_decode_step_time` charged batch-proportional work (KV reads, activation FLOPs, collective payloads) for the whole running batch on *every* pipeline stage and then multiplied the result by the stage count, so an N-stage pipeline produced no more aggregate tokens/s than a single stage — `TP1xPP8` was modeled as marginally *slower* than `TP1xPP1` for the same model. Batch-proportional work is now charged per in-flight microbatch (`ceil(pr / stages)`) and once per stage by the traversal, which nets out to once per iteration. Stage-resident weights are still charged once per stage, so pipeline parallelism correctly continues to amortize weights worse than tensor parallelism at equal GPU count.
+- Per-token latency is unchanged in intent: a decode iteration still traverses every stage end-to-end, so `tps == users / lat` continues to hold by construction and the User Pareto tooltip's two halves stay consistent. `pp=1` deployments are numerically unchanged.
+- Tensor-parallel collective time is now charged inside the traversal rather than once per iteration. `_dense_tp_oh` is already scaled to a single stage's layer count, so a token crossing the whole model pays every layer's collectives; PP boundary sends stay outside it as one trip of `stages - 1` hops.
+- Corrected decoder prefill attention to the causal triangle. Dense and sliding-window prefill previously charged the full `seq × seq` attention rectangle; causal masking halves both QKᵀ and AV to `seq × (seq + 1) / 2` key positions, and top-k sparse prefill keeps the same trapezoid bound (`min(p + 1, top_k)` positions per query). Long-prompt prefill throughput rises by the attention's share of total work (≈17% at 16k and ≈23% at 64k for Llama-class dense models, ≈40% at 64k for DeepSeek-V3-class MLA); decode and the already-documented compressed-attention upper bound are unchanged. Bidirectional encoder prefill (embedding models) still charges the full rectangle via a new `causal=False` path.
+- Corrected absorbed-MLA decode attention FLOPs. Decode charged `4 × head_dim` per query head per KV row like dense attention; absorbed MLA instead scores each query head against the joint latent+rope key (`mla_kv_dim + mla_rope_dim` multiply-adds) and accumulates over the latent value (`mla_kv_dim` more), so the per-row cost follows the latent geometry — 4.25× `head_dim` for the 512+64 latent catalog entries. Decode steps at typical operating points are bandwidth-bound and barely move; compute-bound MLA decode (large batch, long context) now carries ~1.75–1.9× higher attention FLOPs.
+- Prefix-cache hits no longer inflate prefill capacity. `compute_prefill` budgeted per-sequence memory at the post-miss length, so a 50% hit doubled the prompt batch that fits and a 100% hit reported the unbounded sentinel. A new `kv_residency_seq_len` argument charges KV residency at the full prompt length while computing at the miss length; `compute_data`, `compute_data_capacity`, and `compute_user_experience` pass it. Prefix sharing across concurrent requests is deliberately not simulated (conservative), and a 100% hit now still reports the residency-bounded `max_batch` instead of the sentinel.
+- Speculative decoding now charges attached drafters their prefill prompt pass. EAGLE-3, DFlash, DSpark, and standalone draft models run their own prompt forward to seed drafter KV/hidden state; that compute (and the drafter weight read) is now included, ≈12% slower prefill for a 1B drafter on an 8B target. MTP reuses the target's final hidden state and n-gram drafting has no weights, so neither pays a prompt-length pass — pinned by tests.
+
+### Changed
+
+- Documented previously implicit estimator semantics in the README, the in-app explainer, and code comments: TTFT is the batch-prefill makespan (a p100, not a mean); decode slot counts are average-occupancy figures under steady-state continuous batching (`input + output/2` resident KV); speculative verification re-reads sequence KV per drafted position (conservative versus fused verify kernels). No numbers changed from this item.
+
+## 2026-08-19
+
+### Fixed
+
+- Corrected DeepSeek V4 Flash serving math by enabling its documented tensor-parallel layouts, modeling the official SWA/C4/C128 per-layer compression pattern, separating resident KV capacity from sparse decode reads, and charging the compact full-context indexer scan independently.
+
 ## 2026-08-09
 
 ### Added
