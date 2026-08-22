@@ -11,12 +11,12 @@ from data import (
     RADEON_GPU_SPECS_CAPTURED_AT,
 )
 from planner_service import add_model, add_models, change_gpu_qty, set_model_gpu_count
+from presentation.model_cards import get_model_info
 from scenarios import deserialize_planner_state
 from state import (
     PlannerState,
     add_gpu,
 )
-from viewmodels import get_model_info
 
 
 class GPUCatalogTests(unittest.TestCase):

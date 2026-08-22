@@ -299,6 +299,18 @@ class Model:
     sparse_indexer_heads: int = 0
     sparse_indexer_head_dim: int = 0
     sparse_indexer_layers: int = 0
+    # Per-target-layer compressed-attention ratios. A zero ratio denotes a
+    # sliding-window-only layer; positive ratios retain one compressed KV row
+    # per ``ratio`` source tokens in addition to the live window. Architectures
+    # such as DeepSeek V4 mix several ratios, so a single global top-k cannot
+    # represent either their KV residency or their decode read traffic.
+    attention_compression_ratios: tuple[int, ...] = ()
+    compressed_attention_window: int = 0
+    compressed_attention_indexer_ratio: int = 0
+    # Runtime-format bytes read for one compressed indexer key. This is kept
+    # separate from indexer FLOP geometry because serving kernels can store a
+    # compact FP8/FP4 key rather than ``heads * head_dim`` elements.
+    sparse_indexer_cache_bytes_per_token: float = 0.0
     attention_label: str = ""
     # Optional architecture metadata for models whose depth mixing and sparse
     # channel mixing cannot be inferred from the ordinary transformer fields.

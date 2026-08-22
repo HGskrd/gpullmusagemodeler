@@ -3,7 +3,6 @@ from unittest.mock import patch
 
 from calc import avg_dist
 from data import DIST_PRESETS, INPUT_BUCKETS, OUTPUT_BUCKETS
-from econ_variants import econ_payload
 from engine.economics import (
     DemandFates,
     ModelUtilization,
@@ -18,6 +17,7 @@ from engine.economics import (
     price_outcomes,
     summarize_projection,
 )
+from presentation.econ import econ_payload
 from state import GpuPool, ModelAssignment, PlannerState, Project, _sync_aggregate_distribution
 
 
@@ -49,7 +49,7 @@ class RevenueProjectionTests(unittest.TestCase):
         state = PlannerState()
 
         with patch(
-            "econ_variants.compute_revenue_projection",
+            "presentation.econ.compute_revenue_projection",
             wraps=compute_revenue_projection,
         ) as projection:
             payload = econ_payload(state)

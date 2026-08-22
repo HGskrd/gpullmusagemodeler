@@ -4,9 +4,10 @@ from unittest.mock import patch
 
 from app_factory import create_test_app
 
-import app as app_module
-import econ_variants
-import state as state_module
+import planner_service
+import web.api as web_api
+import web.econ as econ_routes
+import web.session_store as session_store
 from scenarios import serialize_scenario
 from state import PlannerState, add_gpu, set_gpu_cost, set_project_name
 
@@ -28,7 +29,7 @@ class PlannerRevisionTests(unittest.TestCase):
         self.assertGreater(state.revision, after_add)
 
     def test_child_only_project_edit_advances_revision(self):
-        state, _ = app_module.create_default_scenario()
+        state, _ = planner_service.create_default_scenario()
         before = state.revision
         set_project_name(state, state.projects[0].uid, "Revised workload")
         self.assertGreater(state.revision, before)
@@ -49,12 +50,12 @@ class DerivedResponseCacheTests(unittest.TestCase):
         self.client.get("/", headers=self.headers)
 
     def _state(self):
-        scope_id = next(key for key in state_module._states if key.endswith(f":{self.tab_id}"))
-        return state_module.get_state(scope_id)
+        scope_id = next(key for key in session_store._states if key.endswith(f":{self.tab_id}"))
+        return session_store.get_state(scope_id)
 
     def test_chart_json_is_cached_revalidated_and_invalidated_by_mutation(self):
-        original = app_module._build_chart_payload
-        with patch.object(app_module, "_build_chart_payload", wraps=original) as build:
+        original = web_api._build_chart_payload
+        with patch.object(web_api, "_build_chart_payload", wraps=original) as build:
             first = self.client.get("/api/chart-data", headers=self.headers)
             second = self.client.get("/api/chart-data", headers=self.headers)
             conditional = self.client.get(
@@ -90,8 +91,8 @@ class DerivedResponseCacheTests(unittest.TestCase):
         self.assertEqual(conditional.status_code, 304)
 
     def test_swap_recommendations_are_cached_by_scenario_fingerprint(self):
-        original = econ_variants.compute_swap_recs
-        with patch.object(econ_variants, "compute_swap_recs", wraps=original) as compute:
+        original = econ_routes.compute_swap_recs
+        with patch.object(econ_routes, "compute_swap_recs", wraps=original) as compute:
             first = self.client.get("/econ/swaps?panel=A&view=table", headers=self.headers)
             second = self.client.get("/econ/swaps?panel=A&view=table", headers=self.headers)
 

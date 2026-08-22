@@ -24,6 +24,24 @@ from .text_support import (
     _rwkv7_g1_model,
 )
 
+DEEPSEEK_V4_FLASH_ARCH_CAPTURED_AT = "2026-08-19"
+DEEPSEEK_V4_FLASH_ARCH_SOURCES = (
+    "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731/blob/main/inference/config.json",
+    "https://docs.sglang.io/cookbook/autoregressive/DeepSeek/DeepSeek-V4",
+    "https://github.com/vllm-project/vllm/blob/main/vllm/models/deepseek_v4/attention.py",
+)
+# The official 0731 inference config has 43 target layers followed by one
+# attachment slot. Target layers 0..42 contain four SWA-only layers, twenty C4
+# sparse/indexed layers, and nineteen C128 heavily-compressed layers.
+DEEPSEEK_V4_FLASH_TARGET_COMPRESSION_RATIOS = (
+    0,
+    0,
+    *((4, 128) * 19),
+    4,
+    0,
+    0,
+)
+
 TEXT_MODELS: dict[str, Model] = {
     "l8": Model(
         "l8",
@@ -1379,11 +1397,20 @@ TEXT_MODELS: dict[str, Model] = {
         True,
         512,
         64,
+        mla_tp_supported=True,
         hidden_dim=4096,
         sparse_attention_top_k=512,
         sparse_indexer_heads=64,
         sparse_indexer_head_dim=128,
-        sparse_indexer_layers=3,
+        sparse_indexer_layers=20,
+        attention_compression_ratios=DEEPSEEK_V4_FLASH_TARGET_COMPRESSION_RATIOS,
+        compressed_attention_window=128,
+        compressed_attention_indexer_ratio=4,
+        # vLLM's conservative/default FP8 indexer cache stores 128 FP8 values
+        # plus one FP32 scale per 128-value block: 132 bytes/compressed token.
+        # Its optional MXFP4 indexer is smaller (68 B), but the planner does not
+        # expose that runtime toggle yet.
+        sparse_indexer_cache_bytes_per_token=132.0,
         attention_label="HCA/CSA compressed sparse attention · top-k 512 indexer · 1M context",
         moe_intermediate_dim=2048,
         moe_routed_experts=256,

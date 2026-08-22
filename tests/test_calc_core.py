@@ -4,15 +4,19 @@ from dataclasses import replace
 from unittest.mock import patch
 
 from calc import (
+    UNBOUNDED_BATCH,
     EfficiencyParams,
     SpecRuntime,
     _active_weight_bytes,
+    _attention_row_flops_per_head,
+    _causal_attention_pairs,
     _compute_decode_core,
     _decode_attention_work,
     _decode_step_time,
     _dense_tp_oh,
     _pp_peak_fraction,
     _prefill_attention_work,
+    attention_kv_read_bytes_for_sequence,
     attention_residual_scratch_bytes,
     communication_breakdown,
     compute_data,
@@ -21,6 +25,7 @@ from calc import (
     compute_embedding,
     compute_memory,
     compute_prefill,
+    effective_prefill_length,
     fixed_paged_oh,
     kv_cache_bytes_for_sequence,
     model_gpu_flops,
@@ -28,6 +33,7 @@ from calc import (
     per_replica_kv_cache_bytes,
     per_replica_recurrent_state_bytes,
     per_replica_token_kv_cache_bytes,
+    per_replica_token_kv_read_bytes,
     per_tp_linear_attention_state_bytes,
     resolve_spec_runtime,
     spec_acceptance_len,
@@ -251,6 +257,9 @@ class CoreCapacityMathTests(unittest.TestCase):
         selected_attention = 4 * pr * 4 * (8 * 16) * 32
         decode_indexer = 2 * pr * 2 * (2 * 4) * seq
         prefill_indexer = decode_indexer * seq
+        # Causal sparse prefill: query p can select at most min(p + 1, top_k)
+        # positions — a trapezoid once the prompt exceeds top_k.
+        causal_selected = 4 * pr * 4 * (8 * 16) * (128 * 32 - 32 * 31 / 2)
 
         self.assertEqual(
             _decode_attention_work(model, pr, seq, 1),
@@ -258,7 +267,7 @@ class CoreCapacityMathTests(unittest.TestCase):
         )
         self.assertEqual(
             _prefill_attention_work(model, pr, seq, 1),
-            selected_attention * seq + prefill_indexer,
+            causal_selected + prefill_indexer,
         )
 
         short_seq = 16
@@ -268,6 +277,94 @@ class CoreCapacityMathTests(unittest.TestCase):
             _decode_attention_work(model, pr, short_seq, 1),
             short_selected_attention + short_indexer,
         )
+
+    def test_compressed_attention_separates_residency_from_decode_reads(self):
+        model = Model(
+            "compressed",
+            "Compressed",
+            "Test",
+            "#000",
+            1,
+            1,
+            False,
+            3,
+            4,
+            1,
+            8,
+            True,
+            mla_kv_dim=8,
+            mla_rope_dim=2,
+            sparse_attention_top_k=32,
+            sparse_indexer_heads=2,
+            sparse_indexer_head_dim=4,
+            sparse_indexer_layers=1,
+            attention_compression_ratios=(0, 4, 128),
+            compressed_attention_window=128,
+            compressed_attention_indexer_ratio=4,
+            sparse_indexer_cache_bytes_per_token=132,
+        )
+        seq = 8192
+        main_row_bytes = (8 + 2) * 2
+        indexer_bytes = (seq // 4) * 132
+        resident_rows = 128 + (128 + seq // 4) + (128 + seq // 128)
+        read_rows = 128 + (128 + 32) + (128 + seq // 128)
+        expected_resident = resident_rows * main_row_bytes + indexer_bytes
+        expected_read = read_rows * main_row_bytes + indexer_bytes
+
+        self.assertEqual(kv_cache_bytes_for_sequence(model, seq, "bf16"), expected_resident)
+        self.assertEqual(attention_kv_read_bytes_for_sequence(model, seq, "bf16"), expected_read)
+        self.assertLess(expected_read, expected_resident)
+        self.assertEqual(
+            per_replica_token_kv_cache_bytes(model, seq, "bf16", 1, 1),
+            expected_resident,
+        )
+        self.assertEqual(
+            per_replica_token_kv_read_bytes(model, seq, "bf16", 1, 1),
+            expected_read,
+        )
+
+    def test_deepseek_v4_flash_is_faster_than_qwen27_at_same_tp8_topology(self):
+        gpu = GPUS["H100"]
+        qwen = MODELS["q27"]
+        deepseek = MODELS["deepseek-v4-flash"]
+        topology = (8, 1, 1)
+
+        self.assertIn(
+            topology,
+            valid_strategies(deepseek, 8, gpu, 0.90, 4.0, "bf16"),
+        )
+        qwen_decode = compute_decode(
+            qwen,
+            topology[0],
+            topology[1],
+            32,
+            topology[2],
+            gpu,
+            0.90,
+            4.0,
+            "bf16",
+            self.chat_in,
+            self.chat_out,
+            self.eff,
+        )
+        deepseek_decode = compute_decode(
+            deepseek,
+            topology[0],
+            topology[1],
+            32,
+            topology[2],
+            gpu,
+            0.90,
+            4.0,
+            "bf16",
+            self.chat_in,
+            self.chat_out,
+            self.eff,
+        )
+
+        self.assertIsNotNone(qwen_decode)
+        self.assertIsNotNone(deepseek_decode)
+        self.assertGreater(deepseek_decode.tps, qwen_decode.tps)
 
     def test_local_and_global_kv_heads_are_sharded_independently(self):
         model = Model(
@@ -335,7 +432,40 @@ class CoreCapacityMathTests(unittest.TestCase):
         model = Model("tiny", "Tiny", "Test", "#000", 1, 1, False, 1, 1, 1, 8, False)
 
         self.assertEqual(_decode_attention_work(model, 3, 16, 1), 4 * 3 * 1 * 8 * 16)
-        self.assertEqual(_prefill_attention_work(model, 3, 16, 1), 4 * 3 * 1 * 8 * 16 * 16)
+        # Causal decoder prefill attends the triangle, not the rectangle:
+        # sum_{p<16} (p + 1) = 16*17/2 key positions per query head.
+        self.assertEqual(_prefill_attention_work(model, 3, 16, 1), 4 * 3 * 1 * 8 * 16 * 17 / 2)
+        # Bidirectional (embedding) prefill still pays the full rectangle.
+        self.assertEqual(
+            _prefill_attention_work(model, 3, 16, 1, causal=False), 4 * 3 * 1 * 8 * 16 * 16
+        )
+
+    def test_prefill_attention_causal_window_bounded(self):
+        # Sliding-window layers: full triangle below the window, windowed
+        # trapezoid above it.
+        window = 1024.0
+        short = _causal_attention_pairs(512, window)
+        long = _causal_attention_pairs(4096, window)
+
+        self.assertEqual(short, 512 * 513 / 2)
+        self.assertEqual(long, 4096 * 1024 - 1024 * 1023 / 2)
+        self.assertLess(long, 4096 * 1024)
+
+    def test_mla_decode_attention_uses_latent_row_width(self):
+        # Absorbed MLA decode scores latent+rope keys and accumulates latent
+        # values, so the per-row FLOPs follow the latent geometry (1088/256 =
+        # 4.25x head_dim) rather than 4*head_dim.
+        model = MODELS["ds3"]
+        row = _attention_row_flops_per_head(model)
+        self.assertEqual(row, 2.0 * (2 * 512 + 64))
+        self.assertEqual(_decode_attention_work(model, 1, 0, 1), 0.0)
+
+        glm5 = MODELS["glm5"]
+        seq = 8000
+        work = _decode_attention_work(glm5, 1, seq, 1)
+        indexer = 2 * 1 * 32 * 128 * 1.0 * 78 * seq
+        main = 78 * 64 * 2.0 * (2 * 512 + 64) * 2048
+        self.assertAlmostEqual(work, main + indexer, delta=work * 1e-9)
 
     def test_decode_does_not_activate_idle_dp_replicas(self):
         model = MODELS["q08"]
@@ -352,6 +482,23 @@ class CoreCapacityMathTests(unittest.TestCase):
         self.assertEqual(dp8.tps, dp1.tps)
         self.assertEqual(dp8.step_ms, dp1.step_ms)
         self.assertEqual(dp8.max_slots, dp1.max_slots * 8)
+
+    def test_prefill_attention_is_causal_half_rectangle(self):
+        model = MODELS["l8"]
+        seq = 4096
+
+        causal = _prefill_attention_work(model, 1, seq, 1)
+        bidirectional = _prefill_attention_work(model, 1, seq, 1, causal=False)
+
+        # Causal pairs = seq*(seq+1)/2 vs the full seq*seq rectangle, so the
+        # two differ by exactly one causal edge of seq queries.
+        width = model.attention_query_head_count * model.head_dim
+        self.assertEqual(bidirectional - 2 * causal, -4 * model.layers * width * seq)
+        self.assertAlmostEqual(
+            causal,
+            4 * model.layers * width * seq * (seq + 1) / 2,
+            delta=causal * 1e-9,
+        )
 
     def test_decode_sums_uneven_replica_loads(self):
         model = MODELS["q08"]
@@ -392,12 +539,11 @@ class CoreCapacityMathTests(unittest.TestCase):
         self.assertEqual(result.lat, result.step_ms)
         self.assertAlmostEqual(result.lat, 1000.0 / (result.tps / 64), delta=0.02)
 
-    def test_pipeline_decode_does_not_accelerate_each_user_with_concurrency(self):
+    def _pipeline_decode_sweep(self, users_sweep=(1, 2, 4, 8, 16, 32, 64)):
         model = MODELS["kimi-k3"]
         gpu = GPUS["B300"]
-        per_user_tps = []
-
-        for users in (1, 2, 4, 8, 16, 32, 64):
+        results = []
+        for users in users_sweep:
             result = compute_decode(
                 model,
                 4,
@@ -413,11 +559,65 @@ class CoreCapacityMathTests(unittest.TestCase):
                 self.eff,
             )
             self.assertIsNotNone(result)
-            per_user_tps.append(result.tps / users)
+            results.append((users, result))
+        return results
+
+    def test_pipeline_decode_does_not_accelerate_each_user_with_concurrency(self):
+        # Assert on ``lat`` rather than ``tps / users``.  ``tps`` is a rounded
+        # integer, so ``tps / users`` wobbles by up to ``0.5 / users`` and a
+        # strict monotonicity check on it fails on rounding alone even when the
+        # underlying per-token latency is exactly flat.
+        latencies = [result.lat for _, result in self._pipeline_decode_sweep()]
 
         self.assertTrue(
-            all(later <= earlier for earlier, later in zip(per_user_tps, per_user_tps[1:]))
+            all(later >= earlier for earlier, later in zip(latencies, latencies[1:])),
+            f"per-token latency improved with concurrency: {latencies}",
         )
+
+    def test_pipeline_decode_throughput_matches_latency_identity(self):
+        # ``tps`` and ``lat`` are two views of one cycle time.  A change that
+        # speeds up aggregate throughput without moving latency (or vice versa)
+        # would make the chart tooltip self-contradictory, so pin the identity.
+        for users, result in self._pipeline_decode_sweep():
+            with self.subTest(users=users):
+                self.assertAlmostEqual(
+                    result.tps / users, 1000.0 / result.lat, delta=0.5 / users + 0.02
+                )
+
+    def test_pipeline_decode_aggregate_throughput_grows_with_concurrency(self):
+        # The regression this guards: charging batch-proportional work once per
+        # stage *and* once per traversal made an 8-stage pipeline no faster in
+        # aggregate than a single stage.  Adding users must never reduce total
+        # tokens/s while the batch still fits.
+        totals = [result.tps for _, result in self._pipeline_decode_sweep()]
+
+        self.assertTrue(
+            all(later >= earlier for earlier, later in zip(totals, totals[1:])),
+            f"aggregate throughput fell as concurrency rose: {totals}",
+        )
+
+    def test_pipeline_parallel_amortizes_weights_worse_than_tensor_parallel(self):
+        # PP reads each stage's full weight slice per microbatch, so at equal
+        # GPU count it must not beat TP on a weight-bound decode.  This is the
+        # guard against "fixing" the regression above by deleting the traversal.
+        model = MODELS["q08"]
+        gpu = GPUS["H100"]
+        kwargs = dict(
+            mu=0.90,
+            profiled_non_kv_gb=2.0,
+            prec="bf16",
+            in_dist=self.chat_in,
+            out_dist=self.chat_out,
+            eff=self.eff,
+        )
+        for users in (8, 64, 256):
+            with self.subTest(users=users):
+                tp2 = compute_decode(model, 2, 1, users, 1, gpu, **kwargs)
+                pp2 = compute_decode(model, 1, 2, users, 1, gpu, **kwargs)
+                self.assertIsNotNone(tp2)
+                self.assertIsNotNone(pp2)
+                self.assertLessEqual(pp2.tps, tp2.tps)
+                self.assertGreaterEqual(pp2.lat, tp2.lat)
 
     def test_pipeline_fill_drain_prevents_batch_one_speedup(self):
         model = MODELS["q08"]
@@ -463,6 +663,118 @@ class CoreCapacityMathTests(unittest.TestCase):
             self.eff,
         )
         self.assertIsNone(result)
+
+    def test_prefix_hit_does_not_inflate_prefill_batch_fit(self):
+        # A cached prefix removes prefill compute but not KV residency, so the
+        # per-sequence memory fit must not improve with the hit rate.
+        model = MODELS["q08"]
+        gpu = GPUS["H100"]
+
+        for hit_rate in (0.0, 0.5, 0.9):
+            miss_len = effective_prefill_length(2048, hit_rate)
+            result = compute_prefill(
+                model,
+                1,
+                1,
+                8,
+                1,
+                miss_len,
+                gpu,
+                0.90,
+                2.0,
+                "bf16",
+                self.eff,
+                kv_residency_seq_len=2048,
+            )
+            self.assertIsNotNone(result)
+            # 67.03 GB KV budget / 35.27 MB per 2048-token sequence.
+            self.assertEqual(result.max_batch, 1900)
+
+        # Without the residency override the call keeps its miss-length-only
+        # semantics and overstates how many prompts fit.
+        legacy = compute_prefill(
+            model,
+            1,
+            1,
+            8,
+            1,
+            effective_prefill_length(2048, 0.5),
+            gpu,
+            0.90,
+            2.0,
+            "bf16",
+            self.eff,
+        )
+        self.assertEqual(legacy.max_batch, 2955)
+
+    def test_full_prefix_hit_residency_is_bounded(self):
+        model = MODELS["q08"]
+        gpu = GPUS["H100"]
+
+        result = compute_prefill(
+            model,
+            1,
+            1,
+            8,
+            1,
+            0,
+            gpu,
+            0.90,
+            2.0,
+            "bf16",
+            self.eff,
+            kv_residency_seq_len=2048,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertTrue(math.isfinite(result.rps))
+        self.assertEqual(result.service_time, 0.0)
+        # Not the unbounded sentinel: residency still caps concurrent prompts.
+        self.assertLess(result.max_batch, UNBOUNDED_BATCH)
+        self.assertEqual(result.max_batch, 1900)
+
+    def test_attached_drafter_pays_prefill_prompt_pass(self):
+        # EAGLE-3 runs its own prompt forward to seed drafter state, so
+        # speculative decoding must slow prefill; MTP reuses the target's
+        # final hidden state and n-gram has no weights, so neither may.
+        model = MODELS["l8"]
+        gpu = GPUS["H100"]
+        eagle = resolve_spec_runtime(model, "eagle3", 3, 0.0, "bf16")
+        mtpless = resolve_spec_runtime(model, "ngram", 4, 0.0, "bf16")
+
+        base = compute_prefill(model, 1, 1, 8, 1, 4096, gpu, 0.90, 2.0, "bf16", self.eff)
+        with_eagle = compute_prefill(
+            model, 1, 1, 8, 1, 4096, gpu, 0.90, 2.0, "bf16", self.eff, eagle
+        )
+        with_ngram = compute_prefill(
+            model, 1, 1, 8, 1, 4096, gpu, 0.90, 2.0, "bf16", self.eff, mtpless
+        )
+
+        self.assertIsNotNone(base)
+        self.assertIsNotNone(with_eagle)
+        self.assertIsNotNone(with_ngram)
+        self.assertGreater(with_eagle.service_time, base.service_time * 1.05)
+        self.assertAlmostEqual(
+            with_ngram.service_time, base.service_time, delta=base.service_time * 1e-9
+        )
+        # Drafter weights plus the KV overhead shrink the prompt budget.
+        self.assertLess(with_eagle.max_batch, base.max_batch)
+
+    def test_ds3_mtp_prefill_stays_free_of_prompt_pass(self):
+        model = MODELS["ds3"]
+        mtp = resolve_spec_runtime(model, "mtp", 1, 0.0, "fp8")
+
+        base = compute_prefill(model, 8, 1, 8, 1, 4096, GPUS["H200"], 0.90, 2.0, "fp8", self.eff)
+        with_mtp = compute_prefill(
+            model, 8, 1, 8, 1, 4096, GPUS["H200"], 0.90, 2.0, "fp8", self.eff, mtp
+        )
+
+        self.assertIsNotNone(base)
+        self.assertIsNotNone(with_mtp)
+        # MTP adds no prompt-length FLOPs, but its weights still slow the
+        # weight-read floor and shrink the KV budget.
+        self.assertGreaterEqual(with_mtp.service_time, base.service_time)
+        self.assertLess(with_mtp.max_batch, base.max_batch)
 
     def test_full_prefix_hit_is_finite(self):
         result = compute_prefill(

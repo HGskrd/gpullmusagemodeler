@@ -20,6 +20,8 @@ For vLLM deployments, useful calibration signals include request counts, prompt 
 
 Hybrid/recurrent architectures are modeled with separate token-growing attention KV and fixed recurrent-state traffic. The default decode path conservatively reads and writes recurrent state once per target block; runtime-specific buffering such as ReplaySSM still requires calibration. Kimi K3 prefill capacity also includes a conservative Block AttnRes activation bound. MoE estimates do not yet charge expert-parallel dispatch/combine collectives, and the planner surfaces that omission wherever a MoE model is selected.
 
+Decoder prefill charges the causal attention triangle (each prompt query attends only to positions at or before it); bidirectional encoder prefill (embedding models) charges the full rectangle. Absorbed-MLA decode scores the joint latent+rope key, so its per-row attention FLOPs follow the latent geometry rather than `4 × head_dim`. Prefix-cache hits remove prefill compute but not KV residency: capacity is charged at the full prompt length per sequence without simulating prefix sharing across concurrent requests. Speculative-decoding verification re-reads the sequence KV for every drafted position — conservative versus fused verify kernels that load KV once per cycle — and attached drafters (EAGLE-3, DFlash, DSpark, draft models) are additionally charged their own prompt forward in prefill, while MTP and n-gram drafting are not. Decode slot counts are average-occupancy figures under steady-state continuous batching (`input + output/2` resident KV); a fully synchronized cohort peaks at `input + output`. Reported TTFT is the batch-prefill makespan (the last user in the batch), not the mean.
+
 Cloud entries may define an input-length threshold and a second set of long-context input, cached-input, and output rates. The calculator switches tiers only when the request input is strictly above the published threshold.
 
 ## Requirements
@@ -202,6 +204,41 @@ The planner stores complete A/B scenario snapshots—including hardware, model a
 Snapshots are stored transactionally in `instance/planner_snapshots.sqlite3`; the legacy JSON file is imported on first use when present. The calculator discloses this behavior and provides a **Delete my scenarios** action that removes the current visitor's persisted snapshots and in-memory state. Set `PLANNER_TRACKING_ENABLED=false` when a deployment should not retain scenarios, or configure the optional retention limits above.
 
 Complete scenarios can be exported and imported as versioned JSON from the calculator. Treat these files as potentially sensitive infrastructure-planning data.
+
+## Module Layout
+
+The import graph is acyclic and every module imports downward only, with one
+recorded exception noted below. `tests/test_architecture.py` enforces both.
+
+| Layer | Modules | Owns |
+|---|---|---|
+| `web/` | `planner`, `use_cases`, `scenarios`, `api`, `admin`, `econ` | The 61 route handlers, one blueprint per responsibility |
+| | `helpers`, `middleware`, `config`, `cache`, `session_store` | Form coercion and the HTMX envelope; security headers, rate limiting and compression; environment and constants; derived-response caches; the process-local state registry |
+| `presentation/` | `charts`, `econ`, `model_cards`, `reports`, `formatting` | Chart series, economics payloads, model card view models, the plain-text report, number formatting |
+| `planner_service.py` | | Orchestration: mutate, retune, validate |
+| `engine/`, `calc.py`, `placement.py` | `economics`, `deployment.py` | Estimator math, topology resolution, projection economics |
+| `state.py`, `scenarios.py` | | `PlannerState` and its mutators; scenario serialization |
+| `data/` | 13 catalog modules | Models, GPUs, pricing, quality, presets, use cases |
+
+`app.py` is the composition root only: it builds `create_app()`, registers the
+blueprints, middleware, error handlers and template filters, and holds no
+routes or business logic.
+
+Two invariants are worth knowing before editing:
+
+- **Revision bumps.** Derived caches key on `PlannerState.revision`. Mutators in
+  `state.py` carry `@bumps_revision`; code outside it (notably `placement.py`)
+  must bump explicitly. `tests/test_revision_invariant.py` enforces both.
+- **Catalog order.** `data/models.py` builds `MODELS` by walking `MODEL_ORDER`,
+  so a family entry missing from that tuple never reaches the picker. The module
+  raises at import if that happens.
+- **No lazy imports.** Function-level imports are how the previous cycles were
+  hidden, so they are rejected outside `typing`/`dataclasses`.
+
+One upward dependency remains and is recorded as an exception in
+`tests/test_architecture.py`: `state.py` calls `avg_dist`,
+`resolve_spec_runtime` and `valid_strategies` from `calc.py` inside its
+mutators. Clearing it means moving those calls up into `planner_service.py`.
 
 ## Development and Validation
 

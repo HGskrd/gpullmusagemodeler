@@ -35,7 +35,7 @@
              name="value"
              hx-post="/use-cases/definition/set"
              hx-target="#useCaseLibrary"
-             hx-trigger="change, keyup[key=='Enter']"
+             hx-trigger="change"
              hx-vals='{"key":"{{ key }}","field":"name"}' />
       <span class="usecase-key">{{ key }}</span>
     </div>
@@ -48,7 +48,7 @@
              name="value"
              hx-post="/use-cases/definition/set"
              hx-target="#useCaseLibrary"
-             hx-trigger="change, keyup[key=='Enter']"
+             hx-trigger="change"
              hx-vals='{"key":"{{ key }}","field":"scale_hint"}' />
     </div>
 
@@ -73,7 +73,7 @@
              name="value"
              hx-post="/use-cases/definition/set"
              hx-target="#useCaseLibrary"
-             hx-trigger="change, keyup[key=='Enter']"
+             hx-trigger="change"
              hx-vals='{"key":"{{ key }}","field":"scale_unit"}' />
     </div>
 
@@ -86,7 +86,7 @@
              inputmode="decimal"
              hx-post="/use-cases/definition/set"
              hx-target="#useCaseLibrary"
-             hx-trigger="change, keyup[key=='Enter']"
+             hx-trigger="change"
              hx-vals='{"key":"{{ key }}","field":"scale_token_multiplier"}' />
     </div>
 
@@ -98,7 +98,7 @@
              name="value"
              hx-post="/use-cases/definition/set"
              hx-target="#useCaseLibrary"
-             hx-trigger="change, keyup[key=='Enter']"
+             hx-trigger="change"
              hx-vals='{"key":"{{ key }}","field":"scale_formula"}' />
     </div>
 
@@ -112,7 +112,7 @@
                name="value"
                hx-post="/use-cases/definition/set"
                hx-target="#useCaseLibrary"
-               hx-trigger="change, keyup[key=='Enter']"
+               hx-trigger="change"
                hx-vals='{"key":"{{ key }}","field":"scale_value"}' />
         <span class="T">{{ scale_kind.unit }}</span>
       </span>
@@ -129,7 +129,7 @@
                name="value"
                hx-post="/use-cases/definition/set"
                hx-target="#useCaseLibrary"
-               hx-trigger="change, keyup[key=='Enter']"
+               hx-trigger="change"
                hx-vals='{"key":"{{ key }}","field":"difficulty_aa_index"}' />
         <span class="T">AA index</span>
       </span>
@@ -150,7 +150,7 @@
                  name="value"
                  hx-post="/use-cases/definition/set"
                  hx-target="#useCaseLibrary"
-                 hx-trigger="change, keyup[key=='Enter']"
+                 hx-trigger="change"
                  hx-vals='{"key":"{{ key }}","field":"quality_weight_{{ domain_key }}_pct"}' />
           <span class="T">%</span>
         </span>
@@ -168,7 +168,7 @@
                name="value"
                hx-post="/use-cases/definition/set"
                hx-target="#useCaseLibrary"
-               hx-trigger="change, keyup[key=='Enter']"
+               hx-trigger="change"
                hx-vals='{"key":"{{ key }}","field":"min_success_rate_pct"}' />
         <span class="T">%</span>
       </span>
@@ -184,7 +184,7 @@
                name="value"
                hx-post="/use-cases/definition/set"
                hx-target="#useCaseLibrary"
-               hx-trigger="change, keyup[key=='Enter']"
+               hx-trigger="change"
                hx-vals='{"key":"{{ key }}","field":"quality_floor_pct"}' />
         <span class="T">%</span>
       </span>
@@ -201,7 +201,7 @@
                name="value"
                hx-post="/use-cases/definition/set"
                hx-target="#useCaseLibrary"
-               hx-trigger="change, keyup[key=='Enter']"
+               hx-trigger="change"
                hx-vals='{"key":"{{ key }}","field":"wtp_per_m"}' />
         <span class="T">/M</span>
       </span>
@@ -279,7 +279,7 @@
                  name="value"
                  hx-post="/use-cases/definition/set"
                  hx-target="#useCaseLibrary"
-                 hx-trigger="change, keyup[key=='Enter']"
+                 hx-trigger="change"
                  hx-vals='{"key":"{{ key }}","field":"latent_jobs_day_m"}' />
           <span class="T">M/d</span>
         </span>
@@ -294,7 +294,7 @@
                  name="value"
                  hx-post="/use-cases/definition/set"
                  hx-target="#useCaseLibrary"
-                 hx-trigger="change, keyup[key=='Enter']"
+                 hx-trigger="change"
                  hx-vals='{"key":"{{ key }}","field":"unlock_price_per_m"}' />
           <span class="T">/M</span>
         </span>

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ from presentation.charts import (
     chart_user_experience,
     chart_user_pareto,
 )
+from presentation.reports import format_projection_report
 from state import GpuPool, ModelAssignment, PlannerState, Project
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -166,6 +168,22 @@ def projection_outputs() -> dict[str, dict]:
     return {name: compute_revenue_projection(state) for name, state in projection_cases().items()}
 
 
+def report_outputs() -> dict[str, str]:
+    """Plain-text projection report for each projection case.
+
+    The report is what users copy out of the planner, so its wording and its
+    numbers are both part of the observable output.
+    """
+    cases = projection_cases()
+    outputs = {name: format_projection_report(state, None) for name, state in cases.items()}
+    # One A/B pair, since the compare panel takes a different formatting branch.
+    names = sorted(cases)
+    outputs["compare_default_vs_no_supply"] = format_projection_report(
+        cases[names[0]], cases[names[1]]
+    )
+    return outputs
+
+
 def chart_outputs() -> dict[str, list[dict]]:
     state = chart_state()
     deployment = resolve_deployment(state)
@@ -200,6 +218,11 @@ def _canonical(value: Any) -> Any:
         return sorted(items, key=lambda item: json.dumps(item, sort_keys=True))
     if isinstance(value, Path):
         return str(value)
+    if isinstance(value, float) and math.isfinite(value):
+        # libm and reduction order can move the final few binary digits across
+        # Python versions and platforms. Goldens should catch estimator changes,
+        # not differences far below the planner's observable precision.
+        return float(format(value, ".12g"))
     return value
 
 

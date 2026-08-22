@@ -6,8 +6,25 @@ line-length = 100
 select = ["E4", "E7", "E9", "F", "I"]
 
 [tool.mypy]
+# Not yet listed, with their current error counts under these settings:
+#   state.py (11), scenarios.py (9), tracking.py (2).
+# Add each one as its errors are fixed rather than relaxing the settings.
+# `follow_imports = "skip"` also means cross-module signatures are not checked
+# yet; drop it once the list above is complete.
 python_version = "3.10"
-files = ["calc.py", "data", "engine", "placement.py", "presentation", "web"]
+files = [
+    "app.py",
+    "calc.py",
+    "cloud_policy.py",
+    "data",
+    "deployment.py",
+    "engine",
+    "placement.py",
+    "planner_service.py",
+    "presentation",
+    "use_case_evidence.py",
+    "web",
+]
 ignore_missing_imports = true
 follow_imports = "skip"
 show_error_codes = true

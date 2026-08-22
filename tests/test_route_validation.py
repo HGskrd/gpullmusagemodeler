@@ -13,8 +13,9 @@ from unittest.mock import patch
 
 from app_factory import create_test_app
 
-import app as app_module
-import state as state_module
+import web.planner as web_planner
+import web.session_store as session_store
+from web.config import BASE_DIR
 
 
 class RouteValidationTests(unittest.TestCase):
@@ -23,8 +24,8 @@ class RouteValidationTests(unittest.TestCase):
         self.client = self.app.test_client()
         self.headers = {"X-Tab-ID": str(uuid.uuid4())}
         self.client.get("/", headers=self.headers)
-        scope = next(iter(state_module._states))
-        self.gpu_uid = state_module.get_state(scope).gpus[0].uid
+        scope = next(iter(session_store._states))
+        self.gpu_uid = session_store.get_state(scope).gpus[0].uid
 
     def test_missing_and_malformed_numeric_fields_are_400(self):
         cases = [
@@ -61,7 +62,7 @@ class RouteValidationTests(unittest.TestCase):
     def test_unexpected_failure_is_an_opaque_500(self):
         secret = "psycopg://user:hunter2@db.internal/planner"
 
-        with patch.object(app_module, "change_gpu_qty", side_effect=RuntimeError(secret)):
+        with patch.object(web_planner, "change_gpu_qty", side_effect=RuntimeError(secret)):
             response = self.client.post(
                 "/gpu/qty",
                 headers=self.headers,
@@ -72,12 +73,38 @@ class RouteValidationTests(unittest.TestCase):
         self.assertEqual(response.get_json()["error"], "Unexpected server error.")
         self.assertNotIn(secret.encode(), response.data)
 
+    def _route_owning_sources(self):
+        """app.py plus every module that owns routes.
+
+        The handlers moved out of app.py into the web/ blueprints, so scanning
+        app.py alone would silently stop checking them.
+        """
+        paths = [BASE_DIR / "app.py", BASE_DIR / "app.py"]
+        paths += sorted((BASE_DIR / "web").glob("*.py"))
+        return [(path, path.read_text(encoding="utf-8")) for path in paths]
+
+    def test_route_modules_are_actually_being_scanned(self):
+        """Guard the guard: the scan must see the real handlers."""
+        sources = self._route_owning_sources()
+        names = {path.name for path, _ in sources}
+        self.assertLessEqual(
+            {"app.py", "planner.py", "api.py", "admin.py", "scenarios.py", "use_cases.py"},
+            names,
+        )
+        decorators = sum(text.count("_bp.route(") for _, text in sources)
+        self.assertGreaterEqual(decorators, 58, "route decorators went missing from the scan")
+
     def test_no_route_still_returns_a_raw_exception_message(self):
-        source = (app_module.BASE_DIR / "app.py").read_text(encoding="utf-8")
-        self.assertNotIn('jsonify({"error": str(e)}), 500', source)
+        for path, source in self._route_owning_sources():
+            with self.subTest(module=path.name):
+                self.assertNotIn('jsonify({"error": str(e)}), 500', source)
 
     def test_no_try_block_has_duplicate_exception_handlers(self):
-        source = (app_module.BASE_DIR / "app.py").read_text(encoding="utf-8")
+        for path, source in self._route_owning_sources():
+            with self.subTest(module=path.name):
+                self._assert_no_duplicate_handlers(source)
+
+    def _assert_no_duplicate_handlers(self, source):
         tree = ast.parse(source)
         duplicates = []
         for node in ast.walk(tree):

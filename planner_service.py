@@ -123,6 +123,9 @@ def add_model(state: PlannerState, model_key: str) -> None:
         )
 
     bf16_now = needs_now["bf16"]
+    # _best_precision_need returns None when nothing fits; the fallback below
+    # resolves it, so the binding is optional until then.
+    selected_precision: Optional[str]
     if not math.isinf(bf16_now):
         selected_precision = "bf16"
         gpu_count = int(bf16_now)

@@ -254,7 +254,9 @@ def _build_model_info(
         x.gpu_count for x in state.models if x.uid != am.uid and x.gpu_uid == am.gpu_uid
     )
     max_avail = gpu_pool.count - others_used if gpu_pool else 0
-    if gpu:
+    # gpu is derived from gpu_pool above, so a truthy gpu already implies a
+    # pool; name the dependency rather than leaving it to inference.
+    if gpu and gpu_pool:
         needs_now = {
             prec: _min_gpu_count_for_pool(
                 model, gpu, state.mu, state.profiled_non_kv_gb, prec, max_avail
@@ -342,7 +344,9 @@ def _build_model_info(
             )
         best_embedding = None
         for bs in _probe_batch_sizes(max(am.prefill_dp, 1)):
-            sample = compute_embedding_distribution(
+            # Distinct from the realtime `sample` bound earlier in this
+            # function: two different result types, so two different names.
+            embedding_sample = compute_embedding_distribution(
                 model,
                 (am.prefill_tp, am.prefill_pp, am.prefill_dp),
                 bs,
@@ -354,10 +358,10 @@ def _build_model_info(
                 am.prec,
                 state.prefill_efficiency,
             )
-            if sample is None:
+            if embedding_sample is None:
                 continue
-            if best_embedding is None or sample.rps > best_embedding.rps:
-                best_embedding = sample
+            if best_embedding is None or embedding_sample.rps > best_embedding.rps:
+                best_embedding = embedding_sample
         doc_distribution = []
         weights = []
         total = sum(max(int(v or 0), 0) for v in state.embedding_doc_dist) or 1

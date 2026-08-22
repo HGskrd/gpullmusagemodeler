@@ -364,6 +364,173 @@ for _evidence in USE_CASE_EVIDENCE.values():
     )
 
 
+# Editorial copy for the built-in use cases: what the workload is, why it is
+# shaped the way it is, and how models should route to it. Lives here rather
+# than in the HTTP layer because it is catalog content, not request handling.
+BASE_USE_CASE_DETAILS = {
+    "classify": {
+        "summary": "High-volume, low-latency categorization, routing, tagging, and extraction work where the answer is usually a compact label or short structured record.",
+        "examples": (
+            "Ticket triage, document labels, compliance flags, PII detection, support intent routing.",
+            "Offline backfills where a large archive becomes worth processing only if token cost falls far enough.",
+        ),
+        "why": (
+            "Difficulty is low because correctness usually depends on pattern recognition and schema adherence, not deep reasoning.",
+            "Short input and output shapes keep decode pressure low; the economic constraint is usually price per million tokens.",
+            "Batch eligibility reflects the fact that most classification queues can be shifted away from peak hours.",
+        ),
+        "routing": (
+            "Small and mid-sized models should win when their quality clears the SLO, because token price matters more than frontier reasoning.",
+            "Large latent demand makes this a good probe for whether cheaper internal serving creates new work instead of just replacing cloud spend.",
+        ),
+    },
+    "summarize": {
+        "summary": "Long-document compression where users need faithful summaries, extracted takeaways, or briefings from sizeable source material.",
+        "examples": (
+            "Contracts, research papers, meeting transcripts, policy documents, incident reports.",
+            "Periodic knowledge-base digestion or archive summarization jobs.",
+        ),
+        "why": (
+            "The long-document input preset stresses prefill and KV capacity more than a normal chat workload.",
+            "The long output preset assumes the answer is not just a label; the model must produce a useful narrative artifact.",
+            "The long-context requirement prevents routing to models that cannot safely ingest the source material.",
+        ),
+        "routing": (
+            "Models with strong long-context behavior and acceptable token efficiency should beat tiny models that summarize cheaply but unreliably.",
+            "Batch eligibility means capacity planning can often use night-batching levers without hurting user experience.",
+        ),
+    },
+    "chatbot": {
+        "summary": "Interactive assistant traffic for customer or employee support, with tool calls and a strict quality floor.",
+        "examples": (
+            "Customer-service bot, IT helpdesk agent, HR policy assistant, product support copilot.",
+            "Short-turn interactive sessions where the answer must be good enough on the first try.",
+        ),
+        "why": (
+            "The strict SLO models a user-facing workflow where bad answers create escalation cost.",
+            "Tool use is required because real support flows often need retrieval, ticket lookup, account actions, or workflow APIs.",
+            "The chat-shaped distribution keeps this closer to regular interactive prompt and response lengths.",
+        ),
+        "routing": (
+            "Capacity should prioritize low latency and reliable quality over the absolute cheapest token path.",
+            "Because it is not batch eligible, this preset competes for daytime peak capacity.",
+        ),
+    },
+    "email_corrector": {
+        "summary": "High-frequency writing assistance for short business messages, where scale is usually driven by headcount and message volume.",
+        "examples": (
+            "Email correction, tone adjustment, short reply drafting, grammar fixes, translation polish.",
+            "Employee productivity copilots embedded in mail or chat tools.",
+        ),
+        "why": (
+            "Difficulty is modest: the model mostly rewrites or corrects rather than solving deep tasks.",
+            "Chat-shaped input/output keeps the workload interactive and short-turn.",
+            "Scale should be set from staff count, adoption rate, and messages per employee rather than inherited from the preset.",
+        ),
+        "routing": (
+            "Smaller models should clear this workload when the SLO is reasonable, making price and latency central.",
+            "Because demand follows people rather than documents, large organizations can make this small-looking kind dominate volume.",
+        ),
+    },
+    "coding": {
+        "summary": "Developer-assistant traffic for code explanation, edits, generation, and repository-aware workflows.",
+        "examples": (
+            "IDE assistant, code review helper, test generation, bug diagnosis, migration support.",
+            "Longer prompts that include files, logs, stack traces, or design constraints.",
+        ),
+        "why": (
+            "Higher difficulty reflects the need for multi-step reasoning, syntax precision, and domain context.",
+            "Tool and long-context gates represent repository search, file inspection, and large prompt windows.",
+            "The code-shaped input and output distributions produce more decode work than short chat or classification tasks.",
+        ),
+        "routing": (
+            "Quality failures are expensive, so cheap models may be filtered even when they look attractive on raw throughput.",
+            "Token efficiency matters because coding models can produce long intermediate reasoning or verbose patches.",
+        ),
+    },
+    "meeting_notes": {
+        "summary": "Transcript-to-summary workflows for meetings, calls, and interviews that can usually tolerate delayed processing.",
+        "examples": (
+            "Meeting minutes, action-item extraction, call summaries, interview digests.",
+            "Team-wide transcription backfills or daily note generation.",
+        ),
+        "why": (
+            "RAG-shaped input captures a typical one-hour transcript while long-document output allows detailed notes.",
+            "The seed no longer imposes a 128k gate: unusually long meetings should be chunked or modeled separately.",
+            "Batch eligibility reflects the fact that most summaries can be delivered minutes later or overnight.",
+        ),
+        "routing": (
+            "This kind often benefits from night batching because immediacy is less important than cost.",
+            "Scale comes from recorded hours and transcript length, not from the task definition itself.",
+        ),
+    },
+    "evals": {
+        "summary": "Offline evaluation, grading, judging, and scoring workloads where many prompts are processed in batches.",
+        "examples": (
+            "Model eval suites, regression checks, judge-model scoring, safety review queues, benchmark runs.",
+            "RAG-style inputs that end in short verdicts, scores, labels, or pass/fail judgments.",
+        ),
+        "why": (
+            "Moderate difficulty and a high SLO model judge workloads where consistency matters more than creative generation.",
+            "The RAG input plus classification output shape captures long evidence with compact decisions.",
+            "Batch eligibility is central: evals can usually wait for cheaper off-peak GPU capacity.",
+        ),
+        "routing": (
+            "This preset should expose whether the cluster has spare batch capacity after interactive demand is served.",
+            "Latent demand models eval coverage that teams skip until per-token cost is low enough.",
+        ),
+    },
+    "inbox_archive": {
+        "summary": "Large personal or organizational inbox archives turned into searchable, summarized, or queryable knowledge bases.",
+        "examples": (
+            "A decade of executive email, team inbox backfills, legal or discovery-oriented mail analysis.",
+            "One-time corpus digestion followed by much smaller incremental updates.",
+        ),
+        "why": (
+            "The scale driver is corpus size: mailboxes, retained years, attachments, and cleanup policy.",
+            "RAG-style input with long-form output reflects retrieval-backed synthesis over many messages.",
+            "Large latent demand models the work that organizations postpone until unit cost drops.",
+        ),
+        "routing": (
+            "The preset stresses batch economics more than interactive latency.",
+            "It should be added at a scale that reflects the corpus, not the number of daily users.",
+        ),
+    },
+    "longctx": {
+        "summary": "Multi-pass analytical workflows over very large source packs, where repeated long prompts are the expensive object.",
+        "examples": (
+            "Log and trace analysis, legal discovery, financial filings, multi-document comparison, technical due diligence.",
+            "Large source packs where retrieval is not enough and the model must reason across the full context.",
+        ),
+        "why": (
+            "The seeded difficulty and long-context gates route toward models that can both ingest and reason over large inputs.",
+            "Long input and output shapes stress memory, prefill, and sustained decode capacity.",
+            "Two million tokens represents roughly sixteen passes, not a single impossible context window.",
+        ),
+        "routing": (
+            "KV capacity can dominate here; a model that is cheap per token but memory-starved may still be the wrong fit.",
+            "Latent demand represents analyses that become practical only when internal cost drops below the unlock threshold.",
+        ),
+    },
+    "research": {
+        "summary": "High-value agentic research where the model gathers information, reasons through tradeoffs, and produces a substantial answer.",
+        "examples": (
+            "Market research, technical investigation, strategy briefs, due diligence, multi-source synthesis.",
+            "Agent loops that combine tools, retrieval, reasoning, and long-form synthesis.",
+        ),
+        "why": (
+            "The seeded difficulty, quality floor, and SLO reserve this workload for frontier reasoning models while leaving a viable route.",
+            "Tool and reasoning requirements encode the fact that this is an agent workflow, not plain autocomplete.",
+            "The 500k-token budget represents many RAG-shaped calls plus a detailed final deliverable.",
+        ),
+        "routing": (
+            "Low volume but high WTP means this can justify expensive frontier or large open-weight models.",
+            "If no deployed model clears the SLO, demand should leak to cloud rather than be counted as served.",
+        ),
+    },
+}
+
+
 def enrich_use_case_details(details: dict) -> dict:
     """Merge evidence and additional copy into the app's existing detail registry."""
     merged = {key: dict(value) for key, value in details.items()}
@@ -372,3 +539,7 @@ def enrich_use_case_details(details: dict) -> dict:
     for key, evidence in USE_CASE_EVIDENCE.items():
         merged.setdefault(key, {}).update(evidence)
     return merged
+
+
+# The public registry: editorial copy merged with sources and evidence.
+USE_CASE_DETAILS = enrich_use_case_details(BASE_USE_CASE_DETAILS)

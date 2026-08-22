@@ -1,5 +1,6 @@
 import unittest
 
+import data.models as data_models
 from calc import (
     EfficiencyParams,
     compute_embedding,
@@ -40,6 +41,11 @@ from data import (
     get_quantization_profile,
     quality_to_aa_intelligence,
     text_models_missing_quality_anchors,
+)
+from data.models_text import (
+    DEEPSEEK_V4_FLASH_ARCH_CAPTURED_AT,
+    DEEPSEEK_V4_FLASH_ARCH_SOURCES,
+    DEEPSEEK_V4_FLASH_TARGET_COMPRESSION_RATIOS,
 )
 
 
@@ -386,9 +392,22 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(model.max_context_tokens, 1_048_576)
         self.assertEqual(model.mla_kv_dim, 512)
         self.assertEqual(model.mla_rope_dim, 64)
+        self.assertTrue(model.mla_tp_supported)
         self.assertEqual(model.sparse_attention_top_k, 512)
         self.assertEqual(model.sparse_indexer_heads, 64)
         self.assertEqual(model.sparse_indexer_head_dim, 128)
+        self.assertEqual(model.sparse_indexer_layers, 20)
+        self.assertEqual(
+            model.attention_compression_ratios,
+            DEEPSEEK_V4_FLASH_TARGET_COMPRESSION_RATIOS,
+        )
+        self.assertEqual(len(model.attention_compression_ratios), model.layers)
+        self.assertEqual(model.attention_compression_ratios.count(0), 4)
+        self.assertEqual(model.attention_compression_ratios.count(4), 20)
+        self.assertEqual(model.attention_compression_ratios.count(128), 19)
+        self.assertEqual(model.compressed_attention_window, 128)
+        self.assertEqual(model.compressed_attention_indexer_ratio, 4)
+        self.assertEqual(model.sparse_indexer_cache_bytes_per_token, 132.0)
         self.assertEqual(model.moe_intermediate_dim, 2048)
         self.assertEqual(model.moe_routed_experts, 256)
         self.assertEqual(model.moe_active_experts, 6)
@@ -400,6 +419,10 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(dspark.default_k, 7)
         self.assertIn(7, dspark.supported_ks)
         self.assertIn("DeepSeek-V4-Flash-0731", dspark.source)
+        self.assertEqual(DEEPSEEK_V4_FLASH_ARCH_CAPTURED_AT, "2026-08-19")
+        self.assertTrue(
+            all(source.startswith("https://") for source in DEEPSEEK_V4_FLASH_ARCH_SOURCES)
+        )
 
     def test_deepseek_v4_pro_remains_a_dated_preview(self):
         self.assertIn("preview", MODELS["deepseek-v4-pro"].name.lower())
@@ -1262,6 +1285,63 @@ class ModelCatalogTests(unittest.TestCase):
             "dspark", {p.method for p in MODELS["deepseek-v4-flash"].speculative_profiles}
         )
         self.assertNotIn("mtp", {p.method for p in MODELS["g12"].speculative_profiles})
+
+    def test_every_model_key_matches_its_catalog_key(self):
+        """calc.py keys its geometry caches on ``m.key``.
+
+        ``_KV_ELEMS_CACHE``, ``_KV_BYTES_CACHE``, ``_LINEAR_STATE_CACHE`` and
+        ``_REPLICA_KV_CACHE`` all assume ``m.key`` uniquely identifies a model's
+        geometry. A derived entry built with ``dataclasses.replace()`` that does
+        not override ``key=`` would silently share the parent's cache slots and
+        return the parent's KV-cache numbers -- with no exception raised.
+        """
+        for key, model in MODELS.items():
+            with self.subTest(model=key):
+                self.assertEqual(
+                    model.key,
+                    key,
+                    f"MODELS['{key}'] carries key='{model.key}'; a derived entry "
+                    "must pass key= to dataclasses.replace()",
+                )
+
+    def test_every_family_entry_is_reachable_through_model_order(self):
+        """A family entry missing from MODEL_ORDER never reaches MODELS.
+
+        ``data/models.py`` builds MODELS by walking MODEL_ORDER, so an entry
+        added to ``models_text.py``/``models_embedding.py``/``models_asr.py``
+        without a MODEL_ORDER line is silently dropped from the catalog and the
+        picker. ``data/models.py`` raises at import; this asserts the same
+        invariant where the suite can name it.
+        """
+        declared = set(data_models._INITIAL_MODELS)
+        ordered = set(data_models.MODEL_ORDER)
+        self.assertEqual(
+            sorted(declared - ordered),
+            [],
+            "model(s) defined in a family module but absent from MODEL_ORDER",
+        )
+        self.assertEqual(
+            sorted(ordered - declared),
+            [],
+            "MODEL_ORDER names key(s) no family module defines",
+        )
+
+    def test_catalog_order_is_model_order_then_derived_asr(self):
+        self.assertEqual(
+            tuple(MODELS),
+            data_models.MODEL_ORDER + data_models.DERIVED_ASR_ORDER,
+            "MODELS iteration order drives picker order; a duplicate key or a "
+            "stray insertion has reordered the catalog",
+        )
+        self.assertEqual(len(MODELS), len(set(MODELS)))
+
+    def test_derived_asr_order_matches_the_entries_actually_built(self):
+        built = tuple(key for key in MODELS if key not in set(data_models.MODEL_ORDER))
+        self.assertEqual(
+            built,
+            data_models.DERIVED_ASR_ORDER,
+            "DERIVED_ASR_ORDER is out of step with the MODELS.update() block",
+        )
 
 
 if __name__ == "__main__":
