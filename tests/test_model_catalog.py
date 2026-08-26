@@ -547,6 +547,37 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertTrue({"tools", "ctx_128k", "reasoning"} <= model.capabilities)
         self.assertTrue(any(profile.method == "mtp" for profile in model.speculative_profiles))
 
+    def test_glm53_flash_catalog_entry_uses_official_hybrid_config(self):
+        model = MODELS["glm53f"]
+
+        self.assertEqual(model.name, "GLM-5.3-Flash 320B-A18B")
+        self.assertEqual(model.total_params, 320e9)
+        self.assertEqual(model.active_params, 18e9)
+        self.assertEqual(model.layers, 45)
+        self.assertEqual(model.hidden_size, 4096)
+        self.assertEqual(model.num_heads, 64)
+        self.assertEqual(model.head_dim, 256)
+        self.assertEqual(model.attention_layer_count, 11)
+        self.assertEqual(model.kv_layer_count, 11)
+        self.assertEqual(model.linear_attention_layer_count, 34)
+        self.assertEqual(model.linear_attention_head_count, 64)
+        self.assertEqual(model.linear_attention_head_size, 128)
+        self.assertEqual(model.linear_attention_k_head_count, 64)
+        self.assertEqual(model.linear_attention_kernel_size, 4)
+        self.assertTrue(model.is_mla)
+        self.assertEqual(model.mla_kv_dim, 512)
+        self.assertEqual(model.mla_rope_dim, 0)
+        self.assertEqual(model.sparse_attention_top_k, 2048)
+        self.assertEqual(model.sparse_indexer_layers, 11)
+        self.assertEqual(model.max_context_tokens, 1024 * 1024)
+        self.assertEqual(model.moe_routed_experts, 288)
+        self.assertEqual(model.moe_active_experts, 8)
+        self.assertEqual(model.moe_shared_experts, 1)
+        self.assertAlmostEqual(model.weight_gb("fp8"), 328.250014584, places=6)
+        self.assertTrue({"tools", "ctx_128k", "images", "reasoning"} <= model.capabilities)
+        self.assertIn("IndexPool", model.attention_label)
+        self.assertEqual(model.speculative_profiles, ())
+
     def test_audited_hybrid_and_long_context_entries_use_published_geometry(self):
         q397 = MODELS["q397"]
         self.assertEqual(

@@ -187,6 +187,7 @@ _VISION_MODELS = (
     "g12",
     "g26",
     "g31",
+    "glm53f",
     "k25",
     "kimi-k3",
     "inkling",
@@ -220,6 +221,7 @@ _REASONING_MODELS = (
     "glm5",
     "glm51",
     "glm52",
+    "glm53f",
     "k25",
     "kimi-k3",
     "inkling",
@@ -299,6 +301,10 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "glm5": (50.0, 110.0),
     "glm51": (51.0, 110.0),
     "glm52": (55.0, 120.0),  # Provisional AA-scale/verbosity proxy pending a direct AA row.
+    # Direct AA Intelligence Index v4.1.1 score from the launch report. AA had
+    # not published comparable total output-token usage at capture time, so
+    # token efficiency remains neutral instead of borrowing GLM-5.2 verbosity.
+    "glm53f": (57.0, 10.0),
     "k25": (35.0, 87.0),
     "kimi-k3": (57.0, 130.0),  # Direct Artificial Analysis K3 reasoning row.
     "kimi-linear-48b": (37.0, 100.0),  # Proxy from Qwen 3.5 35B-A3B until AA publishes Kimi Linear.
@@ -443,6 +449,7 @@ _DEEPSEEK_V3_DOMAIN_SOURCE = "https://huggingface.co/deepseek-ai/DeepSeek-V3"
 _GEMMA4_DOMAIN_SOURCE = "https://ai.google.dev/gemma/docs/core/model_card_4"
 _GLM5_DOMAIN_SOURCE = "https://huggingface.co/zai-org/GLM-5"
 _GLM52_DOMAIN_SOURCE = "https://huggingface.co/zai-org/GLM-5.2"
+_GLM53F_DOMAIN_SOURCE = "https://z.ai/blog/glm-5.3-flash"
 _LAGUNA_S21_DOMAIN_SOURCE = "https://huggingface.co/poolside/Laguna-S-2.1"
 _NORTH_CODE_DOMAIN_SOURCE = "https://huggingface.co/CohereLabs/North-Mini-Code-1.0"
 
@@ -618,6 +625,20 @@ MODEL_DOMAIN_QUALITY_ANCHORS: dict[str, dict[str, DomainQualityAnchor]] = {
             note="Provisional frozen-cohort linear crosswalk; corroborated by DeepSWE 46.2 and Terminal-Bench 2.1 81.0.",
         ),
         "reasoning": _domain_anchor(91.2, "GPQA Diamond", _GLM52_DOMAIN_SOURCE),
+    },
+    "glm53f": {
+        "coding": _domain_anchor(
+            63.4,
+            "DeepSWE v1.1",
+            _GLM53F_DOMAIN_SOURCE,
+            note="Vendor mini-swe-agent evaluation with a 400k context limit and six-hour timeout.",
+        ),
+        "vision": _domain_anchor(
+            80.5,
+            "MMVU",
+            _GLM53F_DOMAIN_SOURCE,
+            note="Native video input evaluated at up to 256k context.",
+        ),
     },
     "laguna-s-2-1": {
         "coding": _domain_anchor(

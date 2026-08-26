@@ -67,6 +67,7 @@ MODEL_ORDER = (
     "glm5",
     "glm51",
     "glm52",
+    "glm53f",
     "k25",
     "kimi-k3",
     "kimi-linear-48b",
