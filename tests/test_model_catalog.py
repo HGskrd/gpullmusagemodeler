@@ -11,6 +11,7 @@ from calc import (
     kv_bytes_per_token,
     kv_cache_bytes_for_sequence,
     linear_attention_state_bytes,
+    resolve_spec_runtime,
     valid_strategies,
 )
 from data import (
@@ -46,6 +47,12 @@ from data.models_text import (
     DEEPSEEK_V4_FLASH_ARCH_CAPTURED_AT,
     DEEPSEEK_V4_FLASH_ARCH_SOURCES,
     DEEPSEEK_V4_FLASH_TARGET_COMPRESSION_RATIOS,
+    GLM53_FLASH_ARCH_CAPTURED_AT,
+    GLM53_FLASH_ARCH_SOURCES,
+    GLM53_FLASH_BASE_FP8_WEIGHT_BYTES,
+    GLM53_FLASH_MTP_ACTIVE_PARAMS,
+    GLM53_FLASH_MTP_FP8_WEIGHT_BYTES,
+    GLM53_FLASH_MTP_RESIDENT_PARAMS,
 )
 
 
@@ -569,14 +576,32 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(model.mla_rope_dim, 0)
         self.assertEqual(model.sparse_attention_top_k, 2048)
         self.assertEqual(model.sparse_indexer_layers, 11)
+        self.assertEqual(model.sparse_indexer_compression_ratio, 4)
+        self.assertEqual(model.sparse_indexer_cache_elements_per_compressed_token, 4096)
         self.assertEqual(model.max_context_tokens, 1024 * 1024)
         self.assertEqual(model.moe_routed_experts, 288)
         self.assertEqual(model.moe_active_experts, 8)
         self.assertEqual(model.moe_shared_experts, 1)
-        self.assertAlmostEqual(model.weight_gb("fp8"), 328.250014584, places=6)
+        self.assertEqual(model.weight_bytes("fp8"), GLM53_FLASH_BASE_FP8_WEIGHT_BYTES)
+        self.assertAlmostEqual(model.token_efficiency, aa_output_tokens_to_efficiency(150.0))
         self.assertTrue({"tools", "ctx_128k", "images", "reasoning"} <= model.capabilities)
         self.assertIn("IndexPool", model.attention_label)
-        self.assertEqual(model.speculative_profiles, ())
+        self.assertEqual(GLM53_FLASH_ARCH_CAPTURED_AT, "2026-08-26")
+        self.assertTrue(all(source.startswith("https://") for source in GLM53_FLASH_ARCH_SOURCES))
+
+        self.assertEqual(len(model.speculative_profiles), 1)
+        profile = model.speculative_profiles[0]
+        self.assertEqual(profile.method, "mtp")
+        self.assertEqual(profile.supported_ks, (1,))
+        self.assertEqual(profile.draft_params, GLM53_FLASH_MTP_RESIDENT_PARAMS)
+        self.assertEqual(profile.active_params, GLM53_FLASH_MTP_ACTIVE_PARAMS)
+        self.assertIn("not a benchmark", profile.note)
+
+        runtime = resolve_spec_runtime(model, "mtp", 1, 0.0, "fp8")
+        self.assertIsNotNone(runtime)
+        assert runtime is not None
+        self.assertEqual(runtime.k, 1)
+        self.assertEqual(runtime.draft_weight_bytes, GLM53_FLASH_MTP_FP8_WEIGHT_BYTES)
 
     def test_audited_hybrid_and_long_context_entries_use_published_geometry(self):
         q397 = MODELS["q397"]
