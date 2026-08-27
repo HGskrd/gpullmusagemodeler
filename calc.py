@@ -214,12 +214,14 @@ def resolve_spec_runtime(
     alpha = min(max(float(alpha_override if alpha_override > 0 else profile_alpha), 0.0), 1.0)
     passes = 1 if profile.parallel_draft else k
     # Draft weights share the target's served precision: scale by the target's
-    # average bytes/param at this precision (mixed-precision LUTs included).
+    # average bytes/param at this precision (mixed-precision LUTs included),
+    # unless the native draft module has a precision-specific measured size.
     avg_bpp = m.weight_bytes(prec) / m.total_params if m.total_params > 0 else 2.0
+    exact_by_precision = dict(getattr(profile, "exact_weight_bytes_by_precision", ()))
+    exact_weight_bytes = exact_by_precision.get(normalize_precision(prec), 0.0)
+    legacy_exact_weight_bytes = getattr(profile, "exact_weight_bytes", 0.0)
     draft_weight_bytes = (
-        getattr(profile, "exact_weight_bytes", 0.0)
-        if getattr(profile, "exact_weight_bytes", 0.0) > 0
-        else profile.draft_params * avg_bpp
+        exact_weight_bytes or legacy_exact_weight_bytes or profile.draft_params * avg_bpp
     )
     return SpecRuntime(
         profile=profile,
@@ -471,16 +473,25 @@ def _compressed_attention_main_read_rows(m: Model, seq_len: float, ratio: int) -
     return window + compressed
 
 
-def _compressed_indexer_cache_bytes(m: Model, seq_len: float) -> float:
+def _compressed_indexer_cache_bytes(m: Model, seq_len: float, prec: str) -> float:
     """Resident/read bytes for compact sparse-indexer keys over full context."""
-    ratio = max(int(m.compressed_attention_indexer_ratio), 0)
+    pool_ratio = max(int(m.sparse_indexer_compression_ratio), 0)
+    ratio = pool_ratio or max(int(m.compressed_attention_indexer_ratio), 0)
     bytes_per_key = max(float(m.sparse_indexer_cache_bytes_per_token), 0.0)
+    if bytes_per_key <= 0:
+        key_elems = max(int(m.sparse_indexer_cache_elements_per_compressed_token), 0)
+        bytes_per_key = key_elems * m.kv_cache_bytes_per_elem(prec)
     if ratio <= 0 or bytes_per_key <= 0:
         return 0.0
-    compressed_rows = math.floor(max(float(seq_len), 0.0) / ratio)
-    indexer_layers = sum(
-        1 for layer_ratio in _attention_compression_ratios(m) if layer_ratio == ratio
-    )
+    if pool_ratio > 0:
+        # IndexPool retains a tail key for a partial final group.
+        compressed_rows = math.ceil(max(float(seq_len), 0.0) / ratio)
+        indexer_layers = max(int(m.sparse_indexer_layers), 0)
+    else:
+        compressed_rows = math.floor(max(float(seq_len), 0.0) / ratio)
+        indexer_layers = sum(
+            1 for layer_ratio in _attention_compression_ratios(m) if layer_ratio == ratio
+        )
     return indexer_layers * compressed_rows * bytes_per_key
 
 
@@ -552,13 +563,14 @@ def kv_cache_bytes_for_sequence(m: Model, seq_len: float, prec: str) -> float:
         main_kv = sum(
             _compressed_attention_rows(m, seq, ratio) for ratio in compression_ratios
         ) * _kv_bytes_per_layer(m, prec, global_layer=True)
-        return main_kv + _compressed_indexer_cache_bytes(m, seq)
+        return main_kv + _compressed_indexer_cache_bytes(m, seq, prec)
     full_layers, local_layers = _split_attention_layers(m.kv_layer_count, m.local_attention_layers)
-    return full_layers * seq * _kv_bytes_per_layer(
+    main_kv = full_layers * seq * _kv_bytes_per_layer(
         m, prec, global_layer=True
     ) + local_layers * _local_context_tokens(m, seq) * _kv_bytes_per_layer(
         m, prec, global_layer=False
     )
+    return main_kv + _compressed_indexer_cache_bytes(m, seq, prec)
 
 
 def attention_kv_read_bytes_for_sequence(m: Model, seq_len: float, prec: str) -> float:
@@ -570,12 +582,22 @@ def attention_kv_read_bytes_for_sequence(m: Model, seq_len: float, prec: str) ->
     the full compressed context.
     """
     compression_ratios = _attention_compression_ratios(m)
-    if not compression_ratios:
+    if compression_ratios:
+        main_kv = sum(
+            _compressed_attention_main_read_rows(m, seq_len, ratio) for ratio in compression_ratios
+        ) * _kv_bytes_per_layer(m, prec, global_layer=True)
+        return main_kv + _compressed_indexer_cache_bytes(m, seq_len, prec)
+    if m.sparse_attention_top_k <= 0:
         return kv_cache_bytes_for_sequence(m, seq_len, prec)
-    main_kv = sum(
-        _compressed_attention_main_read_rows(m, seq_len, ratio) for ratio in compression_ratios
-    ) * _kv_bytes_per_layer(m, prec, global_layer=True)
-    return main_kv + _compressed_indexer_cache_bytes(m, seq_len)
+    seq = max(float(seq_len), 0.0)
+    full_layers, local_layers = _split_attention_layers(m.kv_layer_count, m.local_attention_layers)
+    selected_rows = min(seq, float(m.sparse_attention_top_k))
+    main_kv = full_layers * selected_rows * _kv_bytes_per_layer(
+        m, prec, global_layer=True
+    ) + local_layers * _local_context_tokens(m, seq) * _kv_bytes_per_layer(
+        m, prec, global_layer=False
+    )
+    return main_kv + _compressed_indexer_cache_bytes(m, seq, prec)
 
 
 def per_replica_kv_cache_bytes(m: Model, seq_len: float, prec: str, pp: int, tp: int) -> float:
@@ -739,6 +761,9 @@ def _sparse_indexer_work(m: Model, pr: int, seq_len: float, *, prefill: bool) ->
         indexed_layers = sum(1 for ratio in ratios if ratio == indexer_ratio)
         indexed_context = math.floor(seq / indexer_ratio)
         scan_work = float(indexed_layers * indexed_context)
+    elif m.sparse_indexer_compression_ratio > 0:
+        indexed_context = math.ceil(seq / m.sparse_indexer_compression_ratio)
+        scan_work = float(layers * indexed_context)
     else:
         scan_work = layers * seq
     # One QK matmul at two FLOPs per multiply-add.

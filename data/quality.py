@@ -301,10 +301,8 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "glm5": (50.0, 110.0),
     "glm51": (51.0, 110.0),
     "glm52": (55.0, 120.0),  # Provisional AA-scale/verbosity proxy pending a direct AA row.
-    # Direct AA Intelligence Index v4.1.1 score from the launch report. AA had
-    # not published comparable total output-token usage at capture time, so
-    # token efficiency remains neutral instead of borrowing GLM-5.2 verbosity.
-    "glm53f": (57.0, 10.0),
+    # Direct Artificial Analysis Intelligence Index and total output-token usage.
+    "glm53f": (57.0, 150.0),
     "k25": (35.0, 87.0),
     "kimi-k3": (57.0, 130.0),  # Direct Artificial Analysis K3 reasoning row.
     "kimi-linear-48b": (37.0, 100.0),  # Proxy from Qwen 3.5 35B-A3B until AA publishes Kimi Linear.

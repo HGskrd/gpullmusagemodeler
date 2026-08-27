@@ -16,6 +16,7 @@ from calc import (
     _dense_tp_oh,
     _pp_peak_fraction,
     _prefill_attention_work,
+    _sparse_indexer_work,
     attention_kv_read_bytes_for_sequence,
     attention_residual_scratch_bytes,
     communication_breakdown,
@@ -276,6 +277,51 @@ class CoreCapacityMathTests(unittest.TestCase):
         self.assertEqual(
             _decode_attention_work(model, pr, short_seq, 1),
             short_selected_attention + short_indexer,
+        )
+
+    def test_indexpool_compresses_index_keys_without_compressing_main_kv(self):
+        model = Model(
+            "indexpool",
+            "IndexPool",
+            "Test",
+            "#000",
+            1,
+            1,
+            False,
+            2,
+            4,
+            1,
+            8,
+            True,
+            mla_kv_dim=8,
+            mla_rope_dim=2,
+            attention_layers=2,
+            kv_layers=2,
+            sparse_attention_top_k=32,
+            sparse_indexer_heads=2,
+            sparse_indexer_head_dim=4,
+            sparse_indexer_layers=2,
+            sparse_indexer_compression_ratio=4,
+            sparse_indexer_cache_elements_per_compressed_token=8,
+        )
+        pr = 3
+        seq = 65
+        compressed_rows = math.ceil(seq / 4)
+        main_row_bytes = (8 + 2) * 2
+        indexer_bytes = 2 * compressed_rows * 8 * 2
+        expected_resident = 2 * seq * main_row_bytes + indexer_bytes
+        expected_read = 2 * 32 * main_row_bytes + indexer_bytes
+        expected_decode_indexer_work = 2 * pr * 2 * 4 * 2 * compressed_rows
+
+        self.assertEqual(kv_cache_bytes_for_sequence(model, seq, "bf16"), expected_resident)
+        self.assertEqual(attention_kv_read_bytes_for_sequence(model, seq, "bf16"), expected_read)
+        self.assertEqual(
+            _sparse_indexer_work(model, pr, seq, prefill=False),
+            expected_decode_indexer_work,
+        )
+        self.assertEqual(
+            _sparse_indexer_work(model, pr, seq, prefill=True),
+            expected_decode_indexer_work * seq,
         )
 
     def test_compressed_attention_separates_residency_from_decode_reads(self):
