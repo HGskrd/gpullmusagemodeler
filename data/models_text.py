@@ -998,7 +998,8 @@ TEXT_MODELS: dict[str, Model] = {
                 GLM53_FLASH_ARCH_SOURCES[0],
                 "The official config/checkpoint includes one next-token layer, but the "
                 "Transformers implementation ignores it and runtime acceptance is not yet "
-                "validated. Alpha 0.40 is a conservative planning prior, not a benchmark.",
+                "validated. Alpha 0.40 is an unmeasured conservative planning prior, "
+                "not a benchmark.",
                 resident_params=GLM53_FLASH_MTP_RESIDENT_PARAMS,
                 supported_ks=(1,),
                 label="Native 1-token MTP (runtime-dependent)",
