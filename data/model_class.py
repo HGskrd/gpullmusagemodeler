@@ -100,6 +100,9 @@ class SpeculativeProfile:
     # Optional per-depth alpha fits prevent extrapolating one measured accept
     # length across structurally different draft depths.
     acceptance_alpha_by_k: tuple[tuple[int, float], ...] = ()
+    # Exact resident bytes by target precision for mixed-format native draft
+    # modules. This avoids scaling a measured FP8 artifact with average model BPP.
+    exact_weight_bytes_by_precision: tuple[tuple[str, float], ...] = ()
 
 
 def _mtp_profile(
@@ -114,6 +117,7 @@ def _mtp_profile(
     supported_ks: tuple[int, ...] = (),
     acceptance_alpha_by_k: tuple[tuple[int, float], ...] = (),
     label: str = "Native MTP",
+    exact_weight_bytes_by_precision: tuple[tuple[str, float], ...] = (),
 ) -> SpeculativeProfile:
     resident_params = resident_params or active_params
     return SpeculativeProfile(
@@ -131,6 +135,7 @@ def _mtp_profile(
         active_params,
         supported_ks,
         acceptance_alpha_by_k,
+        exact_weight_bytes_by_precision,
     )
 
 
@@ -304,6 +309,11 @@ class Model:
     sparse_indexer_heads: int = 0
     sparse_indexer_head_dim: int = 0
     sparse_indexer_layers: int = 0
+    # IndexPool-style architectures pool source keys for the indexer without
+    # compressing the main attention KV. The compact key width is expressed in
+    # elements so its storage follows the selected KV-cache precision.
+    sparse_indexer_compression_ratio: int = 0
+    sparse_indexer_cache_elements_per_compressed_token: int = 0
     # Per-target-layer compressed-attention ratios. A zero ratio denotes a
     # sliding-window-only layer; positive ratios retain one compressed KV row
     # per ``ratio`` source tokens in addition to the live window. Architectures
@@ -782,12 +792,12 @@ MODEL_QUANTIZATION_PROFILES: dict[tuple[str, str], QuantizationProfile] = dict(
             label="Native block FP8",
             source_repo="zai-org/GLM-5.3-Flash",
             source_revision="c54b8d14c81437589ce7db2bece34f157bd90203",
-            total_weight_bytes=328_250_014_584,
+            total_weight_bytes=320_833_372_408,
             compute_precision_shares={"fp8": 0.96, "bf16": 0.04},
             quantized=("most language weights block FP8",),
             retained=("6.93B BF16 parameters and small FP32 islands",),
             quant_algo="native block FP8",
-            notes="Exact vendor safetensors inventory.",
+            notes="Exact base-model safetensors inventory; the optional next-token module is charged separately when native MTP is enabled.",
         ),
         _nvfp4_profile(
             model_key="g31",

@@ -81,6 +81,18 @@ class SpecStateTests(unittest.TestCase):
         self.assertIn("speedup", info["spec"])
         self.assertEqual(info["spec"]["probe_bs"], 32)
 
+    def test_glm53_flash_mtp_discloses_unmeasured_acceptance(self):
+        state = PlannerState(
+            gpus=[GpuPool(1, "H100", 8)],
+            models=[ModelAssignment(2, "glm53f", 1, 8, 8, 1, "fp8", spec_method="mtp", spec_k=1)],
+        )
+        spec = get_model_info(state, state.models[0])["spec"]
+
+        self.assertIsNotNone(spec)
+        self.assertEqual(spec["alpha_source"], "unmeasured profile prior")
+        self.assertTrue(spec["unmeasured_prior"])
+        self.assertAlmostEqual(spec["draft_gb"], 7.493399168)
+
     def test_set_model_spec_rejects_unknown_method(self):
         self._patch_profiles("q08", (_fake_profile("eagle3"),))
         state = _state_with_model()

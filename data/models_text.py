@@ -48,6 +48,18 @@ DEEPSEEK_V4_PRO_TARGET_COMPRESSION_RATIOS = (
     4,
 )
 
+GLM53_FLASH_ARCH_CAPTURED_AT = "2026-08-26"
+GLM53_FLASH_ARCH_SOURCES = (
+    "https://huggingface.co/zai-org/GLM-5.3-Flash/blob/main/config.json",
+    "https://z.ai/blog/glm-5.3-flash",
+    "https://huggingface.co/docs/transformers/main/en/model_doc/glm5_next",
+)
+GLM53_FLASH_BASE_FP8_WEIGHT_BYTES = 320_833_372_408
+GLM53_FLASH_MTP_RESIDENT_PARAMS = 7_433_042_464
+GLM53_FLASH_MTP_ACTIVE_PARAMS = 386_181_664
+GLM53_FLASH_MTP_FP8_WEIGHT_BYTES = 7_493_399_168
+
+
 TEXT_MODELS: dict[str, Model] = {
     "l8": Model(
         "l8",
@@ -1180,10 +1192,8 @@ TEXT_MODELS: dict[str, Model] = {
         mla_rope_dim=0,
         mla_tp_supported=True,
         hidden_dim=4096,
-        # The native checkpoint is block-FP8 for most weights but retains
-        # 6.93B BF16 and a small set of FP32 parameters. This exact mixed
-        # safetensors inventory is 328.250 GB for the vendor-rounded 320B model.
-        fp8_weight_bytes_per_param=1.025781295575,
+        # Base weights exclude the optional layer-45 next-token module.
+        fp8_weight_bytes_per_param=GLM53_FLASH_BASE_FP8_WEIGHT_BYTES / 320e9,
         attention_layers=11,
         kv_layers=11,
         linear_attention_layers=34,
@@ -1196,6 +1206,8 @@ TEXT_MODELS: dict[str, Model] = {
         sparse_indexer_heads=32,
         sparse_indexer_head_dim=128,
         sparse_indexer_layers=11,
+        sparse_indexer_compression_ratio=4,
+        sparse_indexer_cache_elements_per_compressed_token=32 * 128,
         attention_label="34 KDA linear + 11 IndexPool DSA top-2048 (4:1 index keys) · 1M context",
         moe_intermediate_dim=2048,
         moe_routed_experts=288,
@@ -1204,8 +1216,24 @@ TEXT_MODELS: dict[str, Model] = {
         activation_label="mHC · 3 dense + 42 MoE layers",
         max_context_tokens=1024 * 1024,
         native_precision="fp8",
-        native_precision_label="block-FP8 + 6.93B BF16 exceptions",
-        native_precision_note="Exact released checkpoint mix: most weights block-FP8, with 6.93B BF16 and small FP32 islands; 328.25 GB total tensor storage.",
+        native_precision_label="block-FP8 base checkpoint · 320.8 GB",
+        native_precision_note="Exact released base checkpoint footprint. The optional 7.49 GB next-token module is charged separately when native MTP is enabled.",
+        speculative_profiles=(
+            _mtp_profile(
+                0.40,
+                GLM53_FLASH_MTP_ACTIVE_PARAMS,
+                1,
+                GLM53_FLASH_ARCH_SOURCES[0],
+                "The official config/checkpoint includes one next-token layer, but the "
+                "Transformers implementation ignores it and runtime acceptance is not yet "
+                "validated. Alpha 0.40 is an unmeasured conservative planning prior, "
+                "not a benchmark.",
+                resident_params=GLM53_FLASH_MTP_RESIDENT_PARAMS,
+                supported_ks=(1,),
+                label="Native 1-token MTP (runtime-dependent)",
+                exact_weight_bytes_by_precision=(("fp8", float(GLM53_FLASH_MTP_FP8_WEIGHT_BYTES)),),
+            ),
+        ),
     ),
     "k25": Model(
         "k25",

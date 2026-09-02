@@ -295,10 +295,8 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "glm47": (42.0, 170.0),
     "glm47f": (30.0, 64.0),
     "glm53": (58.0, 100.0),  # Launch-benchmark proxy pending a direct AA row.
-    # Direct AA Intelligence Index v4.1.1 score from the launch report. AA had
-    # not published comparable total output-token usage at capture time, so
-    # token efficiency remains neutral instead of borrowing GLM-5.2 verbosity.
-    "glm53f": (57.0, 10.0),
+    # Direct Artificial Analysis Intelligence Index and total output-token usage.
+    "glm53f": (57.0, 150.0),
     "kimi-k3": (57.0, 130.0),  # Direct Artificial Analysis K3 reasoning row.
     "kimi-linear-48b": (37.0, 100.0),  # Proxy from Qwen 3.5 35B-A3B until AA publishes Kimi Linear.
     "inkling": (
