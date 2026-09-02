@@ -74,9 +74,9 @@ class DomainQualityCatalogTests(unittest.TestCase):
         )
 
     def test_representative_anchors_change_only_the_requested_domain(self):
-        model = MODELS["k25"]
+        model = MODELS["kimi-k3"]
 
-        self.assertAlmostEqual(model_domain_anchor(model, "coding").raw_score, 76.8)
+        self.assertAlmostEqual(model_domain_anchor(model, "coding").raw_score, 67.5)
         self.assertNotEqual(effective_quality(model, "coding"), effective_quality(model))
         self.assertEqual(effective_quality(model, "general"), effective_quality(model))
 
@@ -173,7 +173,7 @@ class DomainQualityPlannerTests(unittest.TestCase):
     def _state(self, domain="coding"):
         return PlannerState(
             gpus=[GpuPool(1, "H100", 2, cost_per_gpu_hour=0.01)],
-            models=[ModelAssignment(2, "q27", 1, 1, 1, 1, "bf16")],
+            models=[ModelAssignment(2, "qwen38-27b", 1, 1, 1, 1, "bf16")],
             projects=[
                 Project(
                     3,
@@ -197,21 +197,23 @@ class DomainQualityPlannerTests(unittest.TestCase):
 
         self.assertEqual(row["quality_domain"], "coding")
         self.assertEqual(row["quality_domain_label"], "Coding")
-        self.assertEqual(served["quality_anchor"], "SWE-bench Verified")
+        self.assertEqual(served["quality_anchor"], "SWE-bench Pro")
         self.assertAlmostEqual(
-            served["effective_quality"], effective_quality(MODELS["q27"], "coding")
+            served["effective_quality"], effective_quality(MODELS["qwen38-27b"], "coding")
         )
-        self.assertNotEqual(served["effective_quality"], effective_quality(MODELS["q27"]))
+        self.assertNotEqual(served["effective_quality"], effective_quality(MODELS["qwen38-27b"]))
 
     def test_portfolio_quality_and_shortlist_follow_active_domain(self):
         state = self._state("coding")
-        coding_quality, mix, anchored = _portfolio_domain_quality(MODELS["q27"], state.projects)
+        coding_quality, mix, anchored = _portfolio_domain_quality(
+            MODELS["qwen38-27b"], state.projects
+        )
 
         self.assertEqual(mix, "Coding 100%")
         self.assertGreater(anchored, 0.99)
-        self.assertAlmostEqual(coding_quality, effective_quality(MODELS["q27"], "coding"))
+        self.assertAlmostEqual(coding_quality, effective_quality(MODELS["qwen38-27b"], "coding"))
 
-        shortlist = _swap_candidate_shortlist(MODELS["ds3"], state, "llm", 3)
+        shortlist = _swap_candidate_shortlist(MODELS["deepseek-v4-pro"], state, "llm", 3)
         self.assertTrue(
             any(
                 model_domain_anchor(candidate, "coding") is not None
@@ -224,7 +226,7 @@ class DomainQualityPlannerTests(unittest.TestCase):
             if (
                 not model.hidden
                 and model.embedding_profile is None
-                and model.realtime_profile is None
+                and not model.is_asr_model
                 and model_domain_anchor(model, "coding") is not None
             )
         )

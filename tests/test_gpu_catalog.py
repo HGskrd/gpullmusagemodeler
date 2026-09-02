@@ -2,6 +2,7 @@ import unittest
 
 from data import (
     GPU_CARDS,
+    GPU_INFERENCE_FP4_FLOPS,
     GPU_TCO_DEFAULTS,
     GPU_TCO_PRICE_USD,
     GPUS,
@@ -20,6 +21,42 @@ from state import (
 
 
 class GPUCatalogTests(unittest.TestCase):
+    def test_model_precision_menu_puts_native_first_then_smaller_artifacts(self):
+        state = PlannerState()
+        add_gpu(state, "H100", 16)
+        add_model(state, "glm53f")
+
+        assignment = state.models[0]
+        info = get_model_info(state, assignment)
+        labels = [str(option["label"]) for option in info["precision_options"]]
+
+        self.assertEqual(assignment.prec, "fp8")
+        self.assertTrue(labels[0].startswith("Native · block-FP8"))
+        self.assertTrue(all("estimated" in label for label in labels[1:]))
+
+        state = PlannerState()
+        add_gpu(state, "H100", 1)
+        add_model(state, "qwen38-27b")
+        labels = [
+            str(option["label"])
+            for option in get_model_info(state, state.models[0])["precision_options"]
+        ]
+        self.assertTrue(labels[0].startswith("Native · BF16"))
+        self.assertEqual(labels[1], "FP8 · artifact")
+
+    def test_crescent_and_m5_rows_separate_facts_from_proxies(self):
+        crescent = GPUS["CrescentIsland"]
+        self.assertEqual((crescent.mem, crescent.tdp_watts), (480e9, 350.0))
+        self.assertIn(
+            "bandwidth", " ".join(PREVIEW_ASSUMPTIONS["gpu:CrescentIsland"]["assumptions"])
+        )
+
+        self.assertEqual(GPUS["MAC_STUDIO_M5_MAX"].mem, 128e9)
+        self.assertEqual(GPUS["MAC_STUDIO_M5_MAX"].bw, 614e9)
+        self.assertEqual(GPUS["MAC_STUDIO_M5_ULTRA"].mem, 512e9)
+        self.assertEqual(GPUS["MAC_STUDIO_M5_ULTRA"].bw, 1.2e12)
+        self.assertEqual(GPUS["MAC_STUDIO_M5_ULTRA"].tdp_watts, 0.0)
+
     def test_every_gpu_has_researched_tco_default(self):
         self.assertEqual(set(GPU_TCO_PRICE_USD), set(GPUS))
         self.assertEqual(set(GPU_TCO_DEFAULTS), set(GPUS))
@@ -67,7 +104,8 @@ class GPUCatalogTests(unittest.TestCase):
         self.assertEqual(gpu.bw, 22e12)
         self.assertEqual(gpu.bf16, 4e15)
         self.assertEqual(gpu.fp8, 17.5e15)
-        self.assertEqual(gpu.fp4, 50e15)
+        self.assertIsNone(gpu.fp4)
+        self.assertEqual(GPU_INFERENCE_FP4_FLOPS["RUBIN_NVL72"], 50e15)
         self.assertEqual(gpu.scale_up_p2p_bw_bidir, 3.6e12)
         self.assertEqual(gpu.node_size, 72)
         self.assertEqual(gpu.min_count, 72)
@@ -322,7 +360,7 @@ class GPUCatalogTests(unittest.TestCase):
         state = PlannerState()
 
         add_gpu(state, "GB300", 8)
-        add_model(state, "q27")
+        add_model(state, "qwen38-27b")
 
         info = get_model_info(state, state.models[0])
         self.assertIn(72, info["gpu_count_options"])

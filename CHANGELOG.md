@@ -4,6 +4,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2026-09-02
+
+### Added
+
+- Added the released Qwen 3.8 27B, Flash-Next, and 2.4T-A95B deployment tiers from pinned vendor configurations, including exact official FP8 and NVIDIA 2.4T NVFP4 artifact footprints. Flash-Next conservatively keeps its host-offloadable 51B N-gram table and bundled 4B MTP tensors in GPU residency until host-memory placement is modeled.
+- Added deployment-relevant Nemotron 3.5 Lightning, LFM2.5 2.6B/8B-A1.5B/VL-3B, Granite 4.2 3B/8B/30B, and Llama 3.3 70B releases. Published DSpark profiles carry their measured accepted lengths and artifact bytes without presenting topology-specific speedups as universal benchmarks.
+- Added a dated model archive with successor mappings. Superseded same-class releases leave the picker, auto-selection, live quality tables, and live quant tables; only footprint-compatible keys auto-migrate imported scenarios.
+- Added Mac Studio M5 Max and M5 Ultra rows with public memory/bandwidth/core facts and explicitly labeled compute, sustained-bandwidth, power, and max-configuration price uncertainty.
+
+### Changed
+
+- Replaced the DeepSeek V4 Pro, Mistral Medium 3.5, Mistral Small 4, and Mistral Large 3 architecture proxies with their pinned released configurations. Added a separate full GLM-5.3 row while retaining the distinct GLM-5.3-Flash tier.
+- Precision menus now put each model's real release format first as `Native`, explain its mixed tensor formats and footprint, list exact smaller artifacts ahead of generic conversions, and label unpinned conversions as estimates. New assignments start at the model-native format when it fits.
+- Corrected Crescent Island to up to 480GB LPDDR5X and 350W. Removed Rubin's 50PF NVFP4 inference headline from the dense FP4 roofline while retaining it as display/provenance evidence; MI455X remains unchanged after verification.
+
+### Fixed
+
+- Split Q/K and value head widths in attention FLOP accounting so released MLA models such as Mistral Large 3 no longer charge a 192-wide value accumulation for their 128-wide values.
+
 ## 2026-08-21
 
 ### Fixed

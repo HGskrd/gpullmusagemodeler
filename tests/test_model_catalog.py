@@ -18,6 +18,7 @@ from data import (
     AA_MODEL_METRICS,
     AA_MODEL_QUALITY_CONFIDENCE,
     AA_QUALITY_PLACEHOLDER,
+    ARCHIVED_MODELS,
     CLOUD_MODELS,
     CLOUD_PRICING_CAPTURED_AT,
     CLOUD_PRICING_SOURCES,
@@ -31,6 +32,7 @@ from data import (
     GPU_TDP_WATTS,
     GPUS,
     MODELS,
+    OPEN_MODEL_ARCHITECTURE_SOURCES,
     PREVIEW_ASSUMPTIONS,
     PREVIEW_ASSUMPTIONS_CAPTURED_AT,
     PUBLISHED_EMBEDDING_DECONTAMINATED_BEIR,
@@ -50,6 +52,23 @@ from data.models_text import (
 
 
 class ModelCatalogTests(unittest.TestCase):
+    def test_archived_releases_are_outside_live_catalog_and_have_recovery_metadata(self):
+        self.assertTrue(set(ARCHIVED_MODELS).isdisjoint(MODELS))
+        for key, archived in ARCHIVED_MODELS.items():
+            with self.subTest(model=key):
+                self.assertIn(archived.replaced_by, MODELS)
+                self.assertTrue(archived.source.startswith("https://"))
+                if archived.source_revision:
+                    self.assertRegex(archived.source_revision, r"^[0-9a-f]{40}$")
+
+    def test_audited_open_models_have_pinned_primary_sources(self):
+        for key, source in OPEN_MODEL_ARCHITECTURE_SOURCES.items():
+            with self.subTest(model=key):
+                self.assertIn(key, MODELS)
+                self.assertTrue(source.repository.startswith("https://huggingface.co/"))
+                self.assertRegex(source.revision, r"^[0-9a-f]{40}$")
+                self.assertIn(source.revision, source.config_url)
+
     def test_aa_quality_transform_round_trips_and_does_not_flatten_catalog_scores(self):
         for score in (7.0, 32.0, 51.0, 54.0, 60.0):
             with self.subTest(score=score):
@@ -61,7 +80,7 @@ class ModelCatalogTests(unittest.TestCase):
         # from the former 51-point ceiling.
         self.assertGreater(
             MODELS["mimo-v2.5-pro"].quality,
-            MODELS["glm51"].quality,
+            aa_intelligence_to_quality(51.0),
         )
 
     def test_cloud_pricing_snapshot_uses_current_july_2026_families(self):
@@ -162,7 +181,7 @@ class ModelCatalogTests(unittest.TestCase):
 
         self.assertTrue(visible_preview_models <= set(PREVIEW_ASSUMPTIONS))
         self.assertTrue(preview_cloud_models <= set(PREVIEW_ASSUMPTIONS))
-        self.assertEqual(PREVIEW_ASSUMPTIONS_CAPTURED_AT, "2026-08-09")
+        self.assertEqual(PREVIEW_ASSUMPTIONS_CAPTURED_AT, "2026-09-02")
         for key, record in PREVIEW_ASSUMPTIONS.items():
             with self.subTest(key=key):
                 self.assertNotIn("kimi", key)
@@ -250,7 +269,7 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertAlmostEqual(cloud["token_efficiency"], aa_output_tokens_to_efficiency(130.0))
         self.assertIn("kimi-k3", preset["models"])
 
-    def test_inkling_family_captures_release_and_preview_boundaries(self):
+    def test_inkling_family_captures_released_geometry(self):
         model = MODELS["inkling"]
         small = MODELS["inkling-small-preview"]
 
@@ -276,14 +295,16 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(profile.source_kind, "exact")
         self.assertAlmostEqual(model.weight_gb("nvfp4"), 592.005, places=3)
 
-        self.assertEqual(small.name, "Inkling-Small 276B-A12B (Preview)")
+        self.assertEqual(small.name, "Inkling-Small 276B-A12B")
         self.assertEqual(small.total_params, 276e9)
         self.assertEqual(small.active_params, 12e9)
+        self.assertEqual(small.layers, 42)
+        self.assertEqual(small.local_attention_layers, 35)
+        self.assertEqual(small.global_kv_heads, 8)
         self.assertEqual(small.max_context_tokens, 1_048_576)
-        self.assertIn("architecture proxy", small.attention_label)
-        self.assertIn("config pending", small.attention_label)
+        self.assertIn("35 SWA 512 + 7 global", small.attention_label)
         self.assertTrue({"tools", "ctx_128k", "images", "audio", "reasoning"} <= small.capabilities)
-        self.assertAlmostEqual(small.quality_confidence, 0.50)
+        self.assertAlmostEqual(small.quality_confidence, 0.65)
 
     def test_command_a_plus_catalog_entry_matches_public_specs(self):
         model = MODELS["command-a-plus-05-2026"]
@@ -310,7 +331,6 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertTrue(valid_strategies(model, 2, GPUS["H100"], 0.90, 4.0, "nvfp4"))
 
     def test_recent_cohere_llm_entries_use_published_size_and_proxy_configs(self):
-        command_a = MODELS["command-a-03-2025"]
         command_r7b = MODELS["command-r7b-12-2024"]
         north = MODELS["north-mini-code-1-0"]
         tiny_models = {
@@ -320,15 +340,11 @@ class ModelCatalogTests(unittest.TestCase):
             "tiny-aya-water": "Tiny Aya Water 3.35B",
         }
 
-        self.assertEqual(command_a.name, "Command A 03-2025 111B")
-        self.assertEqual(command_a.cat, "Cohere")
-        self.assertEqual(command_a.size_label, "111B")
-        self.assertFalse(command_a.is_moe)
-        self.assertEqual(command_a.total_params, 111e9)
-        self.assertEqual(command_a.hidden_size, 8192)
-        self.assertTrue({"tools", "ctx_128k"} <= command_a.capabilities)
-        self.assertIn("proxy", command_a.attention_label)
-        self.assertAlmostEqual(command_a.quality_confidence, 0.65)
+        self.assertNotIn("command-a-03-2025", MODELS)
+        self.assertEqual(
+            ARCHIVED_MODELS["command-a-03-2025"].replaced_by,
+            "command-a-plus-05-2026",
+        )
 
         self.assertEqual(command_r7b.size_label, "7B")
         self.assertEqual(command_r7b.total_params, 7e9)
@@ -424,15 +440,17 @@ class ModelCatalogTests(unittest.TestCase):
             all(source.startswith("https://") for source in DEEPSEEK_V4_FLASH_ARCH_SOURCES)
         )
 
-    def test_deepseek_v4_pro_remains_a_dated_preview(self):
-        self.assertIn("preview", MODELS["deepseek-v4-pro"].name.lower())
+    def test_deepseek_v4_pro_uses_released_0813_architecture(self):
+        model = MODELS["deepseek-v4-pro"]
+        self.assertNotIn("preview", model.name.lower())
+        self.assertEqual((model.layers, model.hidden_size), (61, 7168))
+        self.assertEqual((model.num_heads, model.kv_heads, model.head_dim), (128, 1, 512))
+        self.assertEqual((model.moe_routed_experts, model.moe_active_experts), (384, 6))
+        self.assertEqual(len(model.attention_compression_ratios), 61)
+        self.assertEqual(model.native_precision_key, "mxfp4")
         self.assertIn("preview", CLOUD_MODELS["deepseek-v4-pro"]["label"].lower())
-        for key in ("model:deepseek-v4-pro", "cloud:deepseek-v4-pro"):
-            with self.subTest(key=key):
-                record = PREVIEW_ASSUMPTIONS[key]
-                self.assertEqual(record["captured_at"], PREVIEW_ASSUMPTIONS_CAPTURED_AT)
-                self.assertTrue(record["source"].startswith("https://"))
-                self.assertTrue(record["assumptions"])
+        record = PREVIEW_ASSUMPTIONS["cloud:deepseek-v4-pro"]
+        self.assertEqual(record["captured_at"], PREVIEW_ASSUMPTIONS_CAPTURED_AT)
 
     def test_laguna_m1_catalog_entry_uses_public_poolside_specs(self):
         model = MODELS["laguna-m1"]
@@ -503,31 +521,16 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertAlmostEqual(model.token_efficiency, 1.0)
         self.assertAlmostEqual(model.quality_confidence, 0.5)
 
-    def test_glm51_catalog_entry_uses_official_dsa_config(self):
-        model = MODELS["glm51"]
+    def test_latest_only_archive_removes_superseded_glm_rows(self):
+        for key in ("glm5", "glm51", "glm52"):
+            self.assertNotIn(key, MODELS)
+            self.assertEqual(ARCHIVED_MODELS[key].replaced_by, "glm53")
+            self.assertTrue(ARCHIVED_MODELS[key].automatic_migration)
 
-        self.assertEqual(model.name, "GLM-5.1 744B-A40B")
-        self.assertEqual(model.total_params, 744e9)
-        self.assertEqual(model.active_params, 40e9)
-        self.assertEqual(model.layers, 78)
-        self.assertEqual(model.hidden_size, 6144)
-        self.assertEqual(model.num_heads, 64)
-        self.assertEqual(model.kv_heads, 64)
-        self.assertEqual(model.head_dim, 256)
-        self.assertEqual(model.max_context_tokens, 202752)
-        self.assertTrue(model.is_mla)
-        self.assertEqual(model.mla_kv_dim, 512)
-        self.assertEqual(model.mla_rope_dim, 64)
-        self.assertEqual(model.sparse_attention_top_k, 2048)
-        self.assertEqual(model.sparse_indexer_heads, 32)
-        self.assertEqual(model.sparse_indexer_head_dim, 128)
-        self.assertEqual(model.sparse_indexer_layers, 78)
-        self.assertIn("DSA", model.attention_label)
+    def test_glm53_catalog_entry_uses_official_long_context_config(self):
+        model = MODELS["glm53"]
 
-    def test_glm52_catalog_entry_uses_official_long_context_config(self):
-        model = MODELS["glm52"]
-
-        self.assertEqual(model.name, "GLM-5.2 744B-A40B")
+        self.assertEqual(model.name, "GLM-5.3 744B-A40B")
         self.assertEqual(model.total_params, 744e9)
         self.assertEqual(model.active_params, 40e9)
         self.assertEqual(model.layers, 78)
@@ -545,15 +548,46 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(model.sparse_indexer_layers, 21)
         self.assertIn("IndexShare", model.attention_label)
         self.assertTrue({"tools", "ctx_128k", "reasoning"} <= model.capabilities)
-        self.assertTrue(any(profile.method == "mtp" for profile in model.speculative_profiles))
+        self.assertEqual(model.native_precision_key, "fp8")
+
+    def test_glm53_flash_catalog_entry_uses_official_hybrid_config(self):
+        model = MODELS["glm53f"]
+
+        self.assertEqual(model.name, "GLM-5.3-Flash 320B-A18B")
+        self.assertEqual(model.total_params, 320e9)
+        self.assertEqual(model.active_params, 18e9)
+        self.assertEqual(model.layers, 45)
+        self.assertEqual(model.hidden_size, 4096)
+        self.assertEqual(model.num_heads, 64)
+        self.assertEqual(model.head_dim, 256)
+        self.assertEqual(model.attention_layer_count, 11)
+        self.assertEqual(model.kv_layer_count, 11)
+        self.assertEqual(model.linear_attention_layer_count, 34)
+        self.assertEqual(model.linear_attention_head_count, 64)
+        self.assertEqual(model.linear_attention_head_size, 128)
+        self.assertEqual(model.linear_attention_k_head_count, 64)
+        self.assertEqual(model.linear_attention_kernel_size, 4)
+        self.assertTrue(model.is_mla)
+        self.assertEqual(model.mla_kv_dim, 512)
+        self.assertEqual(model.mla_rope_dim, 0)
+        self.assertEqual(model.sparse_attention_top_k, 2048)
+        self.assertEqual(model.sparse_indexer_layers, 11)
+        self.assertEqual(model.max_context_tokens, 1024 * 1024)
+        self.assertEqual(model.moe_routed_experts, 288)
+        self.assertEqual(model.moe_active_experts, 8)
+        self.assertEqual(model.moe_shared_experts, 1)
+        self.assertAlmostEqual(model.weight_gb("fp8"), 328.250014584, places=6)
+        self.assertTrue({"tools", "ctx_128k", "images", "reasoning"} <= model.capabilities)
+        self.assertIn("IndexPool", model.attention_label)
+        self.assertEqual(model.speculative_profiles, ())
 
     def test_audited_hybrid_and_long_context_entries_use_published_geometry(self):
-        q397 = MODELS["q397"]
+        q397 = MODELS["qwen38-2.4t-a95b"]
         self.assertEqual(
-            (q397.layers, q397.hidden_size, q397.attention_layer_count), (60, 4096, 15)
+            (q397.layers, q397.hidden_size, q397.attention_layer_count), (92, 8192, 23)
         )
         self.assertEqual(
-            (q397.linear_attention_layer_count, q397.linear_attention_head_count), (45, 64)
+            (q397.linear_attention_layer_count, q397.linear_attention_head_count), (69, 128)
         )
         self.assertEqual(q397.max_context_tokens, 262144)
 
@@ -623,13 +657,13 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertIn("conservative planning prior", mtp.note)
         self.assertIn("not a measured result", mtp.note)
 
-    def test_qwen35_dense_geometry_matches_official_configs(self):
+    def test_current_qwen_dense_geometry_matches_official_configs(self):
         expected = {
             "q08": (24, 8, 2, 256, 1024, 6, 18, 16),
             "q2": (24, 8, 2, 256, 2048, 6, 18, 16),
             "q4": (32, 16, 4, 256, 2560, 8, 24, 32),
             "q9": (32, 16, 4, 256, 4096, 8, 24, 32),
-            "q27": (64, 24, 4, 256, 5120, 16, 48, 48),
+            "qwen38-27b": (64, 24, 4, 256, 5120, 16, 48, 48),
         }
         for key, geometry in expected.items():
             with self.subTest(model=key):
@@ -650,26 +684,19 @@ class ModelCatalogTests(unittest.TestCase):
                 self.assertEqual(model.linear_attention_k_head_size, 128)
                 self.assertEqual(model.linear_attention_kernel_size, 4)
                 self.assertEqual(model.max_context_tokens, 262144)
-                self.assertIn("mtp", {p.method for p in model.speculative_profiles})
-                if key != "q27":
+                if key != "qwen38-27b":
+                    self.assertIn("mtp", {p.method for p in model.speculative_profiles})
                     mtp = next(p for p in model.speculative_profiles if p.method == "mtp")
                     self.assertEqual(mtp.supported_ks, (1,))
+                else:
+                    self.assertEqual(model.speculative_profiles, ())
 
-    def test_qwen35_27b_speculative_profiles_use_measured_calibrations(self):
-        profiles = {p.method: p for p in MODELS["q27"].speculative_profiles}
-
-        mtp = profiles["mtp"]
-        self.assertEqual(mtp.supported_ks, (3, 7, 15))
-        self.assertEqual(dict(mtp.acceptance_alpha_by_k), {3: 0.9103, 7: 0.8790, 15: 0.8586})
-        self.assertIn("3.4934", mtp.note)
-
-        dflash = profiles["dflash"]
-        self.assertEqual(dflash.draft_params, 2e9)
-        self.assertEqual(dflash.draft_layers, 6)
-        self.assertEqual(dflash.exact_weight_bytes, 4.26e9)
-        self.assertEqual(dflash.supported_ks, (4, 8, 16))
-        self.assertEqual(dict(dflash.acceptance_alpha_by_k), {4: 0.8227, 8: 0.8765, 16: 0.8841})
-        self.assertIn("5.6248", dflash.note)
+    def test_qwen38_27b_fp8_artifact_is_exact_and_smaller_than_native(self):
+        model = MODELS["qwen38-27b"]
+        profile = get_quantization_profile(model.key, "fp8")
+        self.assertEqual(profile.source_revision, "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a")
+        self.assertEqual(profile.total_weight_bytes, 30_863_648_224)
+        self.assertLess(model.weight_gb("fp8"), model.weight_gb(model.native_precision_key))
 
     def test_lfm_catalog_entries_use_hybrid_attention_specs(self):
         expected = {
@@ -697,8 +724,8 @@ class ModelCatalogTests(unittest.TestCase):
                 True,
             ),
             "lfm2-700m": ("LFM2 700M", 742_489_344, 742_489_344, 16, 6, 1536, 24, 8, False),
-            "lfm2-2.6b": ("LFM2 2.6B", 2_569_272_320, 2_569_272_320, 30, 8, 2048, 32, 8, False),
-            "lfm2-8b-a1b": ("LFM2 8B-A1.5B", 8.3e9, 1.5e9, 24, 6, 2048, 32, 8, False),
+            "lfm2.5-2.6b": ("LFM2.5 2.6B", 2_697_198_592, 2_697_198_592, 30, 8, 2048, 32, 8, False),
+            "lfm2.5-8b-a1b": ("LFM2.5 8B-A1.5B", 8_467_856_832, 1.5e9, 24, 6, 2048, 32, 8, False),
             "lfm2-24b-a2b": ("LFM2 24B-A2.3B", 24e9, 2.3e9, 40, 10, 2048, 32, 8, False),
         }
 
@@ -759,18 +786,14 @@ class ModelCatalogTests(unittest.TestCase):
         )
         self.assertAlmostEqual(model.kv_cache_bytes_per_elem("nvfp4"), 1.0)
 
-    def test_qwen_moe_nvfp4_profiles_are_model_specific(self):
+    def test_qwen38_large_artifact_profiles_are_model_specific(self):
         q35 = MODELS["q35"]
-        q122 = MODELS["q122"]
-        q397 = MODELS["q397"]
+        qwen = MODELS["qwen38-2.4t-a95b"]
 
         self.assertEqual(get_quantization_profile("q35", "nvfp4").source_kind, "exact")
         self.assertAlmostEqual(q35.weight_bytes_per_param("nvfp4"), 0.726225620, places=6)
-        self.assertAlmostEqual(q122.weight_bytes_per_param("nvfp4"), 0.667763208, places=6)
-        self.assertAlmostEqual(q397.weight_bytes_per_param("nvfp4"), 0.667763208, places=6)
-        self.assertNotAlmostEqual(
-            q35.weight_bytes_per_param("nvfp4"), q122.weight_bytes_per_param("nvfp4"), places=3
-        )
+        self.assertEqual(qwen.quantization_profile("nvfp4").total_weight_bytes, 1_444_420_107_432)
+        self.assertLess(qwen.weight_gb("nvfp4"), qwen.weight_gb("fp8"))
 
     def test_rwkv7_g1_catalog_family_uses_recurrent_state(self):
         expected = {
@@ -820,7 +843,7 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(model.hidden_size, 3072)
         self.assertEqual(model.local_attention_layers, 26)
         self.assertEqual(model.local_attention_window, 8192)
-        self.assertTrue(model.is_realtime_only)
+        self.assertTrue(model.is_asr_model)
         self.assertEqual(model.capabilities, frozenset())
         self.assertIsNotNone(profile)
         self.assertEqual(profile.target_delay_ms, 480)
@@ -850,7 +873,7 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(model.hidden_size, 4096)
         self.assertEqual(model.attention_layer_count, 36)
         self.assertEqual(model.local_attention_layers, 0)
-        self.assertTrue(model.is_realtime_only)
+        self.assertTrue(model.is_asr_model)
         self.assertEqual(model.capabilities, frozenset())
         self.assertIsNotNone(profile)
         self.assertEqual(
@@ -870,6 +893,8 @@ class ModelCatalogTests(unittest.TestCase):
             "gemma-4-e2b-asr": ("Gemma 4 E2B ASR", 2.0e9, False),
             "gemma-4-e4b-asr": ("Gemma 4 E4B ASR", 4.0e9, False),
             "gemma-4-12b-unified-asr": ("Gemma 4 12B Unified ASR", 11.95e9, False),
+            "inkling-asr": ("Inkling 975B-A41B ASR", 975e9, False),
+            "inkling-small-asr": ("Inkling-Small 276B-A12B ASR", 276e9, False),
             "nvidia-nemotron-speech-streaming-0.6b": (
                 "NVIDIA Nemotron Speech Streaming 0.6B",
                 0.6e9,
@@ -906,10 +931,12 @@ class ModelCatalogTests(unittest.TestCase):
                 self.assertEqual(model.name, name)
                 self.assertEqual(model.cat, "Audio")
                 self.assertEqual(model.total_params, params)
-                self.assertTrue(model.is_realtime_only)
+                self.assertTrue(model.is_asr_model)
                 self.assertEqual(model.capabilities, frozenset())
                 self.assertIsNotNone(profile)
                 self.assertEqual(profile.streaming, streaming)
+                self.assertEqual(model.is_streaming_asr, streaming)
+                self.assertEqual(model.asr_mode_label, "Realtime" if streaming else "Non-realtime")
                 self.assertGreater(profile.tokens_per_second, 0)
                 self.assertGreater(profile.target_delay_ms, 0)
 
@@ -945,6 +972,30 @@ class ModelCatalogTests(unittest.TestCase):
             "no separate audio encoder", MODELS["gemma-4-12b-unified-asr"].realtime_profile.note
         )
 
+    def test_inkling_asr_variants_reuse_decoder_geometry_and_are_offline(self):
+        expected = {
+            "inkling-asr": ("inkling", 24_000, 1_200_000),
+            "inkling-small-asr": ("inkling-small-preview", 2_400, 120_000),
+        }
+
+        for asr_key, (llm_key, state_tokens, target_delay_ms) in expected.items():
+            with self.subTest(model=asr_key):
+                model = MODELS[asr_key]
+                llm = MODELS[llm_key]
+                profile = model.realtime_profile
+
+                self.assertEqual(model.layers, llm.layers)
+                self.assertEqual(model.hidden_size, llm.hidden_size)
+                self.assertEqual(model.num_heads, llm.num_heads)
+                self.assertEqual(model.kv_heads, llm.kv_heads)
+                self.assertEqual(model.capabilities, frozenset())
+                self.assertFalse(profile.streaming)
+                self.assertEqual(profile.audio_ms_per_token, 50.0)
+                self.assertEqual(profile.tokens_per_second, 20.0)
+                self.assertEqual(profile.state_tokens, state_tokens)
+                self.assertEqual(profile.target_delay_ms, target_delay_ms)
+                self.assertIn("No native streaming interface", profile.note)
+
     def test_nemotron_35_asr_streaming_catalog_entry_uses_hf_card(self):
         model = MODELS["nvidia-nemotron-3.5-asr-streaming-0.6b"]
         profile = model.realtime_profile
@@ -959,7 +1010,7 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(model.local_attention_layers, 24)
         self.assertEqual(model.local_attention_window, 56)
         self.assertIn("Prompted", model.attention_label)
-        self.assertTrue(model.is_realtime_only)
+        self.assertTrue(model.is_asr_model)
         self.assertEqual(model.capabilities, frozenset())
         self.assertIsNotNone(profile)
         self.assertEqual(profile.source, "nvidia/nemotron-3.5-asr-streaming-0.6b")
@@ -1173,20 +1224,9 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(result.seq_len, round(stats.mean_seq_len))
         self.assertEqual(result.p90_seq_len, stats.p90_seq_len)
 
-    def test_flagship_moe_models_have_direct_aa_anchors(self):
-        k25 = MODELS["k25"]
-        ds3 = MODELS["ds3"]
-
-        self.assertAlmostEqual(k25.quality, aa_intelligence_to_quality(35.0))
-        self.assertAlmostEqual(k25.token_efficiency, aa_output_tokens_to_efficiency(87.0))
-        self.assertAlmostEqual(k25.quality_confidence, 1.0)
-        self.assertEqual(k25.max_context_tokens, 262144)
-        self.assertIn("images", k25.capabilities)
-        self.assertIn("reasoning", k25.capabilities)
-
-        self.assertAlmostEqual(ds3.quality, aa_intelligence_to_quality(14.0))
-        self.assertAlmostEqual(ds3.token_efficiency, aa_output_tokens_to_efficiency(3.3))
-        self.assertAlmostEqual(ds3.quality_confidence, 1.0)
+    def test_current_flagship_moe_models_have_quality_anchors(self):
+        self.assertAlmostEqual(MODELS["kimi-k3"].quality, aa_intelligence_to_quality(57.0))
+        self.assertAlmostEqual(MODELS["deepseek-v4-pro"].quality, aa_intelligence_to_quality(52.0))
 
     def test_every_servable_model_has_a_quality_anchor(self):
         self.assertEqual(text_models_missing_quality_anchors(), [])
@@ -1250,7 +1290,7 @@ class ModelCatalogTests(unittest.TestCase):
         for key, model in MODELS.items():
             with self.subTest(model=key):
                 available = model.available_spec_profiles
-                if model.is_realtime_only or model.is_embedding_model:
+                if model.is_asr_model or model.is_embedding_model:
                     self.assertEqual(available, ())
                 else:
                     self.assertIs(available[-1], NGRAM_SPECULATIVE_PROFILE)
@@ -1258,16 +1298,12 @@ class ModelCatalogTests(unittest.TestCase):
     def test_native_mtp_models_are_flagged(self):
         # Models with documented native MTP heads must expose an mtp profile.
         for key in (
-            "ds3",
-            "deepseek-v4-pro",
             "glm45a",
             "g31",
             "q08",
             "q2",
             "q4",
             "q9",
-            "q27",
-            "q397",
             "mimo-v2.5-pro",
         ):
             with self.subTest(model=key):
@@ -1275,9 +1311,6 @@ class ModelCatalogTests(unittest.TestCase):
                 self.assertIn("mtp", methods)
 
         # DFlash attach points with published checkpoints.
-        q397_methods = {p.method for p in MODELS["q397"].speculative_profiles}
-        self.assertIn("dflash", q397_methods)
-        self.assertIn("dflash", {p.method for p in MODELS["q27"].speculative_profiles})
         self.assertNotIn(
             "mtp", {p.method for p in MODELS["deepseek-v4-flash"].speculative_profiles}
         )
@@ -1325,6 +1358,23 @@ class ModelCatalogTests(unittest.TestCase):
             [],
             "MODEL_ORDER names key(s) no family module defines",
         )
+
+    def test_every_audio_capable_llm_has_an_asr_picker_variant(self):
+        from data import models_by_kind
+
+        audio_llm_keys = {
+            key
+            for key in data_models.MODEL_ORDER
+            if "audio" in MODELS[key].capabilities
+            and not MODELS[key].is_asr_model
+            and not MODELS[key].is_embedding_model
+        }
+        self.assertEqual(audio_llm_keys, set(data_models.DERIVED_ASR_BASE_MODELS.values()))
+
+        asr_picker_keys = {
+            model.key for category in models_by_kind()["asr"].values() for model in category
+        }
+        self.assertTrue(set(data_models.DERIVED_ASR_ORDER) <= asr_picker_keys)
 
     def test_catalog_order_is_model_order_then_derived_asr(self):
         self.assertEqual(

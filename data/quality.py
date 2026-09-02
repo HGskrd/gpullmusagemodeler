@@ -3,6 +3,7 @@
 import math
 from dataclasses import dataclass, replace
 
+from .model_archive import ARCHIVED_MODELS
 from .model_class import Model
 from .models import MODELS
 
@@ -187,16 +188,17 @@ _VISION_MODELS = (
     "g12",
     "g26",
     "g31",
-    "k25",
+    "lfm2.5-vl-3b",
+    "glm53f",
+    "qwen38-27b",
+    "qwen38-flash-next",
     "kimi-k3",
     "inkling",
     "inkling-small-preview",
     "command-a-plus-05-2026",
-    "ms24",
-    "ms32",
-    "mistral-medium-3.5-preview",
-    "minimax25",
-    "minimax27",
+    "mistral-medium-3.5",
+    "ms4",
+    "ml3",
     "nem3no",
     "mimo-v2.5",
 )
@@ -210,36 +212,31 @@ _AUDIO_INPUT_MODELS = (
 _REASONING_MODELS = (
     "g12",
     "q35",
-    "q122",
-    "q397",
+    "qwen38-27b",
+    "qwen38-flash-next",
+    "qwen38-2.4t-a95b",
     "glm45",
     "glm45a",
     "glm46",
     "glm47",
     "glm47f",
-    "glm5",
-    "glm51",
-    "glm52",
-    "k25",
+    "glm53",
+    "glm53f",
     "kimi-k3",
     "inkling",
     "inkling-small-preview",
-    "ds3",
     "deepseek-v4-pro",
     "deepseek-v4-flash",
     "lfm2.5-1.2b-thinking",
     "command-a-plus-05-2026",
-    "mistral-medium-3.5-preview",
+    "mistral-medium-3.5",
     "ml3",
-    "minimax25",
-    "minimax27",
     "nem3s",
-    "nem3n",
+    "nemotron35-lightning",
     "nem3no",
     "zaya1-8b",
     "zaya1-74b-preview",
     "laguna-m1",
-    "laguna-xs2",
     "laguna-xs-2-1",
     "laguna-s-2-1",
     "mimo-v2.5-pro",
@@ -264,7 +261,7 @@ for _k in _REASONING_MODELS:
 # we use the closest available family proxy and note it inline.
 AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "l8": (12.0, 5.2),
-    "l70": (12.0, 4.7),
+    "llama33-70b": (22.0, 5.0),  # Launch-suite proxy pending a directly comparable AA row.
     "ge2": (12.0, 8.3),
     "ge4": (15.0, 7.9),
     "g12": (25.0, 12.0),  # Proxy from Google Gemma 4 12B benchmarks; no AA page found at launch.
@@ -274,8 +271,9 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "lfm2.5-1.2b-instruct": (8.0, 4.6),
     "lfm2.5-1.2b-thinking": (8.0, 31.0),
     "lfm2-700m": (7.0, 10.0),  # Conservative size proxy; no AA page found for LFM2-700M.
-    "lfm2-2.6b": (8.0, 7.8),
-    "lfm2-8b-a1b": (7.0, 7.8),
+    "lfm2.5-2.6b": (10.0, 7.8),
+    "lfm2.5-8b-a1b": (14.0, 7.8),
+    "lfm2.5-vl-3b": (10.0, 8.0),
     "lfm2-24b-a2b": (10.0, 11.0),
     "rwkv7-g1d-01b": (7.0, 60.0),  # Low-confidence size proxy until AA publishes RWKV7-G1 rows.
     "rwkv7-g1d-04b": (8.0, 70.0),
@@ -287,19 +285,20 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "q2": (16.0, 390.0),
     "q4": (27.0, 240.0),
     "q9": (32.0, 200.0),
-    "q27": (42.0, 98.0),
     "q35": (37.0, 100.0),
-    "q122": (42.0, 91.0),
-    "q397": (45.0, 86.0),
+    "qwen38-27b": (48.0, 100.0),
+    "qwen38-flash-next": (56.0, 100.0),
+    "qwen38-2.4t-a95b": (59.0, 110.0),
     "glm45a": (23.0, 68.0),
     "glm45": (26.0, 61.0),
     "glm46": (33.0, 57.0),
     "glm47": (42.0, 170.0),
     "glm47f": (30.0, 64.0),
-    "glm5": (50.0, 110.0),
-    "glm51": (51.0, 110.0),
-    "glm52": (55.0, 120.0),  # Provisional AA-scale/verbosity proxy pending a direct AA row.
-    "k25": (35.0, 87.0),
+    "glm53": (58.0, 100.0),  # Launch-benchmark proxy pending a direct AA row.
+    # Direct AA Intelligence Index v4.1.1 score from the launch report. AA had
+    # not published comparable total output-token usage at capture time, so
+    # token efficiency remains neutral instead of borrowing GLM-5.2 verbosity.
+    "glm53f": (57.0, 10.0),
     "kimi-k3": (57.0, 130.0),  # Direct Artificial Analysis K3 reasoning row.
     "kimi-linear-48b": (37.0, 100.0),  # Proxy from Qwen 3.5 35B-A3B until AA publishes Kimi Linear.
     "inkling": (
@@ -309,12 +308,8 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "inkling-small-preview": (
         44.0,
         70.0,
-    ),  # Preview benchmarks track Inkling closely; weights/config remain pending.
+    ),  # Official release benchmarks; AA-scale/verbosity proxy pending a direct row.
     "command-a-plus-05-2026": (37.0, 66.0),
-    "command-a-03-2025": (
-        32.0,
-        70.0,
-    ),  # Conservative proxy until AA publishes a directly comparable Command A row.
     "command-r7b-12-2024": (
         12.0,
         8.3,
@@ -323,16 +318,13 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
         37.0,
         100.0,
     ),  # Coding-agent proxy from Qwen 3.5 35B-A3B until public benchmark rows exist.
-    "minimax25": (42.0, 56.0),
     "minimax3": (48.0, 70.0),  # Low-confidence launch-benchmark proxy; no direct AA row yet.
-    "minimax27": (50.0, 87.0),
     "nem3s": (36.0, 110.0),
-    "nem3n": (24.0, 140.0),
+    "nemotron35-lightning": (35.0, 100.0),
     "nem3no": (
         26.0,
         130.0,
     ),  # Omni preview proxy from Nano reasoning until AA publishes a dedicated page.
-    "ds3": (14.0, 3.3),
     "deepseek-v4-pro": (52.0, 190.0),
     "deepseek-v4-flash": (47.0, 240.0),
     "mi7": (7.0, 2.5),
@@ -341,13 +333,13 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
         15.0,
         4.4,
     ),  # Proxy from Devstral Small (Jul '25'); no AA page for Codestral 22B found.
-    "ms24": (14.0, 4.7),
-    "ms32": (15.0, 4.5),
     "mm31": (21.0, 7.6),
-    "mistral-medium-3.5-preview": (39.0, 90.0),
+    "mistral-medium-3.5": (39.0, 90.0),
     "ms4": (19.0, 3.9),
     "ml3": (23.0, 5.2),
-    "ml123": (15.0, 2.6),
+    "granite42-3b": (14.0, 12.0),
+    "granite42-8b": (21.0, 11.0),
+    "granite42-30b": (30.0, 10.0),
     "n3": (11.0, 16.0),
     "n8": (15.0, 13.0),
     "n14": (16.0, 11.0),
@@ -366,7 +358,6 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
         44.0,
         95.0,
     ),  # Proxy from Qwen 3.5 397B-A17B adjusted against Poolside coding-agent benchmarks; no AA row found.
-    "laguna-xs2": (37.0, 100.0),  # Proxy from Qwen 3.5 35B-A3B; no AA page for Laguna XS.2 found.
     "laguna-xs-2-1": (
         37.0,
         100.0,
@@ -396,7 +387,11 @@ for _k, (_score, _verbosity_m) in AA_MODEL_METRICS.items():
 # whose public benchmark coverage is missing or weak.
 AA_MODEL_QUALITY_CONFIDENCE: dict[str, float] = {
     "lfm2.5-350m": 0.45,
+    "lfm2.5-2.6b": 0.55,
+    "lfm2.5-8b-a1b": 0.55,
+    "lfm2.5-vl-3b": 0.50,
     "lfm2-700m": 0.45,
+    "llama33-70b": 0.70,
     "g12": 0.65,
     "rwkv7-g1d-01b": 0.35,
     "rwkv7-g1d-04b": 0.35,
@@ -406,14 +401,21 @@ AA_MODEL_QUALITY_CONFIDENCE: dict[str, float] = {
     "rwkv7-g1g-133b": 0.35,
     "kimi-linear-48b": 0.55,
     "inkling": 0.65,
-    "inkling-small-preview": 0.50,
-    "command-a-03-2025": 0.65,
+    "inkling-small-preview": 0.65,
     "command-r7b-12-2024": 0.60,
     "north-mini-code-1-0": 0.45,
     "nem3no": 0.65,
     "mx87": 0.70,
     "cs22": 0.60,
-    "mistral-medium-3.5-preview": 0.70,
+    "mistral-medium-3.5": 0.70,
+    "qwen38-27b": 0.70,
+    "qwen38-flash-next": 0.75,
+    "qwen38-2.4t-a95b": 0.75,
+    "glm53": 0.70,
+    "nemotron35-lightning": 0.70,
+    "granite42-3b": 0.55,
+    "granite42-8b": 0.55,
+    "granite42-30b": 0.55,
     "tiny-aya-global": 0.45,
     "tiny-aya-earth": 0.45,
     "tiny-aya-fire": 0.45,
@@ -421,10 +423,8 @@ AA_MODEL_QUALITY_CONFIDENCE: dict[str, float] = {
     "zaya1-8b": 0.45,
     "zaya1-74b-preview": 0.35,
     "laguna-m1": 0.55,
-    "laguna-xs2": 0.45,
     "laguna-xs-2-1": 0.45,
     "laguna-s-2-1": 0.5,
-    "glm52": 0.65,
     "cr13": 0.25,
 }
 for _k, _confidence in AA_MODEL_QUALITY_CONFIDENCE.items():
@@ -443,6 +443,7 @@ _DEEPSEEK_V3_DOMAIN_SOURCE = "https://huggingface.co/deepseek-ai/DeepSeek-V3"
 _GEMMA4_DOMAIN_SOURCE = "https://ai.google.dev/gemma/docs/core/model_card_4"
 _GLM5_DOMAIN_SOURCE = "https://huggingface.co/zai-org/GLM-5"
 _GLM52_DOMAIN_SOURCE = "https://huggingface.co/zai-org/GLM-5.2"
+_GLM53F_DOMAIN_SOURCE = "https://z.ai/blog/glm-5.3-flash"
 _LAGUNA_S21_DOMAIN_SOURCE = "https://huggingface.co/poolside/Laguna-S-2.1"
 _NORTH_CODE_DOMAIN_SOURCE = "https://huggingface.co/CohereLabs/North-Mini-Code-1.0"
 
@@ -488,6 +489,15 @@ def _domain_anchor(
 
 
 MODEL_DOMAIN_QUALITY_ANCHORS: dict[str, dict[str, DomainQualityAnchor]] = {
+    "qwen38-27b": {
+        "coding": _domain_anchor(
+            61.7,
+            "SWE-bench Pro",
+            "https://huggingface.co/Qwen/Qwen3.8-27B",
+            confidence=0.8,
+            note="Official Qwen3.8 post-trained model-card result.",
+        ),
+    },
     "q27": {
         "coding": _domain_anchor(72.4, "SWE-bench Verified", _QWEN35_DOMAIN_SOURCE),
         "reasoning": _domain_anchor(85.5, "GPQA Diamond", _QWEN35_DOMAIN_SOURCE),
@@ -619,6 +629,20 @@ MODEL_DOMAIN_QUALITY_ANCHORS: dict[str, dict[str, DomainQualityAnchor]] = {
         ),
         "reasoning": _domain_anchor(91.2, "GPQA Diamond", _GLM52_DOMAIN_SOURCE),
     },
+    "glm53f": {
+        "coding": _domain_anchor(
+            63.4,
+            "DeepSWE v1.1",
+            _GLM53F_DOMAIN_SOURCE,
+            note="Vendor mini-swe-agent evaluation with a 400k context limit and six-hour timeout.",
+        ),
+        "vision": _domain_anchor(
+            80.5,
+            "MMVU",
+            _GLM53F_DOMAIN_SOURCE,
+            note="Native video input evaluated at up to 256k context.",
+        ),
+    },
     "laguna-s-2-1": {
         "coding": _domain_anchor(
             59.4,
@@ -639,6 +663,15 @@ MODEL_DOMAIN_QUALITY_ANCHORS: dict[str, dict[str, DomainQualityAnchor]] = {
     },
 }
 
+ARCHIVED_DOMAIN_QUALITY_ANCHORS = {
+    key: anchors for key, anchors in MODEL_DOMAIN_QUALITY_ANCHORS.items() if key in ARCHIVED_MODELS
+}
+MODEL_DOMAIN_QUALITY_ANCHORS = {
+    key: anchors
+    for key, anchors in MODEL_DOMAIN_QUALITY_ANCHORS.items()
+    if key not in ARCHIVED_MODELS
+}
+
 # Text models whose quality anchor is intentionally not AA-sourced. Membership must be
 # justified inline; tests assert every other text model carries an AA_MODEL_METRICS row so
 # a new catalog entry cannot silently inherit the quality=0.5 / full-confidence defaults.
@@ -651,7 +684,7 @@ def text_models_missing_quality_anchors() -> list[str]:
         key
         for key, model in MODELS.items()
         if model.embedding_profile is None
-        and model.realtime_profile is None
+        and not model.is_asr_model
         and key not in AA_MODEL_METRICS
         and key not in AA_QUALITY_PLACEHOLDER
     )

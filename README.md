@@ -234,6 +234,14 @@ Two invariants are worth knowing before editing:
   raises at import if that happens.
 - **No lazy imports.** Function-level imports are how the previous cycles were
   hidden, so they are rejected outside `typing`/`dataclasses`.
+- **Release retirement.** Superseded open releases live in
+  `data/model_archive.py`, outside `MODELS`. Each record pins its successor,
+  source revision, date, and migration safety; only footprint-compatible
+  aliases are rewritten during scenario import.
+- **Native precision.** A model card's first precision option is its released
+  checkpoint format, backed by the actual BF16/FP8/FP4 calculation key. Exact
+  artifact profiles override weight bytes and mixed-compute shares; generic
+  conversions remain explicitly labeled estimates.
 
 One upward dependency remains and is recorded as an exception in
 `tests/test_architecture.py`: `state.py` calls `avg_dist`,

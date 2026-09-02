@@ -757,7 +757,7 @@ def _attention_row_flops_per_head(m: Model) -> float:
     """
     if m.is_mla and m.mla_kv_dim > 0:
         return 2.0 * (2 * m.mla_kv_dim + m.mla_rope_dim)
-    return 4.0 * m.head_dim
+    return 2.0 * (m.head_dim + m.attention_value_head_size)
 
 
 def _decode_attention_work(m: Model, pr: int, avg_seq: float, pp: int) -> float:
@@ -823,15 +823,20 @@ def _prefill_attention_work(m: Model, pr: int, seq_len: int, pp: int, causal: bo
     if compressed_context > 0:
         # Closed-form upper bound: charge every prompt query the final prompt's
         # compressed context rather than simulating each compression boundary.
-        main_work = m.attention_query_head_count * m.head_dim * seq * compressed_context
-        dot_product_work = 4 * pr * main_work
+        main_work = (
+            m.attention_query_head_count
+            * _attention_row_flops_per_head(m)
+            * seq
+            * compressed_context
+        )
+        dot_product_work = pr * main_work
         indexer_work = _sparse_indexer_work(m, pr, seq, prefill=True)
         return (dot_product_work + indexer_work) * _pp_peak_fraction(m, pp)
 
     full_layers, local_layers = _split_attention_layers(
         m.attention_layer_count, m.local_attention_layers
     )
-    full_width = m.attention_query_head_count * m.head_dim
+    full_width = m.attention_query_head_count * (m.head_dim + m.attention_value_head_size) / 2.0
     local_width = m.local_attention_head_count * m.local_attention_head_size
     if causal:
         # Decoder prefill is causal: QK^T and AV each cost half the rectangle.

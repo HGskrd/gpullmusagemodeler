@@ -67,7 +67,7 @@ class CoreCapacityMathTests(unittest.TestCase):
         self.chat_out = DIST_PRESETS["Chat"]["out"]
 
     def test_mla_cache_stores_one_joint_latent_plus_rope_key(self):
-        model = MODELS["ds3"]
+        model = MODELS["glm53"]
         seq_len = 131_072
         expected = model.kv_layer_count * seq_len * (model.mla_kv_dim + model.mla_rope_dim) * 2
 
@@ -325,7 +325,7 @@ class CoreCapacityMathTests(unittest.TestCase):
 
     def test_deepseek_v4_flash_is_faster_than_qwen27_at_same_tp8_topology(self):
         gpu = GPUS["H100"]
-        qwen = MODELS["q27"]
+        qwen = MODELS["qwen38-27b"]
         deepseek = MODELS["deepseek-v4-flash"]
         topology = (8, 1, 1)
 
@@ -396,15 +396,16 @@ class CoreCapacityMathTests(unittest.TestCase):
             (global_cache + local_cache) * 2,
         )
 
-    def test_glm52_indexshare_matches_published_long_context_flop_reduction(self):
-        glm51 = MODELS["glm51"]
-        glm52 = MODELS["glm52"]
+    def test_glm53_indexshare_reduces_long_context_indexer_work(self):
+        glm53 = MODELS["glm53"]
+        full_indexers = replace(glm53, key="glm53-full-indexer", sparse_indexer_layers=78)
         seq = 1024 * 1024
-        glm51_flops = 2 * glm51.active_params + _decode_attention_work(glm51, 1, seq, 1)
-        glm52_flops = 2 * glm52.active_params + _decode_attention_work(glm52, 1, seq, 1)
+        full_flops = 2 * full_indexers.active_params + _decode_attention_work(
+            full_indexers, 1, seq, 1
+        )
+        shared_flops = 2 * glm53.active_params + _decode_attention_work(glm53, 1, seq, 1)
 
-        self.assertGreater(glm51_flops, glm52_flops)
-        self.assertAlmostEqual(glm51_flops / glm52_flops, 2.9, delta=0.2)
+        self.assertGreater(full_flops, shared_flops)
 
     def test_dense_tp_models_two_all_reduces_per_layer(self):
         model = Model("tiny", "Tiny", "Test", "#000", 1, 1, False, 4, 4, 4, 8, False)
@@ -455,15 +456,15 @@ class CoreCapacityMathTests(unittest.TestCase):
         # Absorbed MLA decode scores latent+rope keys and accumulates latent
         # values, so the per-row FLOPs follow the latent geometry (1088/256 =
         # 4.25x head_dim) rather than 4*head_dim.
-        model = MODELS["ds3"]
+        model = MODELS["deepseek-v4-pro"]
         row = _attention_row_flops_per_head(model)
         self.assertEqual(row, 2.0 * (2 * 512 + 64))
         self.assertEqual(_decode_attention_work(model, 1, 0, 1), 0.0)
 
-        glm5 = MODELS["glm5"]
+        glm5 = MODELS["glm53"]
         seq = 8000
         work = _decode_attention_work(glm5, 1, seq, 1)
-        indexer = 2 * 1 * 32 * 128 * 1.0 * 78 * seq
+        indexer = 2 * 1 * 32 * 128 * 1.0 * 21 * seq
         main = 78 * 64 * 2.0 * (2 * 512 + 64) * 2048
         self.assertAlmostEqual(work, main + indexer, delta=work * 1e-9)
 
@@ -760,8 +761,8 @@ class CoreCapacityMathTests(unittest.TestCase):
         # Drafter weights plus the KV overhead shrink the prompt budget.
         self.assertLess(with_eagle.max_batch, base.max_batch)
 
-    def test_ds3_mtp_prefill_stays_free_of_prompt_pass(self):
-        model = MODELS["ds3"]
+    def test_native_mtp_prefill_stays_free_of_prompt_pass(self):
+        model = MODELS["g31"]
         mtp = resolve_spec_runtime(model, "mtp", 1, 0.0, "fp8")
 
         base = compute_prefill(model, 8, 1, 8, 1, 4096, GPUS["H200"], 0.90, 2.0, "fp8", self.eff)
@@ -1093,14 +1094,14 @@ class SpeculativeDecodingMathTests(unittest.TestCase):
         self.assertLess(long.spec_speedup, short.spec_speedup)
 
     def test_resolve_spec_runtime_off_unknown_and_overrides(self):
-        ds3 = MODELS["ds3"]
+        ds3 = MODELS["g31"]
         self.assertIsNone(resolve_spec_runtime(ds3, "off", 0, 0.0, "fp8"))
         self.assertIsNone(resolve_spec_runtime(ds3, "bogus", 0, 0.0, "fp8"))
 
         mtp = resolve_spec_runtime(ds3, "mtp", 0, 0.0, "fp8")
         self.assertEqual(mtp.k, 1)
         self.assertEqual(mtp.passes, 1)
-        self.assertAlmostEqual(mtp.alpha, 0.875)
+        self.assertAlmostEqual(mtp.alpha, 0.40)
         self.assertGreater(mtp.draft_weight_bytes, 0.0)
 
         # Explicit k drives autoregressive passes; alpha override replaces the profile value.
@@ -1110,9 +1111,9 @@ class SpeculativeDecodingMathTests(unittest.TestCase):
         self.assertAlmostEqual(eagle.alpha, 0.5)
 
         # Block-diffusion drafters emit the whole block in one pass at any k.
-        dflash = resolve_spec_runtime(MODELS["q397"], "dflash", 16, 0.0, "fp8")
+        dflash = resolve_spec_runtime(MODELS["g31"], "dflash", 8, 0.0, "fp8")
         self.assertEqual(dflash.passes, 1)
-        self.assertEqual(dflash.k, 16)
+        self.assertEqual(dflash.k, 8)
 
     def test_spec_off_matches_baseline_exactly(self):
         l8 = MODELS["l8"]
@@ -1153,7 +1154,7 @@ class SpeculativeDecodingMathTests(unittest.TestCase):
         self.assertNotEqual(sp.tps, base.tps)
 
     def test_draft_weights_and_draft_kv_shrink_slots(self):
-        ds3 = MODELS["ds3"]
+        ds3 = MODELS["g31"]
         mtp = resolve_spec_runtime(ds3, "mtp", 0, 0.0, "fp8")
         base_mem = compute_memory(ds3, 8, 1, GPUS["B200"], 0.90, 2.0, "fp8", self.eff)
         spec_mem = compute_memory(ds3, 8, 1, GPUS["B200"], 0.90, 2.0, "fp8", self.eff, mtp)
@@ -1177,17 +1178,11 @@ class SpeculativeDecodingMathTests(unittest.TestCase):
         self.assertGreater(low.spec_speedup, 1.5)
         self.assertLess(high.spec_speedup, low.spec_speedup)
 
-    def test_ds3_mtp_parity_with_vendor_claim(self):
-        # DeepSeek reports 1.8x TPS from MTP speculative decoding; the planner
-        # should land in that neighborhood at batch 1, not at the batch-1 marketing
-        # numbers of tree drafters.
-        ds3 = MODELS["ds3"]
-        mtp = resolve_spec_runtime(ds3, "mtp", 0, 0.0, "fp8")
-        result = self.decode(ds3, 8, 1, 1, 1, GPUS["B200"], "fp8", mtp)
-        # Finite-response waste and full KV/collective verification accounting
-        # make this more conservative than the vendor's long-run TPS headline.
-        self.assertGreaterEqual(result.spec_speedup, 1.4)
-        self.assertLessEqual(result.spec_speedup, 1.95)
+    def test_nemotron_dspark_matches_published_acceptance_length(self):
+        model = MODELS["nemotron35-lightning"]
+        spec = resolve_spec_runtime(model, "dspark", 0, 0.0, "nvfp4")
+        self.assertEqual(spec.k, 7)
+        self.assertAlmostEqual(spec.tau, 3.75, places=5)
 
     def test_compute_data_carries_spec_speedup(self):
         l8 = MODELS["l8"]

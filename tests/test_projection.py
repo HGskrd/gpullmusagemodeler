@@ -25,7 +25,7 @@ class RevenueProjectionTests(unittest.TestCase):
     def test_typed_projection_stages_round_trip_to_legacy_payload(self):
         state = PlannerState(
             gpus=[GpuPool(1, "H100", 2, cost_per_gpu_hour=1.0)],
-            models=[ModelAssignment(2, "q27", 1, 1, 1, 1, "bf16")],
+            models=[ModelAssignment(2, "qwen38-27b", 1, 1, 1, 1, "bf16")],
             projects=[Project(3, "Coding", 0.45, 20_000_000, 4.0)],
         )
 
@@ -122,7 +122,7 @@ class RevenueProjectionTests(unittest.TestCase):
     def test_projection_exposes_distinct_coverage_metrics(self):
         state = PlannerState(
             gpus=[GpuPool(1, "H100", 2, cost_per_gpu_hour=1.0)],
-            models=[ModelAssignment(2, "q27", 1, 1, 1, 1, "bf16")],
+            models=[ModelAssignment(2, "qwen38-27b", 1, 1, 1, 1, "bf16")],
             projects=[
                 Project(
                     3,
@@ -148,7 +148,7 @@ class RevenueProjectionTests(unittest.TestCase):
     def test_zero_capacity_assignment_is_not_runnable(self):
         state = PlannerState(
             gpus=[GpuPool(1, "H100", 1, cost_per_gpu_hour=1.0)],
-            models=[ModelAssignment(2, "q122", 1, 1, 1, 1, "bf16")],
+            models=[ModelAssignment(2, "qwen38-2.4t-a95b", 1, 1, 1, 1, "bf16")],
             projects=[
                 Project(
                     3,
@@ -177,7 +177,7 @@ class RevenueProjectionTests(unittest.TestCase):
     def test_latent_demand_is_reported_separately_from_baseline(self):
         state = PlannerState(
             gpus=[GpuPool(1, "H100", 2, cost_per_gpu_hour=1.0)],
-            models=[ModelAssignment(2, "q27", 1, 1, 1, 1, "bf16")],
+            models=[ModelAssignment(2, "qwen38-27b", 1, 1, 1, 1, "bf16")],
             projects=[
                 Project(
                     3,

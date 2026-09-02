@@ -30,6 +30,7 @@ from data import (
     INPUT_BUCKETS,
     MODELS,
     OUTPUT_BUCKETS,
+    PRECISION_SPECS,
     PRECISIONS,
     Model,
 )
@@ -113,6 +114,62 @@ def _quantization_profile_alerts(model: Model, prec: str) -> list[str]:
     return []
 
 
+def _precision_options(model: Model, selected: str) -> list[dict[str, str | bool]]:
+    """Native release format first, followed by strictly smaller choices.
+
+    A larger precision from an imported scenario is kept as a legacy selected
+    option so the browser never silently rewrites persisted planner state.
+    """
+    native = model.native_precision_key
+    native_bpp = model.weight_bytes_per_param(native)
+    keys = [native]
+    keys.extend(
+        sorted(
+            (
+                prec
+                for prec in PRECISIONS
+                if prec != native and model.weight_bytes_per_param(prec) < native_bpp - 1e-9
+            ),
+            key=model.weight_bytes_per_param,
+            reverse=True,
+        )
+    )
+    if selected not in keys:
+        keys.append(selected)
+
+    options: list[dict[str, str | bool]] = []
+    for prec in keys:
+        profile = model.quantization_profile(prec)
+        is_native = prec == native
+        label = (
+            f"Native · {model.native_precision_display}"
+            if is_native
+            else PRECISION_SPECS[prec].label
+        )
+        if profile is not None and not is_native:
+            label += " · artifact"
+        elif not is_native:
+            label += " · estimated"
+        if prec == selected and prec not in (native, *PRECISIONS):
+            label += " · legacy"
+        description = (
+            model.native_precision_description if is_native else PRECISION_SPECS[prec].description
+        )
+        if profile is not None:
+            description += f" Artifact: {profile.source_repo}. {profile.notes}"
+        elif not is_native:
+            description = "Estimated conversion, not a released artifact. " + description
+        options.append(
+            {
+                "key": prec,
+                "label": label,
+                "description": description,
+                "native": is_native,
+            }
+        )
+    return options
+
+
 def _build_model_info(
     state: PlannerState, am: ModelAssignment, gpu_pool: Optional[GpuPool], prefill_mem, decode_mem
 ) -> dict:
@@ -124,6 +181,7 @@ def _build_model_info(
         if (profile := model.quantization_profile(prec)) is not None
     }
     quant_profile = model.quantization_profile(am.prec)
+    precision_options = _precision_options(model, am.prec)
 
     strats: list[tuple[int, int, int]] = []
     recommended_label = ""
@@ -418,6 +476,10 @@ def _build_model_info(
         "weight_bpp": model.weight_bytes_per_param(am.prec),
         "quant_profiles_by_precision": quant_profiles_by_precision,
         "quant_profile": quant_profile,
+        "precision_options": precision_options,
+        "precision_description": next(
+            str(option["description"]) for option in precision_options if option["key"] == am.prec
+        ),
         "realtime": realtime,
         "embedding": embedding,
         "spec": spec_info,

@@ -100,10 +100,10 @@ def add_model(state: PlannerState, model_key: str) -> None:
         needs_now, needs_full = fit_needs(pool)
         best_now = _finite_gpu_need(*needs_now.values())
         best_full = _finite_gpu_need(*needs_full.values())
-        bf16_now = needs_now["bf16"]
+        native_now = needs_now[model.native_precision_key]
         return (
-            math.isinf(bf16_now),
-            bf16_now,
+            math.isinf(native_now),
+            native_now,
             math.isinf(best_now),
             best_now,
             math.isinf(best_full),
@@ -122,20 +122,21 @@ def add_model(state: PlannerState, model_key: str) -> None:
             f"{model.name} does not fit on any configured GPU pool under the current memory cap in {labels}."
         )
 
-    bf16_now = needs_now["bf16"]
+    native_precision = model.native_precision_key
+    native_now = needs_now[native_precision]
     # _best_precision_need returns None when nothing fits; the fallback below
     # resolves it, so the binding is optional until then.
     selected_precision: Optional[str]
-    if not math.isinf(bf16_now):
-        selected_precision = "bf16"
-        gpu_count = int(bf16_now)
+    if not math.isinf(native_now):
+        selected_precision = native_precision
+        gpu_count = int(native_now)
     else:
         selected_precision, best_now = _best_precision_need(needs_now)
         if selected_precision is not None and not math.isinf(best_now):
             gpu_count = int(best_now)
         else:
             selected_precision, _ = _best_precision_need(needs_full)
-            selected_precision = selected_precision or "bf16"
+            selected_precision = selected_precision or native_precision
             gpu_count = available
 
     assignment = add_model_assignment(

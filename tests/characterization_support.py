@@ -65,7 +65,7 @@ def projection_cases() -> dict[str, PlannerState]:
 
     constrained = PlannerState(
         gpus=[GpuPool(201, "H100", 2, cost_per_gpu_hour=1.25, country="FR")],
-        models=[ModelAssignment(202, "q27", 201, 2, 2, 1, "bf16")],
+        models=[ModelAssignment(202, "qwen38-27b", 201, 2, 2, 1, "bf16")],
         projects=[
             Project(
                 203,
@@ -107,7 +107,7 @@ def projection_cases() -> dict[str, PlannerState]:
         gpus=[GpuPool(301, "H100", 4, cost_per_gpu_hour=1.75, country="US")],
         models=[
             ModelAssignment(302, "q08", 301, 1, 1, 1, "fp8"),
-            ModelAssignment(303, "q27", 301, 3, 1, 1, "bf16"),
+            ModelAssignment(303, "qwen38-27b", 301, 3, 1, 1, "bf16"),
         ],
         projects=[
             Project(
@@ -154,7 +154,7 @@ def chart_state() -> PlannerState:
         gpus=[GpuPool(401, "H100", 8, cost_per_gpu_hour=1.5, country="FR")],
         models=[
             ModelAssignment(402, "q08", 401, 1, 1, 1, "fp8"),
-            ModelAssignment(403, "q27", 401, 2, 1, 1, "bf16"),
+            ModelAssignment(403, "qwen38-27b", 401, 2, 1, 1, "bf16"),
             ModelAssignment(404, "mxbai-embed-xsmall-v1", 401, 1, 1, 1, "bf16"),
             ModelAssignment(405, "denseon", 401, 2, 1, 1, "bf16"),
             ModelAssignment(406, "voxtral-realtime-mini-4b", 401, 1, 1, 1, "bf16"),

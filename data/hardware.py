@@ -340,9 +340,9 @@ GPUS: dict[str, GPU] = {
     "Gaudi3": GPU("Gaudi3", "Gaudi 3 128GB", "intel", 128e9, 3.7e12, 1.3e15, 2.6e15, 900e9, 4),
     "CrescentIsland": GPU(
         "CrescentIsland",
-        "Crescent Island Preview 160GB",
+        "Crescent Island Preview up to 480GB",
         "intel",
-        160e9,
+        480e9,
         1.0e12,
         183.5e12,
         367e12,
@@ -396,6 +396,30 @@ GPUS: dict[str, GPU] = {
         1,
         560e9,
     ),
+    "MAC_STUDIO_M5_MAX": GPU(
+        "MAC_STUDIO_M5_MAX",
+        "Mac Studio M5 Max 128GB",
+        "apple",
+        128e9,
+        614e9,
+        30e12,
+        30e12,
+        50e9,
+        1,
+        461e9,
+    ),
+    "MAC_STUDIO_M5_ULTRA": GPU(
+        "MAC_STUDIO_M5_ULTRA",
+        "Mac Studio M5 Ultra 512GB",
+        "apple",
+        512e9,
+        1.2e12,
+        60e12,
+        60e12,
+        50e9,
+        1,
+        900e9,
+    ),
 }
 
 GPU_FP4_FLOPS = {
@@ -410,7 +434,6 @@ GPU_FP4_FLOPS = {
     "B300": 15e15,
     "GB300": 15e15,
     "DGX_STATION_GB300": 15e15,
-    "RUBIN_NVL72": 50e15,
     "JETSON_AGX_THOR": 1035e12,
     "MI350X": 9.2e15,
     "MI355X": 10.1e15,
@@ -418,6 +441,9 @@ GPU_FP4_FLOPS = {
     "HELIOS_MI455X": 40.3e15,
     "MI400": 40.3e15,
 }
+# Published inference headline retained for display/provenance only. NVIDIA
+# does not footnote this value as dense, so it must not enter dense rooflines.
+GPU_INFERENCE_FP4_FLOPS = {"RUBIN_NVL72": 50e15}
 for _k, _fp4 in GPU_FP4_FLOPS.items():
     if _k in GPUS:
         GPUS[_k].fp4 = float(_fp4)
@@ -472,13 +498,16 @@ GPU_TDP_WATTS = {
     "FURIOSA_RNGD": 180,
     "Gaudi2": 600,
     "Gaudi3": 900,
-    "CrescentIsland": 300,
+    "CrescentIsland": 350,
     "ArcProB70": 230,
     "ArcProB60": 200,
     "ArcProB50": 70,
     "MAC_MINI_M4_PRO": 140,
     "MAC_STUDIO_M4_MAX": 270,
     "MAC_STUDIO_M3_ULTRA": 480,
+    # Apple does not publish whole-system peak draw for these configurations.
+    "MAC_STUDIO_M5_MAX": 0,
+    "MAC_STUDIO_M5_ULTRA": 0,
 }
 for _k, _w in GPU_TDP_WATTS.items():
     if _k in GPUS:
@@ -559,6 +588,8 @@ GPU_TCO_PRICE_USD: dict[str, float] = {
     "MAC_MINI_M4_PRO": 2_199.0,
     "MAC_STUDIO_M4_MAX": 3_499.0,
     "MAC_STUDIO_M3_ULTRA": 9_499.0,
+    "MAC_STUDIO_M5_MAX": 2_499.0,  # launch starting price; max-memory price unpublished
+    "MAC_STUDIO_M5_ULTRA": 5_499.0,  # launch starting price; 512GB price unpublished
 }
 
 GPU_TCO_COMPLETE_SYSTEMS = frozenset(
@@ -576,6 +607,8 @@ GPU_TCO_COMPLETE_SYSTEMS = frozenset(
         "MAC_MINI_M4_PRO",
         "MAC_STUDIO_M4_MAX",
         "MAC_STUDIO_M3_ULTRA",
+        "MAC_STUDIO_M5_MAX",
+        "MAC_STUDIO_M5_ULTRA",
     }
 )
 
@@ -641,13 +674,14 @@ for _key, _tco in GPU_TCO_DEFAULTS.items():
 
 # Announced/preview catalog entries must keep their uncertainty reviewable.
 # Kimi K3 is now an open-weight release with a pinned config and technical report.
-PREVIEW_ASSUMPTIONS_CAPTURED_AT = "2026-08-09"
+PREVIEW_ASSUMPTIONS_CAPTURED_AT = "2026-09-02"
 PREVIEW_ASSUMPTIONS: dict[str, dict[str, object]] = {
     "gpu:RUBIN_NVL72": {
         "status": "full-production ramp; production shipments announced for fall 2026",
         "source": "https://www.nvidia.com/en-us/data-center/vera-rubin-nvl72/",
         "assumptions": (
             "all per-GPU performance, memory, bandwidth, and NVLink figures remain preliminary",
+            "the 50 PF NVFP4 inference headline is retained as display evidence but excluded from the dense FP4 planner roofline",
             "rack-only pool sizes are constrained to multiples of 72",
             "board power is omitted until NVIDIA publishes a per-GPU figure",
         ),
@@ -690,30 +724,36 @@ PREVIEW_ASSUMPTIONS: dict[str, dict[str, object]] = {
     },
     "gpu:CrescentIsland": {
         "status": "announced inference GPU; public launch configuration pending",
-        "source": "https://newsroom.intel.com/artificial-intelligence/intel-to-expand-ai-accelerator-portfolio-with-new-gpu",
+        "source": "https://www.intel.de/content/www/de/de/newsroom/news/client-computing/intel-outlines-architectures-for-agentic-ai-at-hot-chips-2026.html",
         "assumptions": (
-            "160 GB LPDDR5X is public; bandwidth, tensor rooflines, topology, and power are planner proxies",
+            "up to 480 GB LPDDR5X, 350 W, 32 Xe cores, and 256 XMX engines are public",
+            "bandwidth, tensor rooflines, scale-up topology, and price remain planner proxies",
+        ),
+    },
+    "gpu:MAC_STUDIO_M5_MAX": {
+        "status": "announced; availability begins 2026-09-22",
+        "source": "https://www.apple.com/newsroom/2026/08/apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra/",
+        "assumptions": (
+            "128 GB, 614 GB/s, and 40 GPU cores are public",
+            "dense BF16 throughput and 461 GB/s sustained planner bandwidth are explicit proxies",
+            "the $2,499 starting price is not a price for the max-memory configuration",
+        ),
+    },
+    "gpu:MAC_STUDIO_M5_ULTRA": {
+        "status": "announced; 512 GB configuration ships late October 2026",
+        "source": "https://www.apple.com/newsroom/2026/08/apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra/",
+        "assumptions": (
+            "512 GB, 1.2 TB/s, and 80 GPU cores are public",
+            "dense BF16 throughput and 900 GB/s sustained planner bandwidth are explicit proxies",
+            "the $5,499 starting price is not a price for the 512 GB configuration",
         ),
     },
     "model:inkling-small-preview": {
-        "status": "preview weights and architecture configuration not released",
-        "source": "https://thinkingmachines.ai/news/introducing-inkling/",
+        "status": "released; legacy preview key retained for saved-scenario compatibility",
+        "source": "https://huggingface.co/thinkingmachines/Inkling-Small/blob/main/config.json",
         "assumptions": (
-            "48-layer layout scales the released Inkling local/global attention pattern",
-            "276B total and 12B active parameters are public preview facts",
-        ),
-    },
-    "model:mistral-medium-3.5-preview": {
-        "status": "API and model card live; full architecture configuration not public",
-        "source": "https://docs.mistral.ai/models/model-cards/mistral-medium-3-5-26-04",
-        "assumptions": ("128B dense architecture fields remain a capacity proxy",),
-    },
-    "model:deepseek-v4-pro": {
-        "status": "preview; final open checkpoint and architecture configuration not published",
-        "source": "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731",
-        "assumptions": (
-            "1.6T total, 49B active, layer, attention, and MTP fields remain planning proxies",
-            "the preview comparison advertises a 1M context window but does not publish the Pro config",
+            "the visible model uses the released 42-layer, 35-local/7-global configuration",
+            "the internal inkling-small-preview key remains stable for imported scenarios",
         ),
     },
     "cloud:deepseek-v4-pro": {
@@ -766,7 +806,7 @@ GPU_CARDS: list[GPUCard] = [
         "72-GPU rack: 288 GB HBM4/GPU (preliminary)",
         "Next-generation rack-scale agentic inference and training; production shipments announced for fall 2026",
         (GPUPlannerOption("Add 72-GPU Preview", "RUBIN_NVL72"),),
-        "NVIDIA says the platform is in full-production ramp, but still labels the 288GB/22TB/s/50PF NVFP4 per-GPU specifications preliminary and subject to change. Pool sizes snap to multiples of 72.",
+        "NVIDIA says the platform is in full-production ramp, but still labels the specifications preliminary. The 50PF NVFP4 inference headline is display-only because NVIDIA does not identify it as dense; pool sizes snap to multiples of 72.",
     ),
     GPUCard(
         "GB300 NVL72",
@@ -1195,10 +1235,10 @@ GPU_CARDS: list[GPUCard] = [
         "GPU Crescent Island",
         "Intel",
         "Xe3P",
-        "160 GB LPDDR5X",
-        "Inference & tokens-as-a-service, air-cooled (announced Oct 2025)",
+        "up to 480 GB LPDDR5X · 350 W",
+        "Inference and tokens-as-a-service; 32 Xe cores / 256 XMX engines",
         (GPUPlannerOption("Add Preview", "CrescentIsland"),),
-        "Preview proxy profile: Intel has announced memory capacity, but not a full public roofline yet.",
+        "Intel now publishes capacity, power, and engine counts. The 1TB/s bandwidth, BF16/FP8 rooflines, scale-up topology, and price remain explicit planner proxies.",
     ),
     GPUCard(
         "Arc Pro B70",
@@ -1228,6 +1268,24 @@ GPU_CARDS: list[GPUCard] = [
         "Uses public Intel memory specs; BF16/FP8 planner rooflines are inferred from Intel's published INT8 XMX throughput.",
     ),
     # ── Apple: most memory first ─────────────────────────────────────────────
+    GPUCard(
+        "Mac Studio M5 Ultra",
+        "Apple",
+        "Apple silicon",
+        "up to 512 GB unified memory · 1.2 TB/s",
+        "Largest-memory current Apple desktop for local large-model inference",
+        (GPUPlannerOption("Add 512GB", "MAC_STUDIO_M5_ULTRA"),),
+        "Apple publishes the 80-core GPU, memory, and peak bandwidth. Compute, sustained planner bandwidth, power, and max-memory price remain explicit proxies; 512GB ships late October 2026.",
+    ),
+    GPUCard(
+        "Mac Studio M5 Max",
+        "Apple",
+        "Apple silicon",
+        "up to 128 GB unified memory · 614 GB/s",
+        "Single-box local serving and ML workstation",
+        (GPUPlannerOption("Add 128GB", "MAC_STUDIO_M5_MAX"),),
+        "Apple publishes the 40-core GPU, memory, and peak bandwidth. Compute, sustained planner bandwidth, power, and max-memory price remain explicit proxies; availability begins September 22, 2026.",
+    ),
     GPUCard(
         "Mac Studio M3 Ultra",
         "Apple",

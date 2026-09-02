@@ -6,7 +6,7 @@ from .asr_support import (
     RWKV7_G1_CONTEXT,
     RWKV7_G1_HEAD_DIM,
 )
-from .model_class import Model
+from .model_class import Model, SpeculativeProfile
 
 
 def _rwkv7_g1_model(
@@ -61,6 +61,7 @@ def _lfm_text_model(
     num_heads: int,
     kv_heads: int,
     capabilities: frozenset[str] = LFM_TEXT_CAPABILITIES,
+    speculative_profiles: tuple[SpeculativeProfile, ...] = (),
 ) -> Model:
     conv_layers = max(layers - attention_layers, 0)
     head_dim = hidden_dim // max(num_heads, 1)
@@ -84,4 +85,5 @@ def _lfm_text_model(
         attention_label=f"{conv_layers} LIV conv + {attention_layers} GQA, ctx 128k",
         capabilities_override=capabilities,
         max_context_tokens=128000,
+        speculative_profiles=speculative_profiles,
     )

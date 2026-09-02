@@ -3,6 +3,7 @@
 import math
 from dataclasses import dataclass
 
+from .model_archive import ARCHIVED_MODELS
 from .specs import (
     PRECISION_SPECS,
     QuantizationProfile,
@@ -190,8 +191,9 @@ def _dspark_profile(
     exact_weight_bytes: float = 0.0,
     draft_layers: int = 5,
     kv_overhead: float = 0.0,
+    default_k: int = 7,
 ) -> SpeculativeProfile:
-    """Published seven-token parallel DSpark profile.
+    """Published fixed-depth parallel DSpark profile.
 
     DSpark attached checkpoints execute their draft layers in one block pass.
     ``kv_overhead`` remains explicit because hybrid/recurrent draft state is not
@@ -203,15 +205,15 @@ def _dspark_profile(
         draft_params,
         draft_layers,
         True,
-        7,
+        default_k,
         alpha,
         kv_overhead,
         source,
         note,
         exact_weight_bytes,
         draft_params,
-        (7,),
-        ((7, alpha),),
+        (default_k,),
+        ((default_k, alpha),),
     )
 
 
@@ -291,6 +293,9 @@ class Model:
     linear_attention_k_head_dim: int = 0
     linear_attention_conv_kernel: int = 0
     attention_query_heads: int = 0
+    # Some MLA checkpoints expose a wider Q/K head than the value head. The
+    # legacy ``head_dim`` remains the Q/K width; zero preserves equal QK/V.
+    attention_value_head_dim: int = 0
     # Sparse attention keeps a bounded set of selected KV positions but still
     # runs a lightweight indexer over the available context. Index-sharing
     # architectures can evaluate that indexer in fewer layers than the main
@@ -329,6 +334,12 @@ class Model:
     # override it at their definitions. Embedding models retain their profile cap.
     max_context_tokens: int = 131072
     speculative_profiles: tuple[SpeculativeProfile, ...] = ()
+    # The released checkpoint format shown first in the precision menu.  The
+    # stored assignment remains the real calculation precision (bf16/fp8/fp4),
+    # so existing scenarios and every roofline formula remain compatible.
+    native_precision: str = "bf16"
+    native_precision_label: str = ""
+    native_precision_note: str = ""
 
     @property
     def capabilities(self) -> frozenset[str]:
@@ -339,7 +350,7 @@ class Model:
         )
         capabilities = (base | self.extra_capabilities) - {"ctx_128k"}
         if (
-            not self.is_realtime_only
+            not self.is_asr_model
             and not self.is_embedding_model
             and self.max_context_tokens >= 131072
         ):
@@ -348,7 +359,20 @@ class Model:
 
     @property
     def is_realtime_only(self) -> bool:
+        """Backward-compatible alias for older ASR classification call sites."""
+        return self.is_asr_model
+
+    @property
+    def is_asr_model(self) -> bool:
         return self.realtime_profile is not None
+
+    @property
+    def is_streaming_asr(self) -> bool:
+        return self.realtime_profile is not None and self.realtime_profile.streaming
+
+    @property
+    def asr_mode_label(self) -> str:
+        return "Realtime" if self.is_streaming_asr else "Non-realtime"
 
     @property
     def is_embedding_model(self) -> bool:
@@ -357,7 +381,7 @@ class Model:
     @property
     def available_spec_profiles(self) -> tuple[SpeculativeProfile, ...]:
         # N-gram needs no drafter and is always available to plain text models.
-        if self.is_realtime_only or self.is_embedding_model:
+        if self.is_asr_model or self.is_embedding_model:
             return ()
         return self.speculative_profiles + (NGRAM_SPECULATIVE_PROFILE,)
 
@@ -365,6 +389,8 @@ class Model:
     def size_label(self) -> str:
         def fmt_b(params: float) -> str:
             b = params / 1e9
+            if b >= 1000:
+                return f"{b / 1000:.1f}T"
             if b < 1:
                 return f"{b:.2f}".rstrip("0").rstrip(".")
             if b < 10:
@@ -408,6 +434,10 @@ class Model:
     @property
     def attention_query_head_count(self) -> int:
         return self.attention_query_heads or self.num_heads
+
+    @property
+    def attention_value_head_size(self) -> int:
+        return self.attention_value_head_dim or self.head_dim
 
     @property
     def linear_attention_layer_count(self) -> int:
@@ -494,6 +524,20 @@ class Model:
     def quantization_profile(self, prec: str) -> QuantizationProfile | None:
         return get_quantization_profile(self.key, prec)
 
+    @property
+    def native_precision_key(self) -> str:
+        return normalize_precision(self.native_precision)
+
+    @property
+    def native_precision_display(self) -> str:
+        return self.native_precision_label or PRECISION_SPECS[self.native_precision_key].label
+
+    @property
+    def native_precision_description(self) -> str:
+        if self.native_precision_note:
+            return self.native_precision_note
+        return PRECISION_SPECS[self.native_precision_key].description
+
 
 QUANTIZATION_CAPTURED_AT = "2026-05-22"
 
@@ -537,8 +581,214 @@ def _nvfp4_profile(
     )
 
 
+def _artifact_profile(
+    *,
+    model_key: str,
+    precision_key: str,
+    label: str,
+    source_repo: str,
+    source_revision: str,
+    total_weight_bytes: float,
+    compute_precision_shares: dict[str, float],
+    quantized: tuple[str, ...],
+    retained: tuple[str, ...],
+    notes: str,
+    quant_algo: str,
+    kv_cache_format: str = "FP8",
+    group_size: int | None = None,
+    storage_format_counts: dict[str, int] | None = None,
+    captured_at: str = "2026-09-02",
+) -> tuple[tuple[str, str], QuantizationProfile]:
+    return (
+        (model_key, precision_key),
+        QuantizationProfile(
+            precision_key=precision_key,
+            label=label,
+            source_repo=source_repo,
+            source_revision=source_revision,
+            source_downloads=0,
+            captured_at=captured_at,
+            source_kind="exact",
+            quant_algo=quant_algo,
+            kv_cache_format=kv_cache_format,
+            kv_cache_bytes_per_elem=1.0,
+            group_size=group_size,
+            storage_format_counts=storage_format_counts or {},
+            compute_precision_shares=compute_precision_shares,
+            quantized=quantized,
+            retained=retained,
+            total_weight_bytes_override=total_weight_bytes,
+            notes=notes,
+        ),
+    )
+
+
 MODEL_QUANTIZATION_PROFILES: dict[tuple[str, str], QuantizationProfile] = dict(
     [
+        _artifact_profile(
+            model_key="qwen38-27b",
+            precision_key="fp8",
+            label="Official FP8",
+            source_repo="Qwen/Qwen3.8-27B-FP8",
+            source_revision="017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+            total_weight_bytes=30_863_648_224,
+            storage_format_counts={"BF16": 3_082_220_272, "F8_E4M3": 24_699_207_680},
+            compute_precision_shares={"fp8": 0.889, "bf16": 0.111},
+            quantized=("language linear weights FP8",),
+            retained=("vision, embeddings, norms, and excluded tensors BF16",),
+            quant_algo="official block FP8",
+            notes="Exact official FP8 shard inventory; 30.864 GB of indexed tensor data.",
+        ),
+        _artifact_profile(
+            model_key="qwen38-2.4t-a95b",
+            precision_key="fp8",
+            label="Official FP8",
+            source_repo="Qwen/Qwen3.8-2.4T-A95B-FP8",
+            source_revision="d2dc35658bcf77e66643428cb52e774cc3b5bd29",
+            total_weight_bytes=2_495_773_699_840,
+            storage_format_counts={"BF16": 49_590_974_336, "F8_E4M3": 2_396_591_751_168},
+            compute_precision_shares={"fp8": 0.98, "bf16": 0.02},
+            quantized=("transformer linear weights FP8",),
+            retained=("embeddings, norms, routers, and excluded tensors BF16",),
+            quant_algo="official block FP8",
+            notes="Exact official FP8 shard inventory; 2.496 TB of indexed tensor data.",
+        ),
+        _artifact_profile(
+            model_key="qwen38-2.4t-a95b",
+            precision_key="nvfp4",
+            label="NVIDIA NVFP4",
+            source_repo="nvidia/Qwen3.8-2.4T-A95B-NVFP4",
+            source_revision="049fa3b549c6d0cbca8355dc7e5d73585e41d2d0",
+            total_weight_bytes=1_444_420_107_432,
+            storage_format_counts={
+                "BF16": 35_470_849_920,
+                "U8": 1_185_410_973_696,
+                "F8_E4M3": 39_889_928_192,
+            },
+            compute_precision_shares={"nvfp4": 0.88, "fp8": 0.10, "bf16": 0.02},
+            quantized=("MoE experts NVFP4", "attention and GDN projections FP8"),
+            retained=("embeddings, norms, routers, and MTP tensors BF16",),
+            quant_algo="NVIDIA mixed NVFP4/FP8",
+            group_size=16,
+            notes="Exact 200-shard artifact footprint; optional NVFP4 KV is not selected by this FP8-KV profile.",
+        ),
+        _artifact_profile(
+            model_key="qwen38-flash-next",
+            precision_key="fp8",
+            label="Official FP8",
+            source_repo="Qwen/Qwen3.8-Flash-Next-FP8",
+            source_revision="236dfdf285828023ca3bcd3f37366c58a3469b13",
+            total_weight_bytes=185_487_179_488,
+            storage_format_counts={"BF16": 5_487_198_064, "F8_E4M3": 174_512_783_360},
+            compute_precision_shares={"fp8": 0.97, "bf16": 0.03},
+            quantized=("main, N-gram embedding, and supported linear tensors FP8",),
+            retained=("excluded tensors BF16",),
+            quant_algo="official block FP8",
+            notes="Exact official FP8 inventory, including the 51B N-gram table and bundled MTP tensors.",
+        ),
+        _artifact_profile(
+            model_key="deepseek-v4-pro",
+            precision_key="mxfp4",
+            label="Native MXFP4/FP8",
+            source_repo="deepseek-ai/DeepSeek-V4-Pro-0813",
+            source_revision="72e1d3230f6c080a530b0a1d46f8eb4602340597",
+            total_weight_bytes=892_727_580_904,
+            compute_precision_shares={"mxfp4": 0.85, "fp8": 0.14, "bf16": 0.01},
+            quantized=("routed experts MXFP4", "attention and shared-expert projections FP8"),
+            retained=("norms, embeddings, and excluded tensors BF16",),
+            quant_algo="native mixed MXFP4/FP8",
+            group_size=32,
+            notes="Exact 0813 indexed checkpoint footprint; bundled DSpark tensors remain part of resident storage.",
+        ),
+        _artifact_profile(
+            model_key="deepseek-v4-flash",
+            precision_key="mxfp4",
+            label="Native MXFP4/FP8",
+            source_repo="deepseek-ai/DeepSeek-V4-Flash-0731",
+            source_revision="7872f01b1d1fe23eabc4c98b48bffcef5a386062",
+            total_weight_bytes=166_878_536_440,
+            compute_precision_shares={"mxfp4": 0.84, "fp8": 0.15, "bf16": 0.01},
+            quantized=("routed experts MXFP4", "supported dense projections FP8"),
+            retained=(
+                "attention, norms, embeddings, and DSpark exclusions at published higher precision",
+            ),
+            quant_algo="native mixed MXFP4/FP8",
+            group_size=32,
+            notes="Exact 0731 indexed checkpoint footprint.",
+        ),
+        _artifact_profile(
+            model_key="deepseek-v4-pro",
+            precision_key="nvfp4",
+            label="NVIDIA NVFP4 compatibility",
+            source_repo="nvidia/DeepSeek-V4-Pro-0813-NVFP4",
+            source_revision="a6ed51e09c9f9ae455c424cc7b83a322d6744485",
+            total_weight_bytes=892_727_580_904,
+            compute_precision_shares={"nvfp4": 0.85, "fp8": 0.14, "bf16": 0.01},
+            quantized=("routed MoE operators NVFP4",),
+            retained=("attention, shared experts, head, and DSpark unquantized",),
+            quant_algo="NVIDIA MXFP4-to-NVFP4 compatibility cast",
+            group_size=16,
+            notes="Indexed metadata matches the source footprint; NVIDIA notes the served artifact is slightly larger, so this is a compatibility/performance option rather than a smaller quant.",
+        ),
+        _artifact_profile(
+            model_key="deepseek-v4-flash",
+            precision_key="nvfp4",
+            label="NVIDIA NVFP4 compatibility",
+            source_repo="nvidia/DeepSeek-V4-Flash-0731-NVFP4",
+            source_revision="f1caa71142bd0be02f728c79f75042ac1e461579",
+            total_weight_bytes=166_878_536_440,
+            compute_precision_shares={"nvfp4": 0.84, "fp8": 0.15, "bf16": 0.01},
+            quantized=("routed experts losslessly cast from MXFP4 to NVFP4",),
+            retained=("DSpark and unsupported tensors at source precision",),
+            quant_algo="NVIDIA MXFP4-to-NVFP4 compatibility cast",
+            group_size=16,
+            notes="Compatibility/performance artifact; the source checkpoint was already four-bit for routed experts, so this is not modeled as a smaller footprint.",
+        ),
+        _artifact_profile(
+            model_key="kimi-k3",
+            precision_key="nvfp4",
+            label="NVIDIA NVFP4 compatibility",
+            source_repo="nvidia/Kimi-K3-NVFP4",
+            source_revision="b2428a0b83a8b712ff2e1a8448a103d4175341f1",
+            total_weight_bytes=1_609_777_087_808,
+            compute_precision_shares={"nvfp4": 0.47, "fp8": 0.18, "bf16": 0.35},
+            quantized=("routed experts NVFP4", "supported KDA/MLA projections block FP8"),
+            retained=(
+                "latent/shared experts, routers, towers, and unsupported tensors higher precision",
+            ),
+            quant_algo="NVIDIA mixed NVFP4/FP8 compatibility",
+            group_size=16,
+            notes="Validated at 196,608 tokens on 8×B300. This Blackwell alternative is larger than Kimi's native MXFP4 artifact and is not listed as a smaller quant.",
+        ),
+        _artifact_profile(
+            model_key="nemotron35-lightning",
+            precision_key="nvfp4",
+            label="NVIDIA NVFP4 QAD",
+            source_repo="nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4",
+            source_revision="cc84af2fe71647d87f4486c064f320e1e7535243",
+            total_weight_bytes=21_559_589_596,
+            compute_precision_shares={"nvfp4": 0.74, "fp8": 0.12, "bf16": 0.14},
+            quantized=("MoE/shared/head and Mamba linears NVFP4/FP8",),
+            retained=(
+                "attention projections, embeddings, routers, norms, convolutions, and MTP BF16",
+            ),
+            quant_algo="NVIDIA QAD four_over_six NVFP4",
+            group_size=16,
+            notes="Exact 52-shard QAD artifact; NVIDIA reports 98.97% median score recovery versus BF16.",
+        ),
+        _artifact_profile(
+            model_key="glm53f",
+            precision_key="fp8",
+            label="Native block FP8",
+            source_repo="zai-org/GLM-5.3-Flash",
+            source_revision="c54b8d14c81437589ce7db2bece34f157bd90203",
+            total_weight_bytes=328_250_014_584,
+            compute_precision_shares={"fp8": 0.96, "bf16": 0.04},
+            quantized=("most language weights block FP8",),
+            retained=("6.93B BF16 parameters and small FP32 islands",),
+            quant_algo="native block FP8",
+            notes="Exact vendor safetensors inventory.",
+        ),
         _nvfp4_profile(
             model_key="g31",
             source_repo="nvidia/Gemma-4-31B-IT-NVFP4",
@@ -874,6 +1124,19 @@ MODEL_QUANTIZATION_PROFILES: dict[tuple[str, str], QuantizationProfile] = dict(
         ),
     ]
 )
+
+# Retired artifact data stays recoverable with the retirement record, but cannot
+# leak into current placement, UI, or source-quality checks.
+ARCHIVED_QUANTIZATION_PROFILES = {
+    key: profile
+    for key, profile in MODEL_QUANTIZATION_PROFILES.items()
+    if key[0] in ARCHIVED_MODELS
+}
+MODEL_QUANTIZATION_PROFILES = {
+    key: profile
+    for key, profile in MODEL_QUANTIZATION_PROFILES.items()
+    if key[0] not in ARCHIVED_MODELS
+}
 
 
 def get_quantization_profile(model_key: str, prec: str) -> QuantizationProfile | None:

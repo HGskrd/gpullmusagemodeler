@@ -17,7 +17,7 @@
         },
         {
           "x": 16,
-          "y": 20704
+          "y": 20705
         }
       ],
       "fill": true,
@@ -51,7 +51,7 @@
       "tension": 0.3
     },
     {
-      "borderColor": "#3266ad77",
+      "borderColor": "#2D63C877",
       "borderDash": [],
       "borderWidth": 1,
       "data": [
@@ -65,11 +65,11 @@
         },
         {
           "x": 16,
-          "y": 990
+          "y": 991
         }
       ],
       "fill": false,
-      "label": "Qwen 3.5 27B",
+      "label": "Qwen 3.8 27B",
       "pointRadius": 1.5,
       "spanGaps": false,
       "tension": 0.3
@@ -190,27 +190,27 @@
       "tension": 0.3
     },
     {
-      "backgroundColor": "#3266ad12",
-      "borderColor": "#3266ad",
+      "backgroundColor": "#2D63C812",
+      "borderColor": "#2D63C8",
       "borderDash": [],
       "borderWidth": 2,
       "data": [
         {
           "x": 1,
-          "y": 5155
+          "y": 5159
         },
         {
           "x": 4,
-          "y": 20297
+          "y": 20312
         },
         {
           "x": 16,
-          "y": 22105
+          "y": 22119
         }
       ],
       "fill": true,
       "hardware": "2× H100 80GB SXM",
-      "label": "Qwen 3.5 27B TP2xPP1xDP1 BF16",
+      "label": "Qwen 3.8 27B TP2xPP1xDP1 BF16",
       "pointRadius": 2.5,
       "spanGaps": false,
       "tension": 0.3
@@ -252,15 +252,15 @@
       "data": [
         {
           "x": 1,
-          "y": 202208
+          "y": 202212
         },
         {
           "x": 4,
-          "y": 748430
+          "y": 748445
         },
         {
           "x": 16,
-          "y": 891985
+          "y": 891999
         }
       ],
       "fill": false,
@@ -329,8 +329,8 @@
       "tension": 0.3
     },
     {
-      "backgroundColor": "#3266ad12",
-      "borderColor": "#3266ad",
+      "backgroundColor": "#2D63C812",
+      "borderColor": "#2D63C8",
       "borderDash": [],
       "borderWidth": 2,
       "data": [
@@ -368,11 +368,11 @@
           "spec_reason": "",
           "spec_speedup": 1.0,
           "x": 16,
-          "y": 990
+          "y": 991
         }
       ],
       "fill": true,
-      "label": "Qwen 3.5 27B TP2xPP1xDP1 BF16 · Spec off",
+      "label": "Qwen 3.8 27B TP2xPP1xDP1 BF16 · Spec off",
       "pointRadius": 2.5,
       "spanGaps": false,
       "spec_alpha": 0.0,
@@ -756,8 +756,8 @@
       "tension": 0.3
     },
     {
-      "backgroundColor": "#3266adAA",
-      "borderColor": "#3266ad",
+      "backgroundColor": "#2D63C8AA",
+      "borderColor": "#2D63C8",
       "borderDash": [],
       "borderWidth": 2,
       "data": [
@@ -771,7 +771,7 @@
           "spec_probe_concurrency": 0,
           "spec_reason": "",
           "spec_speedup": 1.0,
-          "x": 13.4,
+          "x": 13.39,
           "y": 75
         },
         {
@@ -784,7 +784,7 @@
           "spec_probe_concurrency": 0,
           "spec_reason": "",
           "spec_speedup": 1.0,
-          "x": 13.58,
+          "x": 13.57,
           "y": 147
         },
         {
@@ -797,7 +797,7 @@
           "spec_probe_concurrency": 0,
           "spec_reason": "",
           "spec_speedup": 1.0,
-          "x": 13.95,
+          "x": 13.94,
           "y": 287
         },
         {
@@ -810,7 +810,7 @@
           "spec_probe_concurrency": 0,
           "spec_reason": "",
           "spec_speedup": 1.0,
-          "x": 14.69,
+          "x": 14.68,
           "y": 545
         },
         {
@@ -823,8 +823,8 @@
           "spec_probe_concurrency": 0,
           "spec_reason": "",
           "spec_speedup": 1.0,
-          "x": 16.16,
-          "y": 990
+          "x": 16.15,
+          "y": 991
         },
         {
           "bs": 32,
@@ -836,8 +836,8 @@
           "spec_probe_concurrency": 0,
           "spec_reason": "",
           "spec_speedup": 1.0,
-          "x": 19.11,
-          "y": 1675
+          "x": 19.1,
+          "y": 1676
         },
         {
           "bs": 64,
@@ -849,12 +849,12 @@
           "spec_probe_concurrency": 0,
           "spec_reason": "",
           "spec_speedup": 1.0,
-          "x": 25.0,
-          "y": 2560
+          "x": 24.99,
+          "y": 2561
         }
       ],
       "hardware": "2× H100 80GB SXM",
-      "label": "Qwen 3.5 27B TP2xPP1xDP1 BF16 · Spec off",
+      "label": "Qwen 3.8 27B TP2xPP1xDP1 BF16 · Spec off",
       "pointRadius": 3.5,
       "showLine": true,
       "spec_alpha": 0.0,
@@ -879,7 +879,7 @@
           "in_len": 9139,
           "out_len": 775,
           "rps": 3.8,
-          "tps": 37683,
+          "tps": 37684,
           "workload": "Chat",
           "x": 1,
           "y": 3.8
@@ -897,7 +897,7 @@
           "in_len": 9139,
           "out_len": 775,
           "rps": 27.98,
-          "tps": 277380,
+          "tps": 277388,
           "workload": "Chat",
           "x": 16,
           "y": 27.98
@@ -920,7 +920,7 @@
           "in_len": 21670,
           "out_len": 977,
           "rps": 2.76,
-          "tps": 62448,
+          "tps": 62449,
           "workload": "RAG",
           "x": 1,
           "y": 2.76
@@ -938,7 +938,7 @@
           "in_len": 21670,
           "out_len": 977,
           "rps": 14.31,
-          "tps": 324081,
+          "tps": 324092,
           "workload": "RAG",
           "x": 16,
           "y": 14.31
@@ -961,7 +961,7 @@
           "in_len": 51092,
           "out_len": 1813,
           "rps": 1.27,
-          "tps": 67427,
+          "tps": 67428,
           "workload": "Long doc",
           "x": 1,
           "y": 1.27
@@ -1002,7 +1002,7 @@
           "in_len": 12319,
           "out_len": 1212,
           "rps": 2.37,
-          "tps": 32123,
+          "tps": 32124,
           "workload": "Code",
           "x": 1,
           "y": 2.37
@@ -1020,7 +1020,7 @@
           "in_len": 12319,
           "out_len": 1212,
           "rps": 15.47,
-          "tps": 209266,
+          "tps": 209273,
           "workload": "Code",
           "x": 16,
           "y": 15.47
@@ -1043,7 +1043,7 @@
           "in_len": 9884,
           "out_len": 86,
           "rps": 34.25,
-          "tps": 341493,
+          "tps": 341500,
           "workload": "Classify",
           "x": 1,
           "y": 34.25
@@ -1052,7 +1052,7 @@
           "in_len": 9884,
           "out_len": 86,
           "rps": 79.35,
-          "tps": 791094,
+          "tps": 791106,
           "workload": "Classify",
           "x": 4,
           "y": 79.35
@@ -1061,7 +1061,7 @@
           "in_len": 9884,
           "out_len": 86,
           "rps": 79.35,
-          "tps": 791096,
+          "tps": 791109,
           "workload": "Classify",
           "x": 16,
           "y": 79.35
@@ -1306,95 +1306,95 @@
       "tension": 0.3
     },
     {
-      "borderColor": "#3266ad",
+      "borderColor": "#2D63C8",
       "borderDash": [],
       "borderWidth": 2,
       "data": [
         {
           "arrival_rps": 0.1,
-          "decode_step_ms": 13.4,
+          "decode_step_ms": 13.39,
           "inflight": 1.0,
-          "response_s": 10.82,
-          "ttft_ms": 430.5,
+          "response_s": 10.81,
+          "ttft_ms": 430.2,
           "x": 0.1,
-          "y": 10.82
+          "y": 10.81
         },
         {
           "arrival_rps": 0.19,
-          "decode_step_ms": 13.58,
+          "decode_step_ms": 13.57,
           "inflight": 2.0,
-          "response_s": 11.39,
-          "ttft_ms": 860.7,
+          "response_s": 11.38,
+          "ttft_ms": 860.2,
           "x": 0.19,
-          "y": 11.39
+          "y": 11.38
         },
         {
           "arrival_rps": 0.37,
-          "decode_step_ms": 13.95,
+          "decode_step_ms": 13.94,
           "inflight": 4.0,
-          "response_s": 12.53,
-          "ttft_ms": 1721.1,
+          "response_s": 12.52,
+          "ttft_ms": 1720.0,
           "x": 0.37,
-          "y": 12.53
+          "y": 12.52
         },
         {
           "arrival_rps": 0.7,
-          "decode_step_ms": 14.69,
+          "decode_step_ms": 14.68,
           "inflight": 8.0,
-          "response_s": 14.83,
-          "ttft_ms": 3441.9,
+          "response_s": 14.82,
+          "ttft_ms": 3439.8,
           "x": 0.7,
-          "y": 14.83
+          "y": 14.82
         },
         {
           "arrival_rps": 1.0,
           "decode_step_ms": 15.42,
           "inflight": 12.0,
           "response_s": 17.11,
-          "ttft_ms": 5162.7,
+          "ttft_ms": 5159.5,
           "x": 1.0,
           "y": 17.11
         },
         {
           "arrival_rps": 1.28,
-          "decode_step_ms": 16.16,
+          "decode_step_ms": 16.15,
           "inflight": 16.0,
-          "response_s": 19.41,
-          "ttft_ms": 6883.4,
+          "response_s": 19.4,
+          "ttft_ms": 6879.3,
           "x": 1.28,
-          "y": 19.41
+          "y": 19.4
         },
         {
           "arrival_rps": 1.76,
           "decode_step_ms": 17.63,
           "inflight": 24.0,
-          "response_s": 23.99,
-          "ttft_ms": 10325.0,
+          "response_s": 23.98,
+          "ttft_ms": 10318.8,
           "x": 1.76,
-          "y": 23.99
+          "y": 23.98
         },
         {
           "arrival_rps": 2.16,
-          "decode_step_ms": 19.11,
+          "decode_step_ms": 19.1,
           "inflight": 32.0,
-          "response_s": 28.58,
-          "ttft_ms": 13766.6,
+          "response_s": 28.56,
+          "ttft_ms": 13758.2,
           "x": 2.16,
-          "y": 28.58
+          "y": 28.56
         },
         {
-          "arrival_rps": 2.32,
-          "decode_step_ms": 22.05,
+          "arrival_rps": 2.33,
+          "decode_step_ms": 22.04,
           "inflight": 48.0,
-          "response_s": 37.74,
-          "ttft_ms": 20649.7,
-          "x": 2.32,
-          "y": 37.74
+          "response_s": 37.72,
+          "ttft_ms": 20637.2,
+          "x": 2.33,
+          "y": 37.72
         }
       ],
       "fill": false,
       "hardware": "2× H100 80GB SXM",
-      "label": "Qwen 3.5 27B TP2xPP1xDP1 BF16",
+      "label": "Qwen 3.8 27B TP2xPP1xDP1 BF16",
       "pointRadius": 3,
       "showLine": true,
       "spanGaps": false,
@@ -1573,13 +1573,13 @@
       "tension": 0.3
     },
     {
-      "backgroundColor": "#3266adAA",
-      "borderColor": "#3266ad",
+      "backgroundColor": "#2D63C8AA",
+      "borderColor": "#2D63C8",
       "borderDash": [],
       "borderWidth": 2,
       "data": [
         {
-          "lat": 13.4,
+          "lat": 13.39,
           "spec_alpha": 0.0,
           "spec_auto": false,
           "spec_beneficial": false,
@@ -1594,7 +1594,7 @@
           "y": 75.0
         },
         {
-          "lat": 13.95,
+          "lat": 13.94,
           "spec_alpha": 0.0,
           "spec_auto": false,
           "spec_beneficial": false,
@@ -1609,7 +1609,7 @@
           "y": 71.75
         },
         {
-          "lat": 16.16,
+          "lat": 16.15,
           "spec_alpha": 0.0,
           "spec_auto": false,
           "spec_beneficial": false,
@@ -1618,14 +1618,14 @@
           "spec_probe_concurrency": 0,
           "spec_reason": "",
           "spec_speedup": 1.0,
-          "total_tps": 990,
+          "total_tps": 991,
           "users": 16,
           "x": 16,
-          "y": 61.88
+          "y": 61.94
         }
       ],
       "hardware": "2× H100 80GB SXM",
-      "label": "Qwen 3.5 27B TP2xPP1xDP1 BF16 · Spec off",
+      "label": "Qwen 3.8 27B TP2xPP1xDP1 BF16 · Spec off",
       "pointRadius": 3.5,
       "showLine": true,
       "spec_alpha": 0.0,

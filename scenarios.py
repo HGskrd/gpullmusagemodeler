@@ -21,6 +21,7 @@ from data import (
     normalize_quality_domain,
     normalize_quality_weights,
 )
+from data.model_archive import ARCHIVED_MODELS, MODEL_KEY_ALIASES
 from state import (
     ALLOWED_CAPABILITIES,
     DEFAULT_SCALE_KIND,
@@ -350,7 +351,7 @@ def _scenario_spec_method(model_key: str, raw: Any) -> str:
         return "off"
     if method == "ngram":
         # ngram needs no draft weights: available on any plain text model.
-        if not model.is_realtime_only and not model.is_embedding_model:
+        if not model.is_asr_model and not model.is_embedding_model:
             return "ngram"
         return "off"
     profiles = getattr(model, "speculative_profiles", ()) or ()
@@ -428,7 +429,17 @@ def deserialize_planner_state(payload: Any) -> PlannerState:
         raise ValueError("A scenario panel may contain at most 512 model assignments.")
     state.models = []
     for row in model_rows:
-        if not isinstance(row, dict) or row.get("model_key") not in MODELS:
+        if not isinstance(row, dict):
+            raise ValueError("Scenario contains an invalid model assignment.")
+        raw_model_key = str(row.get("model_key", ""))
+        model_key = MODEL_KEY_ALIASES.get(raw_model_key, raw_model_key)
+        if model_key not in MODELS:
+            archived = ARCHIVED_MODELS.get(raw_model_key)
+            if archived is not None:
+                raise ValueError(
+                    f"Scenario model {archived.name} is archived; replace it with "
+                    f"{archived.replaced_by} after reviewing the new hardware footprint."
+                )
             raise ValueError("Scenario contains an invalid model assignment.")
         gpu_uid = uid_map.get(str(row.get("gpu_uid")))
         pool = state.find_gpu(gpu_uid) if gpu_uid is not None else None
@@ -438,7 +449,7 @@ def deserialize_planner_state(payload: Any) -> PlannerState:
         gpu_count = min(_scenario_int(row, "gpu_count", 0, 0, pool.count), available)
         assignment = ModelAssignment(
             _next_uid(),
-            str(row["model_key"]),
+            model_key,
             pool.uid,
             gpu_count,
             _scenario_int(row, "tp", 1, 1, max(1, gpu_count)),
@@ -448,7 +459,7 @@ def deserialize_planner_state(payload: Any) -> PlannerState:
             _scenario_int(row, "prefill_tp", 1, 1, max(1, gpu_count)),
             _scenario_int(row, "prefill_pp", 1, 1, max(1, gpu_count)),
             _scenario_int(row, "prefill_dp", 1, 1, max(1, gpu_count)),
-            _scenario_spec_method(str(row["model_key"]), row.get("spec_method", "off")),
+            _scenario_spec_method(model_key, row.get("spec_method", "off")),
             _scenario_int(row, "spec_k", 0, 0, 32),
         )
         state.models.append(assignment)

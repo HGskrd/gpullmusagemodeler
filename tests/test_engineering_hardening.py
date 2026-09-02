@@ -66,12 +66,12 @@ class EngineeringHardeningTests(unittest.TestCase):
         self.assertEqual([gpu["gpu_type"] for gpu in payload["panel_a"]["gpus"]], ["H100"])
         self.assertEqual(
             [model["model_key"] for model in payload["panel_a"]["models"]],
-            ["ms32", "g26", "q35"],
+            ["ms4", "g26", "q35"],
         )
         self.assertIsNotNone(payload["panel_b"])
         self.assertEqual(
             [model["model_key"] for model in payload["panel_b"]["models"]],
-            ["g31", "q27", "nem3no"],
+            ["g31", "qwen38-27b", "nem3no"],
         )
         self.assertEqual(len(payload["panel_a"]["projects"]), 19)
         self.assertEqual(len(payload["panel_b"]["projects"]), 19)

@@ -209,7 +209,7 @@ class SpecStateTests(unittest.TestCase):
     def test_imported_unsupported_manual_k_migrates_to_auto(self):
         state = PlannerState(
             models=[
-                ModelAssignment(2, "q27", 0, 1, 1, 1, "bf16", spec_method="mtp", spec_k=5),
+                ModelAssignment(2, "g31", 0, 1, 1, 1, "bf16", spec_method="mtp", spec_k=5),
             ]
         )
 
