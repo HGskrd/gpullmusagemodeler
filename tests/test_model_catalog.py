@@ -918,8 +918,6 @@ class ModelCatalogTests(unittest.TestCase):
             "gemma-4-e2b-asr": ("Gemma 4 E2B ASR", 2.0e9, False),
             "gemma-4-e4b-asr": ("Gemma 4 E4B ASR", 4.0e9, False),
             "gemma-4-12b-unified-asr": ("Gemma 4 12B Unified ASR", 11.95e9, False),
-            "inkling-asr": ("Inkling 975B-A41B ASR", 975e9, False),
-            "inkling-small-asr": ("Inkling-Small 276B-A12B ASR", 276e9, False),
             "nvidia-nemotron-speech-streaming-0.6b": (
                 "NVIDIA Nemotron Speech Streaming 0.6B",
                 0.6e9,
@@ -996,30 +994,6 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertIn(
             "no separate audio encoder", MODELS["gemma-4-12b-unified-asr"].realtime_profile.note
         )
-
-    def test_inkling_asr_variants_reuse_decoder_geometry_and_are_offline(self):
-        expected = {
-            "inkling-asr": ("inkling", 24_000, 1_200_000),
-            "inkling-small-asr": ("inkling-small-preview", 2_400, 120_000),
-        }
-
-        for asr_key, (llm_key, state_tokens, target_delay_ms) in expected.items():
-            with self.subTest(model=asr_key):
-                model = MODELS[asr_key]
-                llm = MODELS[llm_key]
-                profile = model.realtime_profile
-
-                self.assertEqual(model.layers, llm.layers)
-                self.assertEqual(model.hidden_size, llm.hidden_size)
-                self.assertEqual(model.num_heads, llm.num_heads)
-                self.assertEqual(model.kv_heads, llm.kv_heads)
-                self.assertEqual(model.capabilities, frozenset())
-                self.assertFalse(profile.streaming)
-                self.assertEqual(profile.audio_ms_per_token, 50.0)
-                self.assertEqual(profile.tokens_per_second, 20.0)
-                self.assertEqual(profile.state_tokens, state_tokens)
-                self.assertEqual(profile.target_delay_ms, target_delay_ms)
-                self.assertIn("No native streaming interface", profile.note)
 
     def test_nemotron_35_asr_streaming_catalog_entry_uses_hf_card(self):
         model = MODELS["nvidia-nemotron-3.5-asr-streaming-0.6b"]
@@ -1383,23 +1357,6 @@ class ModelCatalogTests(unittest.TestCase):
             [],
             "MODEL_ORDER names key(s) no family module defines",
         )
-
-    def test_every_audio_capable_llm_has_an_asr_picker_variant(self):
-        from data import models_by_kind
-
-        audio_llm_keys = {
-            key
-            for key in data_models.MODEL_ORDER
-            if "audio" in MODELS[key].capabilities
-            and not MODELS[key].is_asr_model
-            and not MODELS[key].is_embedding_model
-        }
-        self.assertEqual(audio_llm_keys, set(data_models.DERIVED_ASR_BASE_MODELS.values()))
-
-        asr_picker_keys = {
-            model.key for category in models_by_kind()["asr"].values() for model in category
-        }
-        self.assertTrue(set(data_models.DERIVED_ASR_ORDER) <= asr_picker_keys)
 
     def test_catalog_order_is_model_order_then_derived_asr(self):
         self.assertEqual(

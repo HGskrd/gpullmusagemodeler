@@ -6,8 +6,6 @@ from .asr_support import (
     GEMMA_4_12B_ASR_PROFILE,
     GEMMA_4_E2B_ASR_PROFILE,
     GEMMA_4_E4B_ASR_PROFILE,
-    INKLING_ASR_PROFILE,
-    INKLING_SMALL_ASR_PROFILE,
 )
 from .model_archive import ARCHIVED_MODELS
 from .model_class import Model
@@ -139,16 +137,7 @@ DERIVED_ASR_ORDER = (
     "gemma-4-e2b-asr",
     "gemma-4-e4b-asr",
     "gemma-4-12b-unified-asr",
-    "inkling-asr",
-    "inkling-small-asr",
 )
-DERIVED_ASR_BASE_MODELS = {
-    "gemma-4-e2b-asr": "ge2",
-    "gemma-4-e4b-asr": "ge4",
-    "gemma-4-12b-unified-asr": "g12",
-    "inkling-asr": "inkling",
-    "inkling-small-asr": "inkling-small-preview",
-}
 
 MODELS.update(
     {
@@ -177,24 +166,6 @@ MODELS.update(
             cat="Audio",
             capabilities_override=frozenset(),
             realtime_profile=GEMMA_4_12B_ASR_PROFILE,
-            speculative_profiles=(),
-        ),
-        "inkling-asr": replace(
-            MODELS["inkling"],
-            key="inkling-asr",
-            name="Inkling 975B-A41B ASR",
-            cat="Audio",
-            capabilities_override=frozenset(),
-            realtime_profile=INKLING_ASR_PROFILE,
-            speculative_profiles=(),
-        ),
-        "inkling-small-asr": replace(
-            MODELS["inkling-small-preview"],
-            key="inkling-small-asr",
-            name="Inkling-Small 276B-A12B ASR",
-            cat="Audio",
-            capabilities_override=frozenset(),
-            realtime_profile=INKLING_SMALL_ASR_PROFILE,
             speculative_profiles=(),
         ),
     }
