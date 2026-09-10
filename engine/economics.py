@@ -191,7 +191,7 @@ class ProjectionResult:
 def _model_kind_for_swap(model: Model) -> str:
     if getattr(model, "embedding_profile", None) is not None:
         return "embedding"
-    if getattr(model, "realtime_profile", None) is not None:
+    if getattr(model, "is_asr_model", False):
         return "asr"
     return "llm"
 
@@ -294,7 +294,7 @@ def _build_model_supply(state, profile, prefix_hit_rate, peak_factor_eff) -> lis
     supply = []
     for am, gpu in _iter_resolved_models(state):
         if (
-            getattr(am.model, "is_realtime_only", False)
+            getattr(am.model, "is_asr_model", False)
             or getattr(am.model, "embedding_profile", None) is not None
         ):
             continue

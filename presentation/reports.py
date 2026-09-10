@@ -127,6 +127,9 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
                 f"{gpu_name} x{am.gpu_count}; P {strategy_label(am.prefill_tp, am.prefill_pp, am.prefill_dp)}, "
                 f"D {strategy_label(am.tp, am.pp, am.dp)}"
             )
+            if model.architecture_note:
+                lines.append(f"  Architecture assumptions: {model.architecture_note}")
+                lines.append(f"  GPU-resident checkpoint: {model.weight_gb(am.prec):.3f} GB")
             spec_info = get_model_info(state, am).get("spec")
             if spec_info is not None:
                 spec = spec_info

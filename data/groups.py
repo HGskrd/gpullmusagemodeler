@@ -35,7 +35,7 @@ MODEL_KINDS: tuple[tuple[str, str], ...] = (
 
 
 def _model_kind(m: Model) -> str:
-    if m.is_realtime_only:
+    if m.is_asr_model:
         return "asr"
     if m.is_embedding_model:
         return "embedding"

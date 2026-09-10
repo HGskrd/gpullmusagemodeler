@@ -40,6 +40,7 @@
           hx-vals='{"panel":"{{ panel }}","model_key":"{{ m.key }}"}'>
     <span class="dot" style="background:{{ m.color }};"></span>
     <span>{{ m.name }}</span>
+    {% if active_kind == "asr" %}<span class="T">{{ m.asr_mode_label }}</span>{% endif %}
     <span class="T">{{ m.size_label }}</span>
   </button>
   {% endfor %}

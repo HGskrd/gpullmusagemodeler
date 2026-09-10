@@ -69,6 +69,16 @@ class PartialRenderSmokeTests(unittest.TestCase):
         self.app = create_test_app()
         self.client = self.app.test_client()
 
+    def test_asr_picker_labels_realtime_and_non_realtime_models(self):
+        response = self.client.get("/picker/model?panel=A&kind=asr")
+
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn("Inkling 975B-A41B ASR", html)
+        self.assertIn("Inkling-Small 276B-A12B ASR", html)
+        self.assertIn("Non-realtime", html)
+        self.assertIn("Realtime", html)
+
     def test_every_partial_renders_through_a_flask_request(self):
         environment = self.app.jinja_env
         expected = {name for name in environment.list_templates() if name.startswith("partials/")}

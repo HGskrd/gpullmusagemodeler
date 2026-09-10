@@ -60,7 +60,7 @@ class UseCaseCatalogTests(unittest.TestCase):
                 model
                 for model in MODELS.values()
                 if not model.hidden
-                and not model.is_realtime_only
+                and not model.is_asr_model
                 and not model.is_embedding_model
                 and required_caps <= model.capabilities
                 and effective_quality(model) >= threshold

@@ -325,6 +325,9 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     ),  # Omni preview proxy from Nano reasoning until AA publishes a dedicated page.
     "deepseek-v4-pro": (52.0, 190.0),
     "deepseek-v4-flash": (47.0, 240.0),
+    # Retain the previous Flash quality/verbosity prior until a comparable AA row
+    # exists. V4.1 vendor harness scores are not an AA Intelligence Index.
+    "deepseek-v4.1-flash": (47.0, 240.0),
     "mi7": (7.0, 2.5),
     "mx87": (8.0, 2.5),  # Proxy verbosity from Mistral 7B; AA exposes score but not token usage.
     "cs22": (

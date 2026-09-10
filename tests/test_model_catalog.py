@@ -913,11 +913,69 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(profile.audio_attention_heads, 64)
         self.assertEqual(profile.audio_attention_head_dim, 16)
 
+    def test_vibevoice_asr_streaming_1_5b_uses_official_checkpoint(self):
+        model = MODELS["microsoft-vibevoice-asr-streaming-1.5b"]
+        profile = model.realtime_profile
+
+        self.assertEqual(model.name, "Microsoft VibeVoice ASR Streaming 1.5B")
+        self.assertEqual(model.cat, "Audio")
+        self.assertEqual(model.total_params, 2_814_116_321)
+        self.assertEqual(model.weight_bytes("bf16"), 5_628_232_642)
+        self.assertEqual(model.layers, 28)
+        self.assertEqual(model.hidden_size, 1536)
+        self.assertEqual(model.num_heads, 12)
+        self.assertEqual(model.kv_heads, 2)
+        self.assertEqual(model.head_dim, 128)
+        self.assertEqual(model.max_context_tokens, 65536)
+        self.assertTrue(model.is_asr_model)
+        self.assertTrue(model.is_streaming_asr)
+        self.assertEqual(model.capabilities, frozenset())
+        self.assertIsNotNone(profile)
+        self.assertEqual(profile.state_tokens, 8192)
+        self.assertEqual(profile.target_delay_ms, 2000)
+        self.assertAlmostEqual(profile.audio_ms_per_token, 1000.0 / 7.5)
+        self.assertAlmostEqual(profile.tokens_per_second, 7.5)
+        self.assertIn("VibeVoice-ASR-Streaming-1.5B", profile.source)
+
+    def test_vibevoice_asr_streaming_7b_uses_official_checkpoint(self):
+        model = MODELS["microsoft-vibevoice-asr-streaming-7b"]
+        profile = model.realtime_profile
+
+        self.assertEqual(model.name, "Microsoft VibeVoice ASR Streaming 7B")
+        self.assertEqual(model.cat, "Audio")
+        self.assertEqual(model.total_params, 8_674_021_857)
+        self.assertEqual(model.weight_bytes("bf16"), 17_348_043_714)
+        self.assertEqual(model.layers, 28)
+        self.assertEqual(model.hidden_size, 3584)
+        self.assertEqual(model.num_heads, 28)
+        self.assertEqual(model.kv_heads, 4)
+        self.assertEqual(model.head_dim, 128)
+        self.assertEqual(model.max_context_tokens, 131072)
+        self.assertTrue(model.is_asr_model)
+        self.assertTrue(model.is_streaming_asr)
+        self.assertEqual(model.capabilities, frozenset())
+        self.assertIsNotNone(profile)
+        self.assertEqual(profile.state_tokens, 8192)
+        self.assertEqual(profile.target_delay_ms, 2000)
+        self.assertAlmostEqual(profile.audio_ms_per_token, 1000.0 / 7.5)
+        self.assertAlmostEqual(profile.tokens_per_second, 7.5)
+        self.assertIn("0.073-0.104", profile.note)
+
     def test_added_asr_catalog_entries_have_profiles(self):
         expected = {
             "gemma-4-e2b-asr": ("Gemma 4 E2B ASR", 2.0e9, False),
             "gemma-4-e4b-asr": ("Gemma 4 E4B ASR", 4.0e9, False),
             "gemma-4-12b-unified-asr": ("Gemma 4 12B Unified ASR", 11.95e9, False),
+            "microsoft-vibevoice-asr-streaming-1.5b": (
+                "Microsoft VibeVoice ASR Streaming 1.5B",
+                2_814_116_321,
+                True,
+            ),
+            "microsoft-vibevoice-asr-streaming-7b": (
+                "Microsoft VibeVoice ASR Streaming 7B",
+                8_674_021_857,
+                True,
+            ),
             "nvidia-nemotron-speech-streaming-0.6b": (
                 "NVIDIA Nemotron Speech Streaming 0.6B",
                 0.6e9,

@@ -252,6 +252,20 @@ DEFAULT_MODEL_CAPABILITIES: frozenset[str] = frozenset({"tools"})
 
 
 @dataclass(frozen=True)
+class SharedSparseAttention:
+    """CED/CSA2 runtime layout; cache formats are independent of weight precision."""
+
+    encoder_layers: int
+    kv_source_layers: tuple[int, ...]
+    index_source_layers: tuple[int, ...]
+    candidate_source_layer: int
+    candidate_tokens: int
+    main_bytes_per_row: float
+    index_bytes_per_row: float
+    local_bytes_per_row: float
+
+
+@dataclass(frozen=True)
 class Model:
     key: str
     name: str
@@ -350,6 +364,13 @@ class Model:
     native_precision: str = "bf16"
     native_precision_label: str = ""
     native_precision_note: str = ""
+    prefill_active_params: float = 0.0
+    conditional_memory_params: float = 0.0
+    conditional_memory_weight_bytes: float = 0.0
+    conditional_memory_layers: tuple[int, ...] = ()
+    # Baseline keeps conditional memory GPU-resident at FP8 in every weight mode.
+    shared_sparse_attention: SharedSparseAttention | None = None
+    architecture_note: str = ""
 
     @property
     def capabilities(self) -> frozenset[str]:
@@ -491,6 +512,12 @@ class Model:
         profile = get_quantization_profile(self.key, prec)
         if profile is not None:
             return profile.weight_bytes_per_param(self.total_params)
+        if self.conditional_memory_params > 0:
+            backbone = self.total_params - self.conditional_memory_params
+            return (
+                backbone * PRECISION_SPECS[prec].effective_weight_bytes_per_param
+                + self.conditional_memory_weight_bytes
+            ) / self.total_params
         if prec == "bf16":
             return self.bf16_weight_bytes_per_param
         if prec == "fp8":
@@ -523,6 +550,10 @@ class Model:
             params = self.active_params if self.is_moe else self.total_params
             return params * profile.active_weight_bytes_per_param(self.total_params)
         params = self.active_params if self.is_moe else self.total_params
+        if self.conditional_memory_params > 0:
+            return (
+                params * PRECISION_SPECS[normalize_precision(prec)].effective_weight_bytes_per_param
+            )
         return params * self.weight_bytes_per_param(prec)
 
     def kv_cache_bytes_per_elem(self, prec: str) -> float:
@@ -695,6 +726,31 @@ MODEL_QUANTIZATION_PROFILES: dict[tuple[str, str], QuantizationProfile] = dict(
             retained=("excluded tensors BF16",),
             quant_algo="official block FP8",
             notes="Exact official FP8 inventory, including the 51B N-gram table and bundled MTP tensors.",
+        ),
+        (
+            ("deepseek-v4.1-flash", "mxfp4"),
+            QuantizationProfile(
+                precision_key="mxfp4",
+                label="Native MXFP4/FP8",
+                source_repo="deepseek-ai/DeepSeek-V4.1-Flash",
+                source_revision="df42c109f1defefcbfcedbe7d905718a12266e40",
+                source_downloads=0,
+                captured_at="2026-09-10",
+                source_kind="exact",
+                quant_algo="native mixed MXFP4/FP8",
+                kv_cache_format="FP4 global + FP8 SWA (fixed runtime layout)",
+                kv_cache_bytes_per_elem=1.0,
+                group_size=32,
+                storage_format_counts={},
+                # 40 * 6 * 3 * 5120 * 2304 = 8.493B active routed weights.
+                # Remaining active operators conservatively charged as BF16.
+                compute_precision_shares={"mxfp4": 0.5308416, "bf16": 0.4691584},
+                quantized=("routed experts MXFP4", "dense projections and Engram FP8"),
+                retained=("BF16 exclusions; bundled DSpark and vision tensors",),
+                total_weight_bytes_override=510_286_023_000,
+                active_weight_bytes_per_param_override=0.5308416 * 0.53125 + 0.4691584 * 2,
+                notes="Exact indexed storage including Engram, vision and DSpark. Compute shares and active traffic are conservative geometry-derived proxies, not benchmarks; non-routed active work is charged at BF16. Engram stays GPU-resident. DSpark speedup is uncalibrated and disabled.",
+            ),
         ),
         _artifact_profile(
             model_key="deepseek-v4-pro",

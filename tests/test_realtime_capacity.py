@@ -129,6 +129,8 @@ class RealtimeCapacityTests(unittest.TestCase):
             "gemma-4-e2b-asr",
             "gemma-4-e4b-asr",
             "gemma-4-12b-unified-asr",
+            "microsoft-vibevoice-asr-streaming-1.5b",
+            "microsoft-vibevoice-asr-streaming-7b",
             "nvidia-nemotron-speech-streaming-0.6b",
             "nvidia-nemotron-3.5-asr-streaming-0.6b",
             "nvidia-parakeet-unified-0.6b",
@@ -172,6 +174,15 @@ class RealtimeCapacityTests(unittest.TestCase):
         self.assertEqual(PUBLISHED_ASR_WER["voxtral-realtime-mini-4b"]["fr_mls"], 5.64)
         self.assertEqual(PUBLISHED_ASR_WER["mimo-v2.5-asr"]["en"], 5.73)
         self.assertNotIn("fr_covost", PUBLISHED_ASR_WER["mimo-v2.5-asr"])
+        self.assertEqual(
+            PUBLISHED_ASR_WER["microsoft-vibevoice-asr-streaming-1.5b"]["en_ami_ihm"],
+            22.85,
+        )
+        self.assertEqual(PUBLISHED_ASR_WER["microsoft-vibevoice-asr-streaming-7b"]["en"], 8.44)
+        self.assertEqual(
+            PUBLISHED_ASR_WER["microsoft-vibevoice-asr-streaming-7b"]["en_ami_ihm"], 19.83
+        )
+        self.assertEqual(PUBLISHED_ASR_WER["microsoft-vibevoice-asr-streaming-7b"]["fr_mlc"], 16.42)
         self.assertEqual(PUBLISHED_ASR_WER["gemma-4-e2b-asr"]["en"], 8.0)
         self.assertEqual(PUBLISHED_ASR_WER["gemma-4-e2b-asr"]["fr_fleurs"], 10.1)
         self.assertEqual(PUBLISHED_ASR_WER["gemma-4-e4b-asr"]["en"], 6.5)

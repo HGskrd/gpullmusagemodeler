@@ -556,8 +556,83 @@ def _per_tp_linear_attention_state_bytes_uncached(m: Model, prec: str, tp: int) 
     return layers * (recurrent_elems + conv_elems) * bpe
 
 
+def _shared_sparse_global_cache_bytes(m: Model, seq_len: float) -> float:
+    layout = m.shared_sparse_attention
+    assert layout is not None
+    seq = max(float(seq_len), 0.0)
+    rows = sum(math.floor(seq / m.attention_compression_ratios[i]) for i in layout.kv_source_layers)
+    return rows * (layout.main_bytes_per_row + layout.index_bytes_per_row)
+
+
+def _shared_sparse_local_cache_bytes(m: Model, seq_len: float) -> float:
+    layout = m.shared_sparse_attention
+    assert layout is not None
+    return (
+        m.layers
+        * min(max(seq_len, 0.0), m.compressed_attention_window)
+        * layout.local_bytes_per_row
+    )
+
+
+def _shared_sparse_index_rows(m: Model, seq_len: float, layer: int) -> float:
+    layout = m.shared_sparse_attention
+    assert layout is not None
+    rows = math.floor(max(seq_len, 0.0) / m.attention_compression_ratios[layer])
+    if layer > layout.candidate_source_layer:
+        return min(rows, layout.candidate_tokens)
+    return float(rows)
+
+
+def _peak_layer_work(work: list[float], pp: int) -> float:
+    """Busiest contiguous stage, including CED's unequal encoder/decoder work."""
+    width = math.ceil(len(work) / min(max(pp, 1), len(work)))
+    return max(sum(work[i : i + width]) for i in range(0, len(work), width))
+
+
+def prefill_parameter_tokens(m: Model, seq_len: float, pp: int = 1) -> float:
+    """Parameter-token work, including a bounded decoder replay for CED."""
+    seq = max(seq_len, 0.0)
+    layout = m.shared_sparse_attention
+    if layout is None:
+        return (m.prefill_active_params or m.active_params) * seq * _pp_peak_fraction(m, pp)
+    encoder = layout.encoder_layers
+    replay = min(seq, float(m.compressed_attention_window))
+    work = [m.prefill_active_params / encoder * seq] * encoder
+    work += [(m.active_params - m.prefill_active_params) / (m.layers - encoder) * replay] * (
+        m.layers - encoder
+    )
+    return _peak_layer_work(work, pp)
+
+
+def _shared_sparse_attention_work(
+    m: Model, pr: int, seq_len: float, pp: int, *, prefill: bool
+) -> float:
+    layout = m.shared_sparse_attention
+    assert layout is not None
+    seq = max(seq_len, 0.0)
+    replay = min(seq, float(m.compressed_attention_window))
+    work = []
+    for i, ratio in enumerate(m.attention_compression_ratios):
+        queries = (seq if i < layout.encoder_layers else replay) if prefill else 1.0
+        # Conservative rectangle at final context, including decoder replay's
+        # access to the complete encoder-generated global pool.
+        rows = replay + (min(math.floor(seq / ratio), m.sparse_attention_top_k) if ratio else 0)
+        layer_work = m.attention_query_head_count * _attention_row_flops_per_head(m) * rows
+        if i in layout.index_source_layers:
+            layer_work += (
+                2
+                * m.sparse_indexer_heads
+                * m.sparse_indexer_head_dim
+                * _shared_sparse_index_rows(m, seq, i)
+            )
+        work.append(pr * queries * layer_work)
+    return _peak_layer_work(work, pp)
+
+
 def kv_cache_bytes_for_sequence(m: Model, seq_len: float, prec: str) -> float:
     seq = max(float(seq_len), 0.0)
+    if m.shared_sparse_attention is not None:
+        return _shared_sparse_global_cache_bytes(m, seq) + _shared_sparse_local_cache_bytes(m, seq)
     compression_ratios = _attention_compression_ratios(m)
     if compression_ratios:
         main_kv = sum(
@@ -581,6 +656,21 @@ def attention_kv_read_bytes_for_sequence(m: Model, seq_len: float, prec: str) ->
     or heavily-compressed main-KV rows, while the compact indexer cache still scans
     the full compressed context.
     """
+    layout = m.shared_sparse_attention
+    if layout is not None:
+        seq = max(seq_len, 0.0)
+        # Shared residency does not eliminate each consumer layer's gathers.
+        main_rows = sum(
+            min(math.floor(seq / ratio), m.sparse_attention_top_k)
+            for ratio in m.attention_compression_ratios
+            if ratio > 0
+        )
+        index_rows = sum(_shared_sparse_index_rows(m, seq, i) for i in layout.index_source_layers)
+        return (
+            _shared_sparse_local_cache_bytes(m, seq)
+            + main_rows * layout.main_bytes_per_row
+            + index_rows * layout.index_bytes_per_row
+        )
     compression_ratios = _attention_compression_ratios(m)
     if compression_ratios:
         main_kv = sum(
@@ -624,6 +714,13 @@ def per_replica_token_kv_cache_bytes(
     """
     pp = max(pp, 1)
     pp_fraction = _pp_peak_fraction(m, pp)
+    if m.shared_sparse_attention is not None:
+        # A shared global pool can be consumed on multiple PP stages. Charge
+        # the full pool on each stage rather than dividing it by layer count.
+        return (
+            _shared_sparse_global_cache_bytes(m, seq_len)
+            + _shared_sparse_local_cache_bytes(m, seq_len) * pp_fraction
+        ) / kv_shards(m, tp)
     if m.is_mla:
         token_cache = kv_cache_bytes_for_sequence(m, seq_len, prec) / kv_shards(m, tp)
     else:
@@ -786,6 +883,8 @@ def _attention_row_flops_per_head(m: Model) -> float:
 
 
 def _decode_attention_work(m: Model, pr: int, avg_seq: float, pp: int) -> float:
+    if m.shared_sparse_attention is not None:
+        return _shared_sparse_attention_work(m, pr, avg_seq, pp, prefill=False)
     compressed_context = _compressed_attention_context_sum(m, avg_seq)
     if compressed_context > 0:
         main_work = m.attention_query_head_count * _attention_row_flops_per_head(m)
@@ -844,6 +943,8 @@ def _causal_attention_pairs(seq_len: float, window: float) -> float:
 
 def _prefill_attention_work(m: Model, pr: int, seq_len: int, pp: int, causal: bool = True) -> float:
     seq = max(float(seq_len), 0.0)
+    if m.shared_sparse_attention is not None:
+        return _shared_sparse_attention_work(m, pr, seq, pp, prefill=True)
     compressed_context = _compressed_attention_context_sum(m, seq)
     if compressed_context > 0:
         # Closed-form upper bound: charge every prompt query the final prompt's
@@ -1047,6 +1148,22 @@ def kv_shards(m: Model, tp: int) -> int:
     return kv_shards_for_heads(m.kv_heads, tp)
 
 
+def peak_stage_weight_bytes(m: Model, prec: str, pp: int) -> float:
+    """Keep conditional tables on their owning layers instead of averaging them."""
+    tables = m.conditional_memory_layers
+    if not tables:
+        return m.weight_bytes(prec) * _pp_peak_fraction(m, pp)
+    conditional = m.conditional_memory_weight_bytes
+    ordinary_per_layer = max(m.weight_bytes(prec) - conditional, 0.0) / m.layers
+    return _peak_layer_work(
+        [
+            ordinary_per_layer + (conditional / len(tables) if i in tables else 0)
+            for i in range(m.layers)
+        ],
+        pp,
+    )
+
+
 def compute_memory(
     m: Model,
     tp: int,
@@ -1060,7 +1177,7 @@ def compute_memory(
 ) -> Optional[MemoryResult]:
     requested = g.mem * mu
     pp_fraction = _pp_peak_fraction(m, pp)
-    weights = m.weight_bytes(prec) * pp_fraction / tp
+    weights = peak_stage_weight_bytes(m, prec, pp) / tp
     if spec is not None:
         # Drafter weights are resident whenever speculative decoding is enabled,
         # so they shrink the KV budget for prefill and decode alike.
@@ -1077,7 +1194,7 @@ def compute_memory(
         profiled_non_kv=profiled_non_kv,
         kv_reserved=kv_reserved,
         kv_budget=kv_budget,
-        kv_per_token=kv_bytes_per_token(m, prec) * pp_fraction / kv_shards(m, tp),
+        kv_per_token=per_replica_token_kv_cache_bytes(m, 1.0, prec, pp, tp),
     )
 
 
@@ -1100,10 +1217,10 @@ def valid_strategies(
         budget = per_gpu_weight_budget(g, mu, profiled_non_kv_gb, tp)
         if budget <= 0:
             continue
-        resident_weights = m.weight_bytes(prec)
+        resident_weights = peak_stage_weight_bytes(m, prec, pp)
         if spec is not None:
-            resident_weights += spec.draft_weight_bytes
-        if resident_weights * _pp_peak_fraction(m, pp) / tp <= budget:
+            resident_weights += spec.draft_weight_bytes * _pp_peak_fraction(m, pp)
+        if resident_weights / tp <= budget:
             result.append((tp, pp, dp))
 
     return sorted(
@@ -1136,12 +1253,10 @@ def default_strategy(
     requested = g.mem * mu
     for tp, pp, dp in candidates:
         profiled_non_kv = profiled_non_kv_bytes(tp, profiled_non_kv_gb)
-        resident_weights = m.weight_bytes(prec) + (
-            spec.draft_weight_bytes if spec is not None else 0.0
+        resident_weights = peak_stage_weight_bytes(m, prec, pp) + (
+            spec.draft_weight_bytes * _pp_peak_fraction(m, pp) if spec is not None else 0.0
         )
-        kv_headroom = max(
-            0.0, requested - (resident_weights * _pp_peak_fraction(m, pp) / tp) - profiled_non_kv
-        )
+        kv_headroom = max(0.0, requested - resident_weights / tp - profiled_non_kv)
         score = (
             1 if tp <= g.node_size else 0,
             min(tp, g.node_size),
@@ -1700,7 +1815,7 @@ def compute_prefill(
         return None
 
     pp_fraction = _pp_peak_fraction(m, pp)
-    ffn = 2 * m.active_params * pr * seq_len * pp_fraction
+    ffn = 2 * pr * prefill_parameter_tokens(m, seq_len, pp)
     if spec is not None and spec.profile.method not in ("mtp", "ngram"):
         # Attached drafters (EAGLE-3, DFlash, DSpark, draft models) run their
         # own prompt forward to seed drafter KV and hidden states.  MTP reuses

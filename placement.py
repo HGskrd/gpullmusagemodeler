@@ -348,7 +348,7 @@ def resolve_deployment(state: PlannerState) -> Deployment:
 
 def _model_serves_project(model: Model, project: Project) -> bool:
     if (
-        getattr(model, "is_realtime_only", False)
+        getattr(model, "is_asr_model", False)
         or getattr(model, "embedding_profile", None) is not None
     ):
         return False

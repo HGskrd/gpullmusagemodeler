@@ -6,6 +6,8 @@ from .asr_support import (
     GEMMA_4_12B_ASR_PROFILE,
     GEMMA_4_E2B_ASR_PROFILE,
     GEMMA_4_E4B_ASR_PROFILE,
+    INKLING_ASR_PROFILE,
+    INKLING_SMALL_ASR_PROFILE,
 )
 from .model_archive import ARCHIVED_MODELS
 from .model_class import Model
@@ -86,6 +88,7 @@ MODEL_ORDER = (
     "nem3s",
     "nemotron35-lightning",
     "nem3no",
+    "deepseek-v4.1-flash",
     "deepseek-v4-pro",
     "deepseek-v4-flash",
     "mi7",
@@ -93,6 +96,8 @@ MODEL_ORDER = (
     "cs22",
     "voxtral-realtime-mini-4b",
     "mimo-v2.5-asr",
+    "microsoft-vibevoice-asr-streaming-1.5b",
+    "microsoft-vibevoice-asr-streaming-7b",
     "nvidia-nemotron-speech-streaming-0.6b",
     "nvidia-nemotron-3.5-asr-streaming-0.6b",
     "nvidia-parakeet-unified-0.6b",
@@ -134,6 +139,8 @@ MODELS: dict[str, Model] = {key: _INITIAL_MODELS[key] for key in MODEL_ORDER}
 # tuple in step with the MODELS.update() block below; the checks at the end of
 # the module enforce it.
 DERIVED_ASR_ORDER = (
+    "inkling-asr",
+    "inkling-small-asr",
     "gemma-4-e2b-asr",
     "gemma-4-e4b-asr",
     "gemma-4-12b-unified-asr",
@@ -141,6 +148,24 @@ DERIVED_ASR_ORDER = (
 
 MODELS.update(
     {
+        "inkling-asr": replace(
+            MODELS["inkling"],
+            key="inkling-asr",
+            name="Inkling 975B-A41B ASR",
+            cat="Audio",
+            capabilities_override=frozenset(),
+            realtime_profile=INKLING_ASR_PROFILE,
+            speculative_profiles=(),
+        ),
+        "inkling-small-asr": replace(
+            MODELS["inkling-small-preview"],
+            key="inkling-small-asr",
+            name="Inkling-Small 276B-A12B ASR",
+            cat="Audio",
+            capabilities_override=frozenset(),
+            realtime_profile=INKLING_SMALL_ASR_PROFILE,
+            speculative_profiles=(),
+        ),
         "gemma-4-e2b-asr": replace(
             MODELS["ge2"],
             key="gemma-4-e2b-asr",

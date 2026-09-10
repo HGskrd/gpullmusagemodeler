@@ -38,6 +38,25 @@ MIMO_V25_ASR_PROFILE = RealtimeProfile(
     audio_attention_head_dim=16,
     audio_attention_window=25,
 )
+VIBEVOICE_ASR_STREAMING_SOURCES_CAPTURED_AT = "2026-09-07"
+VIBEVOICE_ASR_STREAMING_SOURCES = (
+    "https://huggingface.co/microsoft/VibeVoice-ASR-Streaming-1.5B",
+    "https://huggingface.co/microsoft/VibeVoice-ASR-Streaming-1.5B/blob/4262d23d8a539a6530cf64fbd0b1751ef9a30853/config.json",
+    "https://huggingface.co/microsoft/VibeVoice-ASR-Streaming-1.5B/blob/4262d23d8a539a6530cf64fbd0b1751ef9a30853/preprocessor_config.json",
+    "https://huggingface.co/microsoft/VibeVoice-ASR-Streaming-7B",
+    "https://huggingface.co/microsoft/VibeVoice-ASR-Streaming-7B/blob/60d858b518b4e19d404af3737f848fc185b30177/config.json",
+    "https://huggingface.co/microsoft/VibeVoice-ASR-Streaming-7B/blob/60d858b518b4e19d404af3737f848fc185b30177/preprocessor_config.json",
+    "https://arxiv.org/abs/2609.02812",
+)
+VIBEVOICE_ASR_STREAMING_PROFILE = RealtimeProfile(
+    label="Multilingual Streaming Speaker-attributed ASR",
+    tokens_per_second=7.5,
+    audio_ms_per_token=1000.0 / 7.5,
+    target_delay_ms=2000,
+    state_tokens=8192,
+    source="microsoft/VibeVoice-ASR-Streaming-1.5B / -7B + arXiv:2609.02812",
+    note="VibeVoice interleaves 22-frame (2.9 s) chunks with four 133.3 ms lookahead frames and retains prior audio, text, and speaker history. The released checkpoints target sessions up to eight minutes and use dual causal depthwise-convolution tokenizers at 7.5 frames/s. Capacity conservatively charges one full-checkpoint pass per latent audio frame; calibrate this proxy against Microsoft's measured 7B BF16 vLLM RTF of 0.073-0.104 on one A100 80GB PCIe.",
+)
 GEMMA_4_E2B_ASR_PROFILE = RealtimeProfile(
     label="Offline Multilingual ASR",
     tokens_per_second=25.0,
@@ -68,6 +87,34 @@ GEMMA_4_12B_ASR_PROFILE = RealtimeProfile(
     note="Gemma 4 12B accepts up to 30 seconds of 16 kHz audio as 750 40 ms (640-sample) vectors projected directly into the LLM embedding space. It has no separate audio encoder; offline capacity uses one projected audio token per planner step.",
     streaming=False,
 )
+INKLING_ASR_SOURCES_CAPTURED_AT = "2026-08-23"
+INKLING_ASR_SOURCES = (
+    "https://huggingface.co/thinkingmachines/Inkling",
+    "https://huggingface.co/thinkingmachines/Inkling-Small",
+    "https://huggingface.co/thinkingmachines/Inkling-NVFP4/blob/main/processor_config.json",
+    "https://huggingface.co/thinkingmachines/Inkling-Small/blob/main/processor_config.json",
+)
+INKLING_ASR_PROFILE = RealtimeProfile(
+    label="Offline Multilingual ASR",
+    tokens_per_second=20.0,
+    audio_ms_per_token=50.0,
+    target_delay_ms=1_200_000,
+    state_tokens=24_000,
+    source="thinkingmachines/Inkling + processor_config.json",
+    note="Inkling accepts 16 kHz WAV audio, represented as one dMel embedding token every 50 ms and processed directly by the decoder-only backbone. The official model card recommends clips under 20 minutes; this offline profile conservatively sizes one stream at that recommended limit. No native streaming interface is documented as of 2026-08-23.",
+    streaming=False,
+)
+INKLING_SMALL_ASR_PROFILE = RealtimeProfile(
+    label="Offline Multilingual ASR",
+    tokens_per_second=20.0,
+    audio_ms_per_token=50.0,
+    target_delay_ms=120_000,
+    state_tokens=2_400,
+    source="thinkingmachines/Inkling-Small + processor_config.json",
+    note="Inkling-Small uses the same 16 kHz, 50 ms dMel audio tokens as Inkling and processes them directly in its decoder-only backbone. The official model card recommends clips under 2 minutes; this offline profile conservatively sizes one stream at that recommended limit. No native streaming interface is documented as of 2026-08-23.",
+    streaming=False,
+)
+
 NEMOTRON_SPEECH_STREAMING_PROFILE = RealtimeProfile(
     label="Streaming ASR",
     tokens_per_second=1000.0 / 560.0,
@@ -233,6 +280,8 @@ PARAKEET_TDT_06B_V3_PROFILE = RealtimeProfile(
 # ---------------------------------------------------------------------------
 ASR_WER_LANGUAGES: tuple[str, ...] = (
     "en",
+    "en_ami_ihm",
+    "fr_mlc",
     "fr_covost",
     "fr_fleurs",
     "fr_mls",
@@ -240,9 +289,11 @@ ASR_WER_LANGUAGES: tuple[str, ...] = (
 )
 ASR_WER_LANGUAGE_LABELS: dict[str, str] = {
     "en": "English",
+    "en_ami_ihm": "English AMI-IHM",
     # Legacy aggregate label kept for imports/tests; not included in
     # ASR_WER_LANGUAGES because the chart now plots the component French rows.
     "fr": "French aggregate",
+    "fr_mlc": "French MLC-Challenge",
     "fr_covost": "French CoVoST",
     "fr_fleurs": "French FLEURS",
     "fr_mls": "French MLS",
@@ -258,6 +309,14 @@ ASR_WER_LANGUAGE_SOURCES: dict[str, dict[str, str]] = {
     },
     "mimo-v2.5-asr": {
         "en": "Xiaomi MiMo General English Recognition Open ASR average WER.",
+    },
+    "microsoft-vibevoice-asr-streaming-1.5b": {
+        "en_ami_ihm": "Microsoft VibeVoice-ASR-Streaming Technical Report Table 5, AMI-IHM English WER for the released 1.5B 22-frame streaming configuration.",
+    },
+    "microsoft-vibevoice-asr-streaming-7b": {
+        "en": "Microsoft VibeVoice-ASR-Streaming Technical Report Table 1, MLC-Challenge English WER for the released 7B 22-frame streaming configuration.",
+        "en_ami_ihm": "Microsoft VibeVoice-ASR-Streaming Technical Report Table 5, AMI-IHM English WER for the released 7B 22-frame streaming configuration.",
+        "fr_mlc": "Microsoft VibeVoice-ASR-Streaming Technical Report Table 1, MLC-Challenge French WER for the released 7B 22-frame streaming configuration.",
     },
     "gemma-4-e2b-asr": {
         "en": "Google Gemma 4 Technical Report Table 7, FLEURS English WER.",
@@ -330,6 +389,14 @@ PUBLISHED_ASR_WER: dict[str, dict[str, float]] = {
     },
     "mimo-v2.5-asr": {
         "en": 5.73,
+    },
+    "microsoft-vibevoice-asr-streaming-1.5b": {
+        "en_ami_ihm": 22.85,
+    },
+    "microsoft-vibevoice-asr-streaming-7b": {
+        "en": 8.44,
+        "en_ami_ihm": 19.83,
+        "fr_mlc": 16.42,
     },
     "gemma-4-e2b-asr": {
         "en": 8.0,

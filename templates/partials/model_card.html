@@ -69,6 +69,12 @@
   <div class="T" style="margin-bottom:3px;" title="Maximum supported combined prompt and generated-token length used by planner feasibility checks.">
     Context limit {{ m.max_context_tokens|fmt_num }} tokens (prompt + output)
   </div>
+  {% if m.architecture_note %}
+  <details class="T" style="margin-bottom:3px;">
+    <summary>{{ "%.0f"|format(m.prefill_active_params / 1e9) }}B prefill / {{ "%.0f"|format(m.active_params / 1e9) }}B decode · architecture assumptions</summary>
+    <p>{{ m.architecture_note }}</p>
+  </details>
+  {% endif %}
   {% endif %}
   {% if info.quant_profile %}
   <div class="T" style="margin-bottom:3px;" title="{{ info.quant_profile.notes }}{% if info.quant_profile.storage_summary %} Storage: {{ info.quant_profile.storage_summary }}.{% endif %}">

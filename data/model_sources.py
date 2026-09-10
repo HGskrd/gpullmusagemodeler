@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-OPEN_MODEL_ARCHITECTURE_CAPTURED_AT = "2026-09-02"
+OPEN_MODEL_ARCHITECTURE_CAPTURED_AT = "2026-09-10"
 
 
 @dataclass(frozen=True)
@@ -53,6 +53,11 @@ OPEN_MODEL_ARCHITECTURE_SOURCES: dict[str, ModelArchitectureSource] = {
         "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
         "a9904d24bcc1d289a1950fa9d2b978c47cf903b9",
     ),
+    "deepseek-v4.1-flash": ModelArchitectureSource(
+        "https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash",
+        "df42c109f1defefcbfcedbe7d905718a12266e40",
+        "2026-09-10 report sections 2 and 4.2.1, config and indexed checkpoint. Fixed optimized FP4 global/FP8 local cache; GPU-resident Engram; conservative throughput proxies, no DSpark speedup.",
+    ),
     "deepseek-v4-pro": ModelArchitectureSource(
         "https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro",
         "b5968e9190ef611bbf34a7229255be88a0e937c1",
@@ -64,6 +69,16 @@ OPEN_MODEL_ARCHITECTURE_SOURCES: dict[str, ModelArchitectureSource] = {
     "mistral-medium-3.5": ModelArchitectureSource(
         "https://huggingface.co/mistralai/Mistral-Medium-3.5-128B",
         "22b2b868a15677cfa6061277ed2f653d1349a9ab",
+    ),
+    "microsoft-vibevoice-asr-streaming-1.5b": ModelArchitectureSource(
+        "https://huggingface.co/microsoft/VibeVoice-ASR-Streaming-1.5B",
+        "4262d23d8a539a6530cf64fbd0b1751ef9a30853",
+        "Official BF16 streaming-ASR checkpoint; config and preprocessor config define the Qwen2.5 decoder and 22-frame plus four-frame-lookahead audio contract.",
+    ),
+    "microsoft-vibevoice-asr-streaming-7b": ModelArchitectureSource(
+        "https://huggingface.co/microsoft/VibeVoice-ASR-Streaming-7B",
+        "60d858b518b4e19d404af3737f848fc185b30177",
+        "Official BF16 streaming-ASR checkpoint; config and preprocessor config define the Qwen2.5 decoder and 22-frame plus four-frame-lookahead audio contract.",
     ),
     "ms4": ModelArchitectureSource(
         "https://huggingface.co/mistralai/Mistral-Small-4-119B-2603",
