@@ -192,6 +192,7 @@ _VISION_MODELS = (
     "glm53f",
     "qwen38-27b",
     "qwen38-flash-next",
+    "muse-glimmer-30b",
     "kimi-k3",
     "inkling",
     "inkling-small-preview",
@@ -215,6 +216,7 @@ _REASONING_MODELS = (
     "qwen38-27b",
     "qwen38-flash-next",
     "qwen38-2.4t-a95b",
+    "hy4-preview",
     "glm45",
     "glm45a",
     "glm46",
@@ -289,6 +291,8 @@ AA_MODEL_METRICS: dict[str, tuple[float, float]] = {
     "qwen38-27b": (48.0, 100.0),
     "qwen38-flash-next": (56.0, 100.0),
     "qwen38-2.4t-a95b": (59.0, 110.0),
+    "muse-glimmer-30b": (42.0, 80.0),  # Low-confidence launch-suite proxy; no direct AA row.
+    "hy4-preview": (52.0, 100.0),  # Low-confidence preview benchmark proxy; no direct AA row.
     "glm45a": (23.0, 68.0),
     "glm45": (26.0, 61.0),
     "glm46": (33.0, 57.0),
@@ -412,6 +416,8 @@ AA_MODEL_QUALITY_CONFIDENCE: dict[str, float] = {
     "qwen38-27b": 0.70,
     "qwen38-flash-next": 0.75,
     "qwen38-2.4t-a95b": 0.75,
+    "muse-glimmer-30b": 0.55,
+    "hy4-preview": 0.50,
     "glm53": 0.70,
     "nemotron35-lightning": 0.70,
     "granite42-3b": 0.55,

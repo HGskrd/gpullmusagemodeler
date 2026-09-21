@@ -66,6 +66,8 @@ MODEL_ORDER = (
     "qwen38-27b",
     "qwen38-flash-next",
     "qwen38-2.4t-a95b",
+    "muse-glimmer-30b",
+    "hy4-preview",
     "glm45a",
     "glm45",
     "glm46",

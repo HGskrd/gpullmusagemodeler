@@ -4,6 +4,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2026-09-21
+
+### Added
+
+- Added Muse Glimmer 30B and Hy4 Preview from pinned vendor configurations. Muse includes its exact BF16 and NVIDIA NVFP4 artifact footprints; Hy4 records the published sparse-MLA/MoE geometry while leaving its bundled MTP speedup disabled until artifact and acceptance measurements are available.
+- Added exact NVIDIA NVFP4 artifact footprints for Qwen 3.8 27B, Qwen 3.8 Flash-Next, and GLM-5.3-Flash.
+- Added GPT-6 Astra, Gemini 3.7/3.8 Flash, Claude Fable 5.1, and Grok 4.6 cloud entries with current API identities, context/output limits, and cache lifecycle prices.
+
+### Changed
+
+- Refreshed GPT-5.6, Gemini Flash, Anthropic, and DeepSeek hosted prices. Cloud routing now enforces combined context/output limits, supports inclusive long-context thresholds, explicit cache creation/storage charges, future effective dates, named service-tier/region multipliers, and deterministic DeepSeek peak/off-peak UTC bands.
+- Corrected the preliminary Rubin NVL72 profile to 19.2 TB/s HBM bandwidth and 3 TB/s bidirectional NVLink per GPU while retaining the 50 PF NVFP4 inference headline as display evidence only.
+
 ## 2026-09-02
 
 ### Added

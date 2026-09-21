@@ -34,7 +34,19 @@ from data import CLOUD_MODELS, CORPO_CLOUD_PRESETS
 
 POLICY_ENV_VAR = "PLANNER_CLOUD_POLICY"
 
-_OVERRIDABLE_PRICE_FIELDS = frozenset({"in_per_m", "cached_in_per_m", "out_per_m"})
+_OVERRIDABLE_PRICE_FIELDS = frozenset(
+    {
+        "in_per_m",
+        "cached_in_per_m",
+        "cache_write_per_m",
+        "cache_storage_per_m_hour",
+        "out_per_m",
+        "long_context_in_per_m",
+        "long_context_cached_in_per_m",
+        "long_context_cache_write_per_m",
+        "long_context_out_per_m",
+    }
+)
 
 
 @dataclass(frozen=True)

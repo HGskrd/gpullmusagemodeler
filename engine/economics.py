@@ -6,6 +6,7 @@ import copy
 import math
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
+from datetime import date
 from typing import Any, Optional, cast
 
 import cloud_policy
@@ -1146,6 +1147,44 @@ def _deployment_capacity_for_profile(
     return daily_tokens, peak_rps
 
 
+def _scheduled_cloud_price(cloud: dict, field: str, profile: dict) -> tuple[float, str]:
+    """Resolve published UTC time bands when a workload pins its billing hour.
+
+    Catalog base prices remain a deterministic weekly blend. Callers can provide
+    ``pricing_weekday_utc`` (Monday=0) and ``pricing_hour_utc`` for an exact band.
+    """
+    weekday = profile.get("pricing_weekday_utc")
+    hour = profile.get("pricing_hour_utc")
+    schedule = cloud.get("peak_schedule_utc", ())
+    if weekday is None or hour is None or not schedule:
+        return max(float(cloud[field]), 0.0), "weekly_blend" if schedule else "standard"
+    weekday = int(weekday) % 7
+    hour = float(hour) % 24
+    is_peak = any(
+        int(day) == weekday and float(start) <= hour < float(end) for day, start, end in schedule
+    )
+    band = "peak" if is_peak else "off_peak"
+    return max(float(cloud.get(f"{band}_{field}", cloud[field])), 0.0), band
+
+
+def _dated_cloud_pricing(cloud: dict, profile: dict) -> tuple[dict, str]:
+    """Apply a published successor rate only when the workload pins an as-of date."""
+    raw_as_of = profile.get("pricing_as_of")
+    successor = cloud.get("future_pricing")
+    if not raw_as_of or not isinstance(successor, dict):
+        return cloud, "catalog_capture"
+    try:
+        as_of = date.fromisoformat(str(raw_as_of))
+        effective_at = date.fromisoformat(str(successor["effective_at"]))
+    except (KeyError, TypeError, ValueError):
+        return cloud, "catalog_capture"
+    if as_of < effective_at:
+        return cloud, "catalog_capture"
+    prices = dict(cloud)
+    prices.update({key: value for key, value in successor.items() if key != "effective_at"})
+    return prices, str(successor["effective_at"])
+
+
 def _cloud_price_per_m_in_preset(
     difficulty: float,
     min_success: float,
@@ -1170,9 +1209,12 @@ def _cloud_price_per_m_in_preset(
     cached = in_len * min(max(prefix_hit_rate, 0.0), 1.0)
     uncached = max(0.0, in_len - cached)
     tokens_per_req = max(1.0, in_len + out_len)
+    cache_write_tokens = max(float(profile.get("cache_write_tokens", 0.0)), 0.0)
+    cache_storage_token_hours = max(float(profile.get("cache_storage_token_hours", 0.0)), 0.0)
 
     best: Optional[tuple[float, dict]] = None
     for key, cloud in cloud_policy.effective_corpo_models(preset_name):
+        priced_cloud, price_effective_at = _dated_cloud_pricing(cloud, profile)
         if not (required_capabilities <= frozenset(cloud.get("capabilities", ()))):
             continue
         cloud_quality = float(cloud.get("quality", 0.5))
@@ -1182,19 +1224,52 @@ def _cloud_price_per_m_in_preset(
         cloud_success = success_rate(cloud_quality, difficulty)
         if cloud_success + 1e-9 < min_success:
             continue
-        threshold = max(float(cloud.get("long_context_threshold_tokens", 0.0) or 0.0), 0.0)
-        long_context_pricing = threshold > 0.0 and in_len > threshold
+        if tokens_per_req > float(cloud.get("max_context_tokens", math.inf)):
+            continue
+        if out_len > float(cloud.get("max_output_tokens", math.inf)):
+            continue
+        threshold = max(float(priced_cloud.get("long_context_threshold_tokens", 0.0) or 0.0), 0.0)
+        threshold_inclusive = bool(priced_cloud.get("long_context_threshold_inclusive", False))
+        long_context_pricing = threshold > 0.0 and (
+            in_len >= threshold if threshold_inclusive else in_len > threshold
+        )
 
         def tier_price(field: str, base_field: str) -> float:
-            value = cloud.get(field) if long_context_pricing else None
-            return max(float(cloud[base_field] if value is None else value), 0.0)
+            value = priced_cloud.get(field) if long_context_pricing else None
+            return max(float(priced_cloud[base_field] if value is None else value), 0.0)
 
-        input_price = tier_price("long_context_in_per_m", "in_per_m")
-        cached_input_price = tier_price("long_context_cached_in_per_m", "cached_in_per_m")
-        output_price = tier_price("long_context_out_per_m", "out_per_m")
-        sticker = (
+        input_price, pricing_period = _scheduled_cloud_price(priced_cloud, "in_per_m", profile)
+        cached_input_price, _ = _scheduled_cloud_price(priced_cloud, "cached_in_per_m", profile)
+        output_price, _ = _scheduled_cloud_price(priced_cloud, "out_per_m", profile)
+        if long_context_pricing:
+            input_price = tier_price("long_context_in_per_m", "in_per_m")
+            cached_input_price = tier_price("long_context_cached_in_per_m", "cached_in_per_m")
+            output_price = tier_price("long_context_out_per_m", "out_per_m")
+        cache_write_price = (
+            tier_price("long_context_cache_write_per_m", "cache_write_per_m")
+            if "cache_write_per_m" in priced_cloud
+            else 0.0
+        )
+        cache_storage_price = max(float(priced_cloud.get("cache_storage_per_m_hour", 0.0)), 0.0)
+        service_tier = str(profile.get("cloud_service_tier", "standard"))
+        region = str(profile.get("cloud_region", "default"))
+        service_multiplier = max(
+            float(priced_cloud.get("service_tier_price_multipliers", {}).get(service_tier, 1.0)),
+            0.0,
+        )
+        region_multiplier = max(
+            float(priced_cloud.get("region_price_multipliers", {}).get(region, 1.0)), 0.0
+        )
+        price_multiplier = max(
+            float(profile.get("cloud_price_multiplier", priced_cloud.get("price_multiplier", 1.0))),
+            0.0,
+        )
+        price_multiplier *= service_multiplier * region_multiplier
+        sticker = price_multiplier * (
             (uncached / 1e6) * input_price
             + (cached / 1e6) * cached_input_price
+            + (cache_write_tokens / 1e6) * cache_write_price
+            + (cache_storage_token_hours / 1e6) * cache_storage_price
             + ((out_len / cloud_eff) / 1e6) * output_price
         )
         # Token efficiency affects generated tokens, not the fixed prompt payload.
@@ -1209,9 +1284,16 @@ def _cloud_price_per_m_in_preset(
                     "key": key,
                     "success_rate": cloud_success,
                     "long_context_pricing_applied": long_context_pricing,
+                    "pricing_period": pricing_period,
+                    "price_effective_at": price_effective_at,
+                    "effective_service_tier": service_tier,
+                    "effective_region": region,
                     "effective_in_per_m": input_price,
                     "effective_cached_in_per_m": cached_input_price,
+                    "effective_cache_write_per_m": cache_write_price,
+                    "effective_cache_storage_per_m_hour": cache_storage_price,
                     "effective_out_per_m": output_price,
+                    "effective_price_multiplier": price_multiplier,
                 },
             )
 

@@ -90,28 +90,31 @@ class ModelCatalogTests(unittest.TestCase):
             aa_intelligence_to_quality(51.0),
         )
 
-    def test_cloud_pricing_snapshot_uses_current_july_2026_families(self):
+    def test_cloud_pricing_snapshot_uses_current_september_2026_families(self):
         expected = {
-            "gpt-5.6-sol": ("GPT-5.6 Sol", 5.00, 0.50, 30.00),
+            "gpt-6-astra": ("GPT-6 Astra", 10.00, 1.00, 50.00),
+            "gpt-5.6-sol": ("GPT-5.6 Sol", 4.00, 0.40, 20.00),
             "gpt-5.6-terra": ("GPT-5.6 Terra", 2.00, 0.20, 12.00),
             "gpt-5.6-luna": ("GPT-5.6 Luna", 0.20, 0.02, 1.20),
-            "claude-fable": ("Claude Fable 5", 10.00, 1.00, 50.00),
+            "claude-fable": ("Claude Fable 5.1", 10.00, 0.25, 50.00),
             "claude-opus": ("Claude Opus 5", 5.00, 0.50, 25.00),
             "claude-sonnet": ("Claude Sonnet 5", 2.00, 0.20, 10.00),
             "claude-haiku": ("Claude Haiku 4.5", 1.00, 0.10, 5.00),
             "gemini-pro": ("Gemini 3.1 Pro Preview", 2.00, 0.20, 12.00),
-            "gemini-flash": ("Gemini 3.6 Flash", 1.50, 0.15, 7.50),
+            "gemini-flash": ("Gemini 3.6 Flash", 0.75, 0.075, 3.75),
+            "gemini-3.7-flash": ("Gemini 3.7 Flash", 0.75, 0.075, 3.75),
+            "gemini-3.8-flash": ("Gemini 3.8 Flash", 0.75, 0.075, 3.75),
             "gemini-flash-lite": ("Gemini 3.5 Flash-Lite", 0.30, 0.03, 2.50),
             "mistral-medium": ("Mistral Medium 3.5", 1.50, 0.15, 7.50),
             "mistral-large": ("Mistral Large 3", 0.50, 0.05, 1.50),
             "mistral-small": ("Mistral Small 4", 0.15, 0.015, 0.60),
             "codestral-2501": ("Codestral", 0.30, 0.03, 0.90),
-            "grok-4.1-fast": ("Grok 4.1 Fast", 0.20, 0.05, 0.50),
-            "deepseek-v4-flash": ("DeepSeek V4 Flash 0731", 0.14, 0.0028, 0.28),
-            "deepseek-v4-pro": ("DeepSeek V4 Pro Preview", 0.435, 0.003625, 0.87),
+            "grok-4.6": ("Grok 4.6", 2.00, 0.50, 6.00),
+            "deepseek-v4-flash": ("DeepSeek V4.1 Flash", 0.18125, 0.003625, 0.725),
+            "deepseek-v4-pro": ("DeepSeek V4 Pro Preview", 0.7975, 0.026583333333333334, 2.3925),
         }
 
-        self.assertEqual(CLOUD_PRICING_CAPTURED_AT, "2026-08-09")
+        self.assertEqual(CLOUD_PRICING_CAPTURED_AT, "2026-09-21")
         for key, (label, price_in, cached_in, price_out) in expected.items():
             with self.subTest(key=key):
                 cloud = CLOUD_MODELS[key]
@@ -131,12 +134,13 @@ class ModelCatalogTests(unittest.TestCase):
                 self.assertTrue(cloud["pricing_source"].startswith("https://"))
 
         self.assertTrue(CLOUD_MODELS["mistral-large-2"]["legacy"])
-        self.assertIn("2026-08-31", CLOUD_MODELS["claude-sonnet"]["price_note"])
+        self.assertNotIn("price_note", CLOUD_MODELS["claude-sonnet"])
         self.assertIn("<=200k", CLOUD_MODELS["gemini-pro"]["price_note"])
 
     def test_cloud_context_tiers_and_current_api_ids_are_explicit(self):
         expected_openai_long_context = {
-            "gpt-5.6-sol": (10.00, 1.00, 45.00),
+            "gpt-6-astra": (20.00, 2.00, 75.00),
+            "gpt-5.6-sol": (8.00, 0.80, 30.00),
             "gpt-5.6-terra": (4.00, 0.40, 18.00),
             "gpt-5.6-luna": (0.40, 0.04, 1.80),
         }
@@ -159,6 +163,11 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(gemini_flash["max_context_tokens"], 1_048_576)
         self.assertEqual(CLOUD_MODELS["gemini-flash-lite"]["max_context_tokens"], 1_048_576)
         self.assertEqual(CLOUD_MODELS["claude-opus"]["api_model"], "claude-opus-5")
+        self.assertEqual(CLOUD_MODELS["claude-fable"]["api_model"], "claude-fable-5-1")
+        self.assertEqual(CLOUD_MODELS["grok-4.6"]["api_model"], "grok-4-6")
+        self.assertEqual(CLOUD_MODELS["kimi-k3"]["api_model"], "kimi-k3")
+        self.assertEqual(CLOUD_MODELS["command-a-03-2025"]["api_model"], "command-a-03-2025")
+        self.assertEqual(CLOUD_MODELS["command-r7b-12-2024"]["api_model"], "command-r7b-12-2024")
 
     def test_cloud_procurement_presets_have_no_dangling_or_legacy_keys(self):
         for name, preset in CORPO_CLOUD_PRESETS.items():
@@ -188,7 +197,7 @@ class ModelCatalogTests(unittest.TestCase):
 
         self.assertTrue(visible_preview_models <= set(PREVIEW_ASSUMPTIONS))
         self.assertTrue(preview_cloud_models <= set(PREVIEW_ASSUMPTIONS))
-        self.assertEqual(PREVIEW_ASSUMPTIONS_CAPTURED_AT, "2026-09-02")
+        self.assertEqual(PREVIEW_ASSUMPTIONS_CAPTURED_AT, "2026-09-21")
         for key, record in PREVIEW_ASSUMPTIONS.items():
             with self.subTest(key=key):
                 self.assertNotIn("kimi", key)
@@ -1432,6 +1441,47 @@ class ModelCatalogTests(unittest.TestCase):
             data_models.DERIVED_ASR_ORDER,
             "DERIVED_ASR_ORDER is out of step with the MODELS.update() block",
         )
+
+    def test_muse_glimmer_geometry_and_exact_nvfp4_artifact(self):
+        model = MODELS["muse-glimmer-30b"]
+        profile = get_quantization_profile(model.key, "nvfp4")
+
+        self.assertEqual(model.total_params, 29_776_626_688)
+        self.assertEqual(model.layers, 52)
+        self.assertEqual(model.hidden_size, 6656)
+        self.assertEqual((model.num_heads, model.kv_heads, model.head_dim), (32, 2, 128))
+        self.assertEqual(model.local_attention_layers, 39)
+        self.assertEqual(model.local_attention_window, 2048)
+        self.assertEqual(model.max_context_tokens, 131072)
+        self.assertIn("images", model.capabilities)
+        self.assertEqual(profile.total_weight_bytes_override, 24_669_346_036)
+        self.assertEqual(profile.source_revision, "47818374517751c48c55cde2621594926b1888b6")
+
+    def test_hy4_preview_geometry_and_uncalibrated_mtp_boundary(self):
+        model = MODELS["hy4-preview"]
+
+        self.assertEqual((model.total_params, model.active_params), (770e9, 49e9))
+        self.assertEqual((model.layers, model.hidden_size), (78, 6144))
+        self.assertEqual((model.mla_kv_dim, model.mla_rope_dim), (512, 64))
+        self.assertEqual(model.sparse_attention_top_k, 2048)
+        self.assertEqual(model.sparse_indexer_layers, 21)
+        self.assertEqual((model.moe_routed_experts, model.moe_active_experts), (256, 8))
+        self.assertEqual(model.max_context_tokens, 1_048_576)
+        self.assertEqual(model.native_precision, "fp8")
+        self.assertFalse(any(profile.method == "mtp" for profile in model.speculative_profiles))
+
+    def test_new_nvfp4_artifacts_use_pinned_exact_footprints(self):
+        expected = {
+            "qwen38-27b": (21_921_428_072, "dbb8f445b3145f8a4c18ddc769f032d57d32867c"),
+            "qwen38-flash-next": (132_639_846_394, "fc694b54fb0174e0913e6adf86691ef85a4ead47"),
+            "glm53f": (204_419_110_596, "09b04e5e74bca08ca8549fc736d4cdd8624bfde3"),
+        }
+        for key, (size, revision) in expected.items():
+            with self.subTest(model=key):
+                profile = get_quantization_profile(key, "nvfp4")
+                self.assertEqual(profile.total_weight_bytes_override, size)
+                self.assertEqual(profile.source_revision, revision)
+                self.assertEqual(profile.captured_at, "2026-09-16")
 
 
 if __name__ == "__main__":
