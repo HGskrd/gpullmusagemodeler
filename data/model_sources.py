@@ -43,6 +43,16 @@ OPEN_MODEL_ARCHITECTURE_SOURCES: dict[str, ModelArchitectureSource] = {
     "qwen38-2.4t-a95b": ModelArchitectureSource(
         "https://huggingface.co/Qwen/Qwen3.8-2.4T-A95B", "207bd685a7e3696cfaff12ded7c6a7ea0f88c996"
     ),
+    "muse-glimmer-30b": ModelArchitectureSource(
+        "https://huggingface.co/meta-models/Muse-Glimmer-30B",
+        "a4e59da52a7bc87ae7251dd5545c0dd437c44b68",
+        "Pinned base config and index: 52 layers, 39 local/13 global attention, 131,072-token context, and 29,776,626,688 indexed parameters including vision.",
+    ),
+    "hy4-preview": ModelArchitectureSource(
+        "https://huggingface.co/tencent/Hy4-preview",
+        "705d81ee51566a186d645b74c974d642ef2828fe",
+        "Pinned preview config and model card; 770B/49B excludes the bundled MTP module, whose exact serving footprint remains unmodeled.",
+    ),
     "glm53": ModelArchitectureSource(
         "https://huggingface.co/zai-org/GLM-5.3", "187fb9fff6319062325ff825627ef6db084d9bc6"
     ),

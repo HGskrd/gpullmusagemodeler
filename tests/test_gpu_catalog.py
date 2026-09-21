@@ -32,7 +32,7 @@ class GPUCatalogTests(unittest.TestCase):
 
         self.assertEqual(assignment.prec, "fp8")
         self.assertTrue(labels[0].startswith("Native · block-FP8"))
-        self.assertTrue(all("estimated" in label for label in labels[1:]))
+        self.assertIn("NVFP4 · artifact", labels[1:])
 
         state = PlannerState()
         add_gpu(state, "H100", 1)
@@ -43,6 +43,7 @@ class GPUCatalogTests(unittest.TestCase):
         ]
         self.assertTrue(labels[0].startswith("Native · BF16"))
         self.assertEqual(labels[1], "FP8 · artifact")
+        self.assertEqual(labels[2], "NVFP4 · artifact")
 
     def test_crescent_and_m5_rows_separate_facts_from_proxies(self):
         crescent = GPUS["CrescentIsland"]
@@ -101,12 +102,12 @@ class GPUCatalogTests(unittest.TestCase):
 
         self.assertEqual(gpu.name, "Vera Rubin NVL72 Preview 288GB/GPU")
         self.assertEqual(gpu.mem, 288e9)
-        self.assertEqual(gpu.bw, 22e12)
+        self.assertEqual(gpu.bw, 19.2e12)
         self.assertEqual(gpu.bf16, 4e15)
         self.assertEqual(gpu.fp8, 17.5e15)
         self.assertIsNone(gpu.fp4)
         self.assertEqual(GPU_INFERENCE_FP4_FLOPS["RUBIN_NVL72"], 50e15)
-        self.assertEqual(gpu.scale_up_p2p_bw_bidir, 3.6e12)
+        self.assertEqual(gpu.scale_up_p2p_bw_bidir, 3e12)
         self.assertEqual(gpu.node_size, 72)
         self.assertEqual(gpu.min_count, 72)
         self.assertEqual(gpu.count_multiple, 72)

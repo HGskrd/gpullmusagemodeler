@@ -214,10 +214,10 @@ GPUS: dict[str, GPU] = {
         "Vera Rubin NVL72 Preview 288GB/GPU",
         "nv",
         288e9,
-        22e12,
+        19.2e12,
         4e15,
         17.5e15,
-        3.6e12,
+        3e12,
         72,
         min_count=72,
         count_multiple=72,
@@ -674,13 +674,13 @@ for _key, _tco in GPU_TCO_DEFAULTS.items():
 
 # Announced/preview catalog entries must keep their uncertainty reviewable.
 # Kimi K3 is now an open-weight release with a pinned config and technical report.
-PREVIEW_ASSUMPTIONS_CAPTURED_AT = "2026-09-02"
+PREVIEW_ASSUMPTIONS_CAPTURED_AT = "2026-09-21"
 PREVIEW_ASSUMPTIONS: dict[str, dict[str, object]] = {
     "gpu:RUBIN_NVL72": {
         "status": "full-production ramp; production shipments announced for fall 2026",
         "source": "https://www.nvidia.com/en-us/data-center/vera-rubin-nvl72/",
         "assumptions": (
-            "all per-GPU performance, memory, bandwidth, and NVLink figures remain preliminary",
+            "NVIDIA publishes 288 GB HBM4, 19.2 TB/s memory bandwidth, 4 PF dense BF16, 17.5 PF FP8, and 3 TB/s bidirectional NVLink per GPU; all remain preliminary",
             "the 50 PF NVFP4 inference headline is retained as display evidence but excluded from the dense FP4 planner roofline",
             "rack-only pool sizes are constrained to multiples of 72",
             "board power is omitted until NVIDIA publishes a per-GPU figure",
@@ -754,6 +754,15 @@ PREVIEW_ASSUMPTIONS: dict[str, dict[str, object]] = {
         "assumptions": (
             "the visible model uses the released 42-layer, 35-local/7-global configuration",
             "the internal inkling-small-preview key remains stable for imported scenarios",
+        ),
+    },
+    "model:hy4-preview": {
+        "status": "preview open checkpoint; architecture and serving contract may change",
+        "source": "https://huggingface.co/tencent/Hy4-preview",
+        "assumptions": (
+            "770B total and 49B active parameters exclude the bundled one-layer MTP module",
+            "the official FP8 checkpoint is modeled at the published backbone size until exact tensor headers are pinned",
+            "iHC four-stream activation traffic and MTP speedup remain unmodeled pending runtime measurements",
         ),
     },
     "cloud:deepseek-v4-pro": {

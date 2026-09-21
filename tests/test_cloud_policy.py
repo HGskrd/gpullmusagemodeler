@@ -8,6 +8,7 @@ from unittest.mock import patch
 from app_factory import create_test_app
 
 import cloud_policy
+from data import CLOUD_MODELS
 from engine.economics import _cloud_price_per_m_in_preset
 from state import normalize_corpo_cloud
 
@@ -96,6 +97,138 @@ class CloudPolicyTests(unittest.TestCase):
 
         self.assertIsNone(cloud)
         self.assertTrue(math.isinf(price_per_m))
+
+    def test_cloud_routing_enforces_combined_context_and_output_limits(self):
+        cloud = {
+            "vendor": "Test",
+            "quality": 1.0,
+            "token_efficiency": 1.0,
+            "capabilities": (),
+            "in_per_m": 1.0,
+            "cached_in_per_m": 0.1,
+            "out_per_m": 2.0,
+            "max_context_tokens": 1_000,
+            "max_output_tokens": 200,
+        }
+        with patch(
+            "engine.economics.cloud_policy.effective_corpo_models",
+            return_value=[("limited", cloud)],
+        ):
+            over_context, _ = _cloud_price_per_m_in_preset(
+                0, 0, 0, {"in_len": 900, "out_len": 101, "tokens_per_request": 1001}, 0, "test"
+            )
+            over_output, _ = _cloud_price_per_m_in_preset(
+                0, 0, 0, {"in_len": 700, "out_len": 201, "tokens_per_request": 901}, 0, "test"
+            )
+
+        self.assertIsNone(over_context)
+        self.assertIsNone(over_output)
+
+    def test_inclusive_tier_cache_lifecycle_and_multiplier_are_charged(self):
+        cloud = {
+            "vendor": "Test",
+            "quality": 1.0,
+            "token_efficiency": 1.0,
+            "capabilities": (),
+            "in_per_m": 1.0,
+            "cached_in_per_m": 0.1,
+            "cache_write_per_m": 2.0,
+            "cache_storage_per_m_hour": 0.5,
+            "out_per_m": 3.0,
+            "long_context_threshold_tokens": 1_000,
+            "long_context_threshold_inclusive": True,
+            "long_context_in_per_m": 4.0,
+            "long_context_cached_in_per_m": 0.4,
+            "long_context_cache_write_per_m": 5.0,
+            "long_context_out_per_m": 6.0,
+        }
+        profile = {
+            "in_len": 1_000,
+            "out_len": 100,
+            "tokens_per_request": 1_100,
+            "cache_write_tokens": 200,
+            "cache_storage_token_hours": 400,
+            "cloud_price_multiplier": 1.25,
+        }
+        with patch(
+            "engine.economics.cloud_policy.effective_corpo_models",
+            return_value=[("tiered", cloud)],
+        ):
+            info, price_per_m = _cloud_price_per_m_in_preset(0, 0, 0, profile, 0.5, "test")
+
+        expected_sticker = 1.25 * (
+            500 / 1e6 * 4.0 + 500 / 1e6 * 0.4 + 200 / 1e6 * 5.0 + 400 / 1e6 * 0.5 + 100 / 1e6 * 6.0
+        )
+        self.assertTrue(info["long_context_pricing_applied"])
+        self.assertEqual(info["effective_cache_write_per_m"], 5.0)
+        self.assertAlmostEqual(
+            price_per_m,
+            expected_sticker / (1_100 / 1e6) / info["success_rate"],
+        )
+
+    def test_scheduled_pricing_selects_peak_and_off_peak_utc_bands(self):
+        cloud = dict(CLOUD_MODELS["deepseek-v4-flash"])
+        with patch(
+            "engine.economics.cloud_policy.effective_corpo_models",
+            return_value=[("deepseek-v4-flash", cloud)],
+        ):
+            peak, _ = _cloud_price_per_m_in_preset(
+                0,
+                0,
+                0,
+                {
+                    "in_len": 1000,
+                    "out_len": 1,
+                    "tokens_per_request": 1001,
+                    "pricing_weekday_utc": 0,
+                    "pricing_hour_utc": 2,
+                },
+                0,
+                "test",
+            )
+            off_peak, _ = _cloud_price_per_m_in_preset(
+                0,
+                0,
+                0,
+                {
+                    "in_len": 1000,
+                    "out_len": 1,
+                    "tokens_per_request": 1001,
+                    "pricing_weekday_utc": 6,
+                    "pricing_hour_utc": 2,
+                },
+                0,
+                "test",
+            )
+
+        self.assertEqual((peak["pricing_period"], peak["effective_in_per_m"]), ("peak", 0.30))
+        self.assertEqual(
+            (off_peak["pricing_period"], off_peak["effective_in_per_m"]), ("off_peak", 0.15)
+        )
+
+    def test_future_dated_pricing_and_named_multipliers_are_explicit(self):
+        cloud = dict(CLOUD_MODELS["gemini-3.8-flash"])
+        cloud["service_tier_price_multipliers"] = {"priority": 1.5}
+        cloud["region_price_multipliers"] = {"global": 1.2}
+        profile = {
+            "in_len": 1_000,
+            "out_len": 0,
+            "tokens_per_request": 1_000,
+            "pricing_as_of": "2027-01-01",
+            "cloud_service_tier": "priority",
+            "cloud_region": "global",
+        }
+        with patch(
+            "engine.economics.cloud_policy.effective_corpo_models",
+            return_value=[("gemini-3.8-flash", cloud)],
+        ):
+            info, price_per_m = _cloud_price_per_m_in_preset(0, 0, 0, profile, 0, "test")
+
+        self.assertEqual(info["price_effective_at"], "2027-01-01")
+        self.assertEqual(info["effective_in_per_m"], 1.50)
+        self.assertEqual(info["effective_service_tier"], "priority")
+        self.assertEqual(info["effective_region"], "global")
+        self.assertAlmostEqual(price_per_m, 1.50 * 1.5 * 1.2 / info["success_rate"])
 
     def test_policy_sections_must_be_objects(self):
         for section in ("price_overrides", "corpo_presets"):
