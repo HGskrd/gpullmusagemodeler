@@ -129,7 +129,16 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
             )
             if model.architecture_note:
                 lines.append(f"  Architecture assumptions: {model.architecture_note}")
-                lines.append(f"  GPU-resident checkpoint: {model.weight_gb(am.prec):.3f} GB")
+                lines.append(
+                    f"  GPU-resident checkpoint: {model.gpu_weight_bytes(am.prec) / 1e9:.3f} GB"
+                )
+            if model.system_ram_weight_bytes:
+                lines.append(
+                    f"  System RAM for Engram: {model.system_ram_weight_bytes / 1e9:.3f} GB "
+                    "per model copy, outside VRAM; excludes host runtime/loader overhead. "
+                    "Provision host RAM separately; capacity and transfer latency are not validated."
+                )
+                lines.append(f"  Complete checkpoint: {model.weight_gb(am.prec):.3f} GB")
             spec_info = get_model_info(state, am).get("spec")
             if spec_info is not None:
                 spec = spec_info

@@ -63,8 +63,11 @@
   {% endif %}
 
   <div class="T" style="margin-bottom:3px;">
-    {{ "%.1f"|format(m.weight_gb(am.prec)) }} GB weights{% if info.mixed_weight_precision %} · ~{{ "%.2f"|format(info.weight_bpp) }} B/param avg{% endif %}{{ ' · MLA KV' if m.is_mla else '' }}{% if m.attention_label %} · {{ m.attention_label }}{% endif %}
+    {{ "%.1f"|format(m.gpu_weight_bytes(am.prec) / 1e9) }} GB{% if m.system_ram_weight_bytes %} GPU{% endif %} weights{% if info.mixed_weight_precision %} · ~{{ "%.2f"|format(info.weight_bpp) }} B/param{% if m.system_ram_weight_bytes %} checkpoint{% endif %} avg{% endif %}{{ ' · MLA KV' if m.is_mla else '' }}{% if m.attention_label %} · {{ m.attention_label }}{% endif %}
   </div>
+  {% if m.system_ram_weight_bytes %}
+  <div class="T" style="margin-bottom:3px;">Engram: {{ "%.3f"|format(m.system_ram_weight_bytes / 1e9) }} GB system RAM per model copy, outside VRAM. Provision host RAM separately; capacity and transfer latency are not validated.</div>
+  {% endif %}
   {% if not m.is_embedding_model and not m.is_asr_model %}
   <div class="T" style="margin-bottom:3px;" title="Maximum supported combined prompt and generated-token length used by planner feasibility checks.">
     Context limit {{ m.max_context_tokens|fmt_num }} tokens (prompt + output)

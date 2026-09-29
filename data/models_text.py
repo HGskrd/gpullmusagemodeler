@@ -1776,6 +1776,7 @@ TEXT_MODELS: dict[str, Model] = {
         # Exact two table shapes, with one FP8 scale per 32 stored values.
         conditional_memory_weight_bytes=(384006168 + 384016682) * 256 * (1 + 1 / 32),
         conditional_memory_layers=(1, 14),
+        conditional_memory_on_host=True,
         is_moe=True,
         layers=40,
         hidden_dim=5120,
@@ -1812,7 +1813,7 @@ TEXT_MODELS: dict[str, Model] = {
         native_precision="mxfp4",
         native_precision_label="MXFP4 experts + FP8 dense / Engram",
         native_precision_note="510.286 GB released checkpoint including Engram, vision and DSpark. Global KV uses FP4; local KV stays FP8 independently of weight precision.",
-        architecture_note="8B active prefill / 16B decode; 20 encoder + 20 decoder layers. Prefill includes a 128-token decoder replay bound. GPU-resident Engram baseline: 196B memory parameters (202.758 GB FP8 tables including scales) are included in weights at layers 1 and 14. Host offload needs separately provisioned DRAM and calibrated transfer bandwidth; it is not simulated. Shared global KV is replicated across TP ranks and conservatively across PP stages. FP4 global / FP8 local KV assumes optimized serving kernels; reference inference may use larger buffers. DSpark storage is included, speedup disabled pending calibration. Vision encoding latency and persistent SSD cache are not simulated; quality and verbosity use a low-confidence V4 Flash family proxy.",
+        architecture_note="8B active prefill / 16B decode; 20 encoder + 20 decoder layers. Prefill includes a 128-token decoder replay bound. Host-resident Engram: 196B memory parameters (202.758 GB FP8 tables including scales) occupy system RAM per model copy, outside VRAM in every weight mode. Native GPU weights are 307.528 GB. This assumes separately provisioned host DRAM; host capacity, lookup buffers and RDMA/UVA transfer latency are not simulated. Unified-memory devices need this RAM from the same physical pool. Shared global KV is replicated across TP ranks and conservatively across PP stages. FP4 global / FP8 local KV assumes optimized serving kernels; reference inference may use larger buffers. DSpark storage is included, speedup disabled pending calibration. Vision encoding latency and persistent SSD cache are not simulated; quality and verbosity use a low-confidence V4 Flash family proxy.",
         quality_confidence=0.5,
     ),
     "deepseek-v4-pro": Model(

@@ -1,6 +1,7 @@
 """Pinned V4.1 geometry and numerical CED/CSA2 accounting invariants."""
 
 import math
+from dataclasses import replace
 
 import pytest
 from app_factory import create_test_app
@@ -16,8 +17,9 @@ from calc import (
     peak_stage_weight_bytes,
     per_replica_token_kv_cache_bytes,
     prefill_parameter_tokens,
+    valid_strategies,
 )
-from data import GPUS, MODELS
+from data import GPUS, MODELS, PRECISION_SPECS, normalize_precision
 from data.model_sources import OPEN_MODEL_ARCHITECTURE_SOURCES
 from presentation.reports import format_projection_report
 from state import GpuPool, ModelAssignment, PlannerState
@@ -144,21 +146,64 @@ def test_picker_and_report_expose_new_model_and_limits():
     report = format_projection_report(state, None)
     assert "510.286 GB" in report
     assert "8B active prefill / 16B decode" in report
-    assert "GPU-resident Engram" in report
+    assert "GPU-resident checkpoint: 307.528 GB" in report
+    assert "System RAM for Engram: 202.758 GB per model copy, outside VRAM" in report
+    assert "capacity and transfer latency are not validated" in report
     assert "speedup disabled" in report
 
 
-def test_engram_tables_are_not_uniformly_spread_across_pipeline_stages():
+@pytest.mark.parametrize("precision", [*PRECISION_SPECS, "fp4"])
+@pytest.mark.parametrize("pp", [1, 2, 3, 8])
+def test_host_engram_is_excluded_from_gpu_weights_in_every_precision_and_stage(precision, pp):
+    tables = 202_758_032_400
+    assert MODEL.system_ram_weight_bytes == tables
+    expected = MODEL.weight_bytes(precision) - tables
+    assert MODEL.gpu_weight_bytes(precision) == pytest.approx(expected)
+    assert peak_stage_weight_bytes(MODEL, precision, pp) == pytest.approx(
+        expected * math.ceil(MODEL.layers / pp) / MODEL.layers
+    )
+    if precision == "mxfp4":
+        assert expected == pytest.approx(307_527_990_600)
+    else:
+        assert expected == pytest.approx(
+            552e9 * PRECISION_SPECS[normalize_precision(precision)].effective_weight_bytes_per_param
+        )
+
+
+@pytest.mark.parametrize("tp,pp", [(1, 2), (2, 1)])
+def test_host_engram_removes_false_two_gpu_fit_failure(tp, pp):
+    gpu = GPUS["B200"]
+    eff = EfficiencyParams()
+    memory = compute_memory(MODEL, tp, pp, gpu, 0.9, 2, "mxfp4", eff)
+    assert memory is not None
+    assert memory.weights == pytest.approx(153_763_995_300)
+    assert memory.kv_reserved == pytest.approx(
+        gpu.mem * 0.9 - memory.weights - memory.profiled_non_kv
+    )
+    assert (tp, pp, 1) in valid_strategies(MODEL, 2, gpu, 0.9, 2, "mxfp4")
+    resident = replace(MODEL, key="v41-gpu-engram-test", conditional_memory_on_host=False)
+    # A generic MXFP4 conversion also cannot fit while the tables occupy VRAM.
+    assert compute_memory(resident, tp, pp, gpu, 0.9, 2, "mxfp4", eff) is None
+
+
+def test_gpu_resident_conditional_tables_keep_layer_placement():
+    resident = replace(MODEL, conditional_memory_on_host=False)
     total = MODEL.weight_bytes("mxfp4")
     tables = MODEL.conditional_memory_weight_bytes
-    assert tables == 202_758_032_400
-    assert peak_stage_weight_bytes(MODEL, "mxfp4", 1) == pytest.approx(total)
-    assert peak_stage_weight_bytes(MODEL, "mxfp4", 2) == pytest.approx(
+    assert resident.system_ram_weight_bytes == 0
+    assert peak_stage_weight_bytes(resident, "mxfp4", 1) == pytest.approx(total)
+    assert peak_stage_weight_bytes(resident, "mxfp4", 2) == pytest.approx(
         (total - tables) / 2 + tables
     )
-    assert peak_stage_weight_bytes(MODEL, "mxfp4", 8) == pytest.approx(
+    assert peak_stage_weight_bytes(resident, "mxfp4", 8) == pytest.approx(
         (total - tables) / 8 + tables / 2
     )
-    # PP2 on two 288GB GPUs looks feasible under even weight division but is not.
-    gpu = GPUS["B200"]
-    assert compute_memory(MODEL, 1, 2, gpu, 0.9, 2, "mxfp4", EfficiencyParams()) is None
+
+
+def test_models_without_host_tables_keep_full_gpu_weights():
+    for model in MODELS.values():
+        if model.key != MODEL.key:
+            assert model.system_ram_weight_bytes == 0
+            assert model.gpu_weight_bytes(model.native_precision_key) == model.weight_bytes(
+                model.native_precision_key
+            )

@@ -66,7 +66,7 @@ OPEN_MODEL_ARCHITECTURE_SOURCES: dict[str, ModelArchitectureSource] = {
     "deepseek-v4.1-flash": ModelArchitectureSource(
         "https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash",
         "df42c109f1defefcbfcedbe7d905718a12266e40",
-        "2026-09-10 report sections 2 and 4.2.1, config and indexed checkpoint. Fixed optimized FP4 global/FP8 local cache; GPU-resident Engram; conservative throughput proxies, no DSpark speedup.",
+        "2026-09-10 report sections 2 and 4.2.1, config and indexed checkpoint. Fixed optimized FP4 global/FP8 local cache; host-resident Engram (placement corrected 2026-09-29 against https://arxiv.org/html/2609.19969v1 section 2.4.2 and https://github.com/vllm-project/recipes/blob/main/models/deepseek-ai/DeepSeek-V4.1-Flash.yaml); conservative throughput proxies, no DSpark speedup.",
     ),
     "deepseek-v4-pro": ModelArchitectureSource(
         "https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro",

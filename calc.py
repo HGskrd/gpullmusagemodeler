@@ -1149,10 +1149,10 @@ def kv_shards(m: Model, tp: int) -> int:
 
 
 def peak_stage_weight_bytes(m: Model, prec: str, pp: int) -> float:
-    """Keep conditional tables on their owning layers instead of averaging them."""
+    """GPU weights on the busiest stage; host tables consume no VRAM."""
     tables = m.conditional_memory_layers
-    if not tables:
-        return m.weight_bytes(prec) * _pp_peak_fraction(m, pp)
+    if not tables or m.conditional_memory_on_host:
+        return m.gpu_weight_bytes(prec) * _pp_peak_fraction(m, pp)
     conditional = m.conditional_memory_weight_bytes
     ordinary_per_layer = max(m.weight_bytes(prec) - conditional, 0.0) / m.layers
     return _peak_layer_work(
