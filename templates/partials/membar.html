@@ -14,7 +14,7 @@
       {% set phase_pp = am.prefill_pp if mem_phase == 'prefill' else am.pp %}
       {% set phase_dp = am.prefill_dp if mem_phase == 'prefill' else am.dp %}
       {% set stage_frac = ((m.layers + phase_pp - 1) // phase_pp) / m.layers %}
-      {% set w = m.weight_bytes(am.prec) %}
+      {% set w = m.gpu_weight_bytes(am.prec) %}
       {% set non_kv = state.profiled_non_kv_gb * 1e9 %}
       {% for r in range(phase_dp) %}
         {% for p in range(phase_pp) %}

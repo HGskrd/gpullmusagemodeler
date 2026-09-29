@@ -368,7 +368,8 @@ class Model:
     conditional_memory_params: float = 0.0
     conditional_memory_weight_bytes: float = 0.0
     conditional_memory_layers: tuple[int, ...] = ()
-    # Baseline keeps conditional memory GPU-resident at FP8 in every weight mode.
+    # Offloaded tables keep their stored precision independently of backbone weights.
+    conditional_memory_on_host: bool = False
     shared_sparse_attention: SharedSparseAttention | None = None
     architecture_note: str = ""
 
@@ -539,7 +540,17 @@ class Model:
         )
 
     def weight_bytes(self, prec: str) -> float:
+        """Complete checkpoint storage, including any host-resident tables."""
         return self.total_params * self.weight_bytes_per_param(prec)
+
+    @property
+    def system_ram_weight_bytes(self) -> float:
+        """Host table storage per model copy, excluding runtime/loader overhead."""
+        return self.conditional_memory_weight_bytes if self.conditional_memory_on_host else 0.0
+
+    def gpu_weight_bytes(self, prec: str) -> float:
+        """Resident GPU weights, excluding separately provisioned host tables."""
+        return self.weight_bytes(prec) - self.system_ram_weight_bytes
 
     def weight_gb(self, prec: str) -> float:
         return self.weight_bytes(prec) / 1e9
@@ -800,7 +811,7 @@ MODEL_QUANTIZATION_PROFILES: dict[tuple[str, str], QuantizationProfile] = dict(
                 retained=("BF16 exclusions; bundled DSpark and vision tensors",),
                 total_weight_bytes_override=510_286_023_000,
                 active_weight_bytes_per_param_override=0.5308416 * 0.53125 + 0.4691584 * 2,
-                notes="Exact indexed storage including Engram, vision and DSpark. Compute shares and active traffic are conservative geometry-derived proxies, not benchmarks; non-routed active work is charged at BF16. Engram stays GPU-resident. DSpark speedup is uncalibrated and disabled.",
+                notes="Exact indexed storage including Engram, vision and DSpark. Compute shares and active traffic are conservative geometry-derived proxies, not benchmarks; non-routed active work is charged at BF16. Engram tables occupy system RAM; their 202.758 GB is subtracted only for GPU residency, preserving full checkpoint storage. DSpark speedup is uncalibrated and disabled.",
             ),
         ),
         _artifact_profile(
