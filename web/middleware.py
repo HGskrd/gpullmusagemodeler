@@ -141,7 +141,11 @@ def _protect_and_lock_request_scope():
         "mutation", current_app.config["REQUEST_RATE_LIMIT"]
     ):
         return jsonify({"error": "Too many updates. Try again shortly."}), 429
-    if request.endpoint and request.endpoint not in _UNSCOPED_ENDPOINTS:
+    if (
+        request.endpoint
+        and request.endpoint not in _UNSCOPED_ENDPOINTS
+        and request.blueprint != "agent_api"
+    ):
         visitor_id = _visitor_id()
         visitor_lock = get_scope_lock(f"visitor:{visitor_id}")
         visitor_lock.acquire()
@@ -183,6 +187,11 @@ def _set_security_headers(response):
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("Referrer-Policy", "same-origin")
     response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.add("Link", '</llms.txt>; rel="describedby"')
+    if request.path.startswith("/api/v1/"):
+        response.headers["Cache-Control"] = "no-store"
+        if response.status_code == 429:
+            response.headers.setdefault("Retry-After", str(int(RATE_WINDOW_SECONDS)))
     return response
 
 

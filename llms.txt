@@ -1,0 +1,18 @@
+# GPU/LLM Usage Modeler
+
+> Plan GPU deployments for LLM, embedding and ASR workloads through a stateless JSON API. Estimate memory fit, capacity, throughput and economics using the same engine as the browser calculator.
+
+Start with the API guide and executable example below. POST a complete request to `/api/v1/calculate` with `Content-Type: application/json`. No authentication, cookies or browser tab ID are required. Each call is isolated; the API does not save scenario snapshots or change browser sessions. Network access controls may be applied by the deployment operator.
+
+Results are closed-form estimates, not measured benchmarks. Review warnings, normalized settings, per-model fit and architecture assumptions. Calibrate against your serving runtime and workload. Monetary values are USD; a null numeric result means unavailable, not zero.
+
+## Agent API
+
+- [API guide](/api/v1/docs.md): Request and response fields, units, limits, errors and examples.
+- [OpenAPI schema](/api/v1/openapi.json): Versioned machine-readable contract and input validation rules.
+- [Example request](/api/v1/example): Ready-to-submit JSON for an H100 deployment; POST the entire response to `/api/v1/calculate`.
+- [Catalog](/api/v1/catalog): Exact model/GPU keys, precision assumptions, workload presets and default settings.
+
+## Optional
+
+- [Health](/healthz): Application and snapshot-storage health.
