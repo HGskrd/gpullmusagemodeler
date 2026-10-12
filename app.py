@@ -15,6 +15,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 from presentation.formatting import fmt_money, fmt_num, log2int
 from web.admin import admin_bp
+from web.agent_api import agent_api_bp
 from web.api import api_bp
 from web.cache import FingerprintCache, ScopedRevisionCache
 from web.config import (
@@ -61,6 +62,11 @@ def _handle_validation_error(error: ValueError):
 
 def _handle_internal_error(error: Exception):
     if isinstance(error, HTTPException):
+        if request.path.startswith("/api/v1/"):
+            response = error.get_response()
+            response.set_data(current_app.json.dumps({"error": error.description}))
+            response.content_type = "application/json"
+            return response
         return error
     current_app.logger.exception("Unhandled error in endpoint %s", request.endpoint)
     return jsonify({"error": "Unexpected server error."}), 500
@@ -114,6 +120,7 @@ def create_app(config: dict | None = None) -> Flask:
         use_cases_bp,
         scenarios_bp,
         api_bp,
+        agent_api_bp,
         admin_bp,
         econ_bp,
     ):

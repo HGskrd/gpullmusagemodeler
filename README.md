@@ -132,6 +132,25 @@ PORT=5014
 
 For local debugging, add `DEBUG=1` or `FLASK_DEBUG=1`.
 
+## Agent API
+
+LLM agents can use the calculator without a browser session through the stateless
+`POST /api/v1/calculate` endpoint. It accepts the existing scenario export format
+inside a `scenario` field and returns normalized A/B configurations, structured
+capacity/economics estimates, fit diagnostics, and optional text reports/charts.
+API calls do not save snapshots or change browser scenarios.
+
+Start at [`/llms.txt`](llms.txt) or read the [API guide](docs/api.md). Runtime
+discovery is available at `/api/v1/catalog`, `/api/v1/example` and
+`/api/v1/openapi.json`. No API key or cookies are required; existing request-size
+and per-IP rate limits apply.
+
+```bash
+curl --fail-with-body http://localhost:5014/api/v1/example -o request.json
+curl --fail-with-body http://localhost:5014/api/v1/calculate \
+  -H 'Content-Type: application/json' --data-binary @request.json
+```
+
 ## Environment Variables
 
 | Variable | Description |
@@ -216,7 +235,7 @@ recorded exception noted below. `tests/test_architecture.py` enforces both.
 
 | Layer | Modules | Owns |
 |---|---|---|
-| `web/` | `planner`, `use_cases`, `scenarios`, `api`, `admin`, `econ` | The 61 route handlers, one blueprint per responsibility |
+| `web/` | `planner`, `use_cases`, `scenarios`, `api`, `agent_api`, `admin`, `econ` | HTTP route handlers, one blueprint per responsibility |
 | | `helpers`, `middleware`, `config`, `cache`, `session_store` | Form coercion and the HTMX envelope; security headers, rate limiting and compression; environment and constants; derived-response caches; the process-local state registry |
 | `presentation/` | `charts`, `econ`, `model_cards`, `reports`, `formatting` | Chart series, economics payloads, model card view models, the plain-text report, number formatting |
 | `planner_service.py` | | Orchestration: mutate, retune, validate |
