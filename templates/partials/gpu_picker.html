@@ -1,31 +1,37 @@
-{# GPU picker dropdown - loaded via HTMX into picker element #}
-<div style="padding:6px 10px;border-bottom:1px solid var(--b1);">
-  <div class="T" style="font-weight:500;margin-bottom:3px;">GPU count</div>
-  <div class="flex gpu-count-sel" style="gap:2px;">
+{# Compact vendor / family picker, matching the approved B5 preview. #}
+<div class="gpu-picker-headbar" data-gpu-picker>
+  <input type="search" class="gpu-picker-search" placeholder="Search accelerators…" aria-label="Search accelerators" data-hardware-search>
+  <div class="gpu-picker-tabs" role="tablist" aria-label="Accelerator vendor">
+    {% for vendor in picker_vendors %}
+    <button type="button" class="sm{{ ' acc' if loop.first else '' }}" role="tab" aria-selected="{{ 'true' if loop.first else 'false' }}" data-gpu-vendor="{{ vendor }}">{{ vendor }}</button>
+    {% endfor %}
+  </div>
+  <div class="gpu-count-sel"><span>Quantity</span>
     {% for n in [1, 2, 4, 6, 8, 16] %}
-    <button type="button" data-gcnt="{{ n }}" class="sm {{ 'selected' if n == 8 else '' }}"
-            style="min-width:24px;">{{ n }}</button>
+    <button type="button" data-gcnt="{{ n }}" class="sm" aria-pressed="false">{{ n }}</button>
     {% endfor %}
   </div>
 </div>
-{% for vendor, cards in gpu_cards_by_vendor.items() %}
-  <div class="cat gpu-picker-brand">{{ vendor }}</div>
-  {% for card in cards %}
-    {% set opt = card.planner_options[0] if card.planner_options else none %}
-    {% set gpu = GPUS[opt.gpu_key] if opt else none %}
-    <{{ 'button type="button"' if opt else 'div' }} class="item gpu-picker-item{% if not opt %} reference-only{% endif %}"
-         {% if opt %}onclick="addGpuFromPicker('{{ panel }}', '{{ opt.gpu_key }}', this)"
-         data-min-count="{{ gpu.min_count }}"
-         data-count-multiple="{{ gpu.count_multiple }}"
-         {% else %}style="cursor:default;opacity:0.5;"{% endif %}
-         title="{{ card.use_case }}{% if card.note %} · {{ card.note }}{% endif %}">
-      <span class="gpu-picker-head">
-        <span class="gpu-picker-name">{{ card.name }}</span>
-        {% if gpu and (gpu.min_count > 1 or gpu.count_multiple > 1) %}
-        <span class="gpu-picker-chip">{% if gpu.min_count == gpu.count_multiple %}{{ gpu.count_multiple }}-GPU sets{% else %}min {{ gpu.min_count }} · ×{{ gpu.count_multiple }}{% endif %}</span>
-        {% endif %}
-      </span>
-      <span class="T gpu-picker-meta">{{ card.vram }} · {{ card.architecture }}</span>
-    </{{ 'button' if opt else 'div' }}>
+<div class="gpu-picker-hint">Click a variant to add</div>
+{% for vendor, families in picker_vendors.items() %}
+<div data-gpu-vendor-panel="{{ vendor }}" role="tabpanel" aria-label="{{ vendor }} accelerators" class="{{ 'gpu-picker-apple' if vendor == 'Apple' else '' }}"{% if not loop.first %} hidden{% endif %}>
+  {% for family, variants in families %}
+  <div class="gpu-picker-family">
+    <span class="gpu-picker-family-name">{{ family }}</span>
+    <div class="gpu-picker-variants">
+      {% for choice, label in variants %}
+      {% set gpu = GPUS[choice.key] %}
+      <button type="button" class="sm" data-gpu-key="{{ choice.key }}" data-gpu-name="{{ gpu.name }}"
+              data-hardware-match="{{ vendor }} {{ family }} {{ label }} {{ gpu.name }} {{ choice.card.architecture }} {{ choice.card.vram }}"
+              data-min-count="{{ gpu.min_count }}" data-count-multiple="{{ gpu.count_multiple }}"
+              onclick="addGpuFromPicker('{{ panel }}', '{{ choice.key }}', this)"
+              aria-label="{{ gpu.name }}"
+              data-hardware-detail="{{ choice.specs }} {{ choice.runtime }} {{ gpu.price_note }} Reviewed {{ choice.reviewed_at }}. {{ choice.source }}"
+              title="{{ gpu.name }} · {{ choice.specs }} {{ choice.runtime }} {{ gpu.price_note }}">{{ label }}</button>
+      {% endfor %}
+    </div>
+  </div>
   {% endfor %}
+</div>
 {% endfor %}
+<div class="gpu-picker-hint" data-hardware-empty hidden role="status">No matching accelerators</div>

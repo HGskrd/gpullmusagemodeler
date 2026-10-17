@@ -1,5 +1,6 @@
 """Precision and quantization specifications."""
 
+import math
 from dataclasses import dataclass
 
 FP8_SPEEDUP_DEFAULT = 1.4
@@ -42,11 +43,77 @@ NUMBER_FORMAT_SPECS: dict[str, NumberFormatSpec] = {
     "F32": NumberFormatSpec(
         "F32", "FP32", 4.0, "Float32 tensor, usually tiny global scale auxiliaries."
     ),
-    "F8_E4M3": NumberFormatSpec("F8_E4M3", "FP8 E4M3", 1.0, "FP8 E4M3 scale or activation tensor."),
+    "F8_E4M3": NumberFormatSpec(
+        "F8_E4M3", "FP8 E4M3", 1.0, "FP8 E4M3 tensor; its role comes from checkpoint metadata."
+    ),
     "U8": NumberFormatSpec(
-        "U8", "Packed FP4", 1.0, "Unsigned byte storage for packed FP4 payloads."
+        "U8", "UINT8", 1.0, "Unsigned byte storage; may contain packed weights or scales."
     ),
 }
+
+NUMBER_FORMAT_SPECS.update(
+    {
+        key: NumberFormatSpec(key, label, size, "Checkpoint storage dtype.")
+        for key, label, size in (
+            ("F16", "FP16", 2),
+            ("F64", "FP64", 8),
+            ("F8_E5M2", "FP8 E5M2", 1),
+            ("F8_E8M0", "E8M0 scale", 1),
+            ("I8", "INT8", 1),
+            ("I16", "INT16", 2),
+            ("U16", "UINT16", 2),
+            ("I32", "INT32", 4),
+            ("U32", "UINT32", 4),
+            ("I64", "INT64", 8),
+            ("U64", "UINT64", 8),
+            ("BOOL", "BOOL", 1),
+        )
+    }
+)
+
+
+@dataclass(frozen=True)
+class QuantizationScheme:
+    encoding: str
+    block_shape: tuple[int, ...]
+    scale_format: str
+    zero_point_format: str = "none"
+
+
+QUANTIZATION_SCHEMES = {
+    "bf16": QuantizationScheme("BF16", (), "none"),
+    "fp8": QuantizationScheme("E4M3", (128, 128), "checkpoint-specific FP32/E8M0"),
+    "mxfp4": QuantizationScheme("E2M1", (32,), "E8M0"),
+    "nvfp4": QuantizationScheme("E2M1", (16,), "E4M3 block + FP32 tensor scale"),
+}
+SERVING_RUNTIMES = ("generic", "vllm", "sglang", "trtllm")
+EXECUTION_BACKENDS = ("legacy", "auto", "native", "w4a16", "expanded")
+CACHE_PRECISIONS = ("legacy", "auto", "bf16", "fp8")
+RECURRENT_PRECISIONS = ("legacy", "auto", "bf16", "fp32")
+
+
+@dataclass(frozen=True)
+class WeightComponent:
+    role: str
+    weight_format: str
+    activation_format: str
+    active_params: float
+    bytes_per_param: float
+    evidence: str
+
+    @property
+    def active_bytes(self) -> float:
+        return self.active_params * self.bytes_per_param
+
+
+@dataclass(frozen=True)
+class WeightMemory:
+    checkpoint_bytes: float
+    gpu_bytes: float
+    host_bytes: float
+    repacking_bytes: float
+    loading_peak_lower_bound_bytes: float
+    loading_workspace_bytes: float | None = None
 
 
 def _storage_bytes(format_counts: dict[str, int]) -> float:
@@ -54,7 +121,9 @@ def _storage_bytes(format_counts: dict[str, int]) -> float:
     for fmt, elems in format_counts.items():
         spec = NUMBER_FORMAT_SPECS.get(fmt)
         if spec is None:
-            continue
+            raise ValueError(f"Unknown checkpoint storage dtype: {fmt}")
+        if not isinstance(elems, int) or elems < 0:
+            raise ValueError(f"Invalid storage element count for {fmt}")
         total += elems * spec.bytes_per_elem
     return total
 
@@ -85,6 +154,38 @@ class QuantizationProfile:
     total_weight_bytes_override: float | None = None
     active_weight_bytes_per_param_override: float | None = None
     notes: str = ""
+    container: str = "safetensors"
+    storage_evidence: str = "exact tensor bytes"
+    active_traffic_evidence: str = "estimated from active operator shares"
+    compute_evidence: str = "estimated operator shares; uncalibrated throughput"
+    runtime_evidence: str = "runtime support requires a matching serving recipe"
+    scheme: QuantizationScheme | None = None
+
+    def __post_init__(self) -> None:
+        _storage_bytes(self.storage_format_counts)
+        if self.precision_key not in PRECISION_SPECS:
+            raise ValueError(f"Unknown artifact precision: {self.precision_key}")
+        if self.total_weight_bytes_override is not None and (
+            not math.isfinite(self.total_weight_bytes_override)
+            or self.total_weight_bytes_override <= 0
+        ):
+            raise ValueError("Invalid checkpoint byte total")
+        shares = self.compute_precision_shares
+        if shares and (
+            any(
+                k not in PRECISION_SPECS or not math.isfinite(v) or v < 0 for k, v in shares.items()
+            )
+            or not math.isclose(sum(shares.values()), 1.0, abs_tol=1e-6)
+        ):
+            raise ValueError("Compute precision shares must be finite and sum to one")
+
+    @property
+    def artifact_id(self) -> str:
+        return f"hf:{self.source_repo}@{self.source_revision}"
+
+    @property
+    def format_scheme(self) -> QuantizationScheme:
+        return self.scheme or QUANTIZATION_SCHEMES[self.precision_key]
 
     @property
     def total_weight_bytes(self) -> float:

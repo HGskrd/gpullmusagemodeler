@@ -382,13 +382,9 @@ def _kv_projection_count(m: Model) -> int:
     return 1 if m.shared_key_value else 2
 
 
-# Model geometry is fixed at import time: every Model lives in data.MODELS under
-# a unique key and is never mutated or rebuilt at runtime (the one derived entry,
-# gemma-4-e2b-asr, is created with replace(..., key=...) and so gets its own key).
-# That makes m.key a sound cache key for the pure geometry helpers below, which
-# the projection search calls tens of thousands of times per request.
-# Model itself is an unfrozen dataclass and therefore unhashable, so these cannot
-# be functools.lru_cache'd on the instance directly.
+# Pure geometry caches use the immutable catalog key. Byte/state caches also use
+# the artifact/cache/runtime configuration so assignments cannot reuse each other's
+# KV or recurrent-state sizes. Model.key always remains its catalog identity.
 _KV_ELEMS_CACHE: dict[tuple[str, bool], int] = {}
 _KV_BYTES_CACHE: dict[tuple[str, str, bool], float] = {}
 _PP_PEAK_CACHE: dict[tuple[str, int], float] = {}
@@ -432,7 +428,7 @@ def _kv_elems_per_layer_uncached(m: Model, global_layer: bool = False) -> int:
 
 
 def _kv_bytes_per_layer(m: Model, prec: str, global_layer: bool = False) -> float:
-    cache_key = (m.key, prec, global_layer)
+    cache_key = (m.cache_key, prec, global_layer)
     cached = _KV_BYTES_CACHE.get(cache_key)
     if cached is not None:
         return cached
@@ -500,7 +496,6 @@ def linear_attention_state_bytes(m: Model, prec: str) -> float:
     if layers <= 0:
         return 0.0
 
-    bpe = m.kv_cache_bytes_per_elem(prec)
     heads = m.linear_attention_head_count
     head_dim = m.linear_attention_head_size
     k_heads = m.linear_attention_k_head_count
@@ -509,7 +504,10 @@ def linear_attention_state_bytes(m: Model, prec: str) -> float:
 
     recurrent_elems = heads * head_dim * head_dim
     conv_elems = conv_len * ((heads * head_dim) + (2 * k_heads * k_head_dim))
-    return layers * (recurrent_elems + conv_elems) * bpe
+    return layers * (
+        recurrent_elems * m.recurrent_bytes_per_elem(prec)
+        + conv_elems * m.convolution_bytes_per_elem(prec)
+    )
 
 
 def _head_aligned_tp_shards(heads: int, tp: int) -> int:
@@ -525,7 +523,7 @@ def per_tp_linear_attention_state_bytes(m: Model, prec: str, tp: int) -> float:
     Using head-aligned shard counts avoids over-sharding state when TP exceeds or is
     not divisible into either schema dimension.
     """
-    cache_key = (m.key, prec, int(tp))
+    cache_key = (m.cache_key, prec, int(tp))
     cached = _LINEAR_STATE_CACHE.get(cache_key)
     if cached is not None:
         return cached
@@ -540,7 +538,6 @@ def _per_tp_linear_attention_state_bytes_uncached(m: Model, prec: str, tp: int) 
     if layers <= 0:
         return 0.0
 
-    bpe = m.kv_cache_bytes_per_elem(prec)
     heads = m.linear_attention_head_count
     head_dim = m.linear_attention_head_size
     k_heads = m.linear_attention_k_head_count
@@ -553,7 +550,10 @@ def _per_tp_linear_attention_state_bytes_uncached(m: Model, prec: str, tp: int) 
     conv_elems = conv_len * (
         (heads * head_dim / head_shards) + (2 * k_heads * k_head_dim / k_head_shards)
     )
-    return layers * (recurrent_elems + conv_elems) * bpe
+    return layers * (
+        recurrent_elems * m.recurrent_bytes_per_elem(prec)
+        + conv_elems * m.convolution_bytes_per_elem(prec)
+    )
 
 
 def _shared_sparse_global_cache_bytes(m: Model, seq_len: float) -> float:
@@ -691,7 +691,7 @@ def attention_kv_read_bytes_for_sequence(m: Model, seq_len: float, prec: str) ->
 
 
 def per_replica_kv_cache_bytes(m: Model, seq_len: float, prec: str, pp: int, tp: int) -> float:
-    cache_key = (m.key, float(seq_len), prec, int(pp), int(tp))
+    cache_key = (m.cache_key, float(seq_len), prec, int(pp), int(tp))
     cached = _REPLICA_KV_CACHE.get(cache_key)
     if cached is not None:
         return cached
@@ -1010,18 +1010,125 @@ def gpu_flops(g: GPU, prec: str) -> float:
     return fallback * (0.75 if prec == "mxfp4" else 0.65)
 
 
-def model_gpu_flops(g: GPU, m: Model, prec: str) -> float:
+@dataclass(frozen=True)
+class ExecutionResolution:
+    path: str
+    status: str
+    note: str
+    runtime: str = "generic"
+    runtime_version: str = ""
+    recipe_source: str = ""
+
+
+def resolve_execution(g: GPU, m: Model, prec: str) -> ExecutionResolution:
+    backend = m.execution_backend
+
+    def result(path: str, status: str, note: str, source: str = "") -> ExecutionResolution:
+        return ExecutionResolution(path, status, note, m.serving_runtime, m.runtime_version, source)
+
+    if backend == "legacy":
+        return result(
+            "legacy", "legacy", "Imported precision and calculation assumptions preserved."
+        )
+    if backend == "expanded":
+        return result(
+            "expanded",
+            "estimated",
+            "BF16-expanded weights; loading workspace is additional and unmeasured.",
+        )
+    if prec not in {"mxfp4", "nvfp4"}:
+        if backend == "w4a16":
+            return result(
+                "unsupported", "unsupported", "W4A16 requires a four-bit weight artifact."
+            )
+        return result(
+            prec,
+            "estimated",
+            "Published weight format; kernel and throughput require runtime calibration.",
+        )
+    native = gpu_supports_nvfp4(g) if prec == "nvfp4" else gpu_supports_mxfp4(g)
+    # NVIDIA's published Lightning recipe uses Marlin W4A16 on GB10, even though
+    # the hardware has FP4 capability. Storage and the selected kernel are separate.
+    spark_recipe = (
+        m.key == "nemotron35-lightning" and g.key == "DGX_SPARK" and m.serving_runtime == "vllm"
+    )
+    if backend == "native" and not native:
+        return result(
+            "unsupported", "unsupported", "Selected GPU has no native support for this FP4 format."
+        )
+    if backend == "w4a16" or (backend == "auto" and (not native or spark_recipe)):
+        if g.vendor not in {"nv", "amd"}:
+            return result(
+                "unsupported",
+                "unsupported",
+                "No compressed W4A16 serving path is cataloged for this platform; choose BF16 expansion.",
+            )
+        published = (
+            m.key == "nemotron35-lightning"
+            and m.serving_runtime == "vllm"
+            and g.key
+            in {
+                "DGX_SPARK",
+                "H100",
+                "H200",
+                "A100",
+            }
+        )
+        return result(
+            "w4a16",
+            "recipe" if published else "estimated",
+            "Compressed weights, BF16 matmul; no FP4 peak claimed. "
+            + (
+                "NVIDIA vLLM 0.27.1 Lightning recipe (reviewed 2026-10-17); selected version and throughput remain unverified."
+                if published
+                else "Kernel availability and dequantization overhead are uncalibrated; capacity estimate only."
+            ),
+            "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4"
+            if published
+            else "",
+        )
+    return result(
+        "native",
+        "estimated",
+        "Native FP4 hardware capability; matching runtime kernel and measured utilization are still required.",
+    )
+
+
+def model_gpu_flops(g: GPU, m: Model, prec: str, phase: str = "decode") -> float:
+    execution = resolve_execution(g, m, prec)
+    if execution.status == "unsupported":
+        return 0.0
+    if execution.path == "expanded":
+        return g.bf16
     profile = m.quantization_profile(prec)
-    if profile is None or not profile.compute_precision_shares:
-        return gpu_flops(g, prec)
+    shares = m.compute_shares(prec, phase)
+    if profile is None or not shares:
+        return g.bf16 if execution.path == "w4a16" else gpu_flops(g, prec)
 
     denom = 0.0
-    for profile_prec, share in profile.compute_precision_shares.items():
+    for profile_prec, share in shares.items():
         share = max(float(share), 0.0)
         if share <= 0:
             continue
-        denom += share / max(gpu_flops(g, profile_prec), 1e-9)
+        rate = (
+            g.bf16
+            if execution.path == "w4a16" and profile_prec in {"mxfp4", "nvfp4"}
+            else gpu_flops(g, profile_prec)
+        )
+        denom += share / max(rate, 1e-9)
     return (1.0 / denom) if denom > 0 else gpu_flops(g, prec)
+
+
+def operator_compute_seconds(
+    g: GPU, m: Model, prec: str, linear_flops: float, attention_flops: float, phase: str = "decode"
+) -> float:
+    rate = model_gpu_flops(g, m, prec, phase)
+    if rate <= 0:
+        return math.inf
+    if m.execution_backend == "legacy":
+        return (linear_flops + attention_flops) / rate
+    # Attention/recurrent operators cannot inherit FP4 GEMM peaks from expert weights.
+    return linear_flops / rate + attention_flops / max(g.bf16, 1e-9)
 
 
 def normalize_dist(dist: list[int]) -> list[float]:
@@ -1175,6 +1282,8 @@ def compute_memory(
     eff: EfficiencyParams,
     spec: Optional[SpecRuntime] = None,
 ) -> Optional[MemoryResult]:
+    if resolve_execution(g, m, prec).status == "unsupported":
+        return None
     requested = g.mem * mu
     pp_fraction = _pp_peak_fraction(m, pp)
     weights = peak_stage_weight_bytes(m, prec, pp) / tp
@@ -1207,7 +1316,7 @@ def valid_strategies(
     prec: str,
     spec: Optional[SpecRuntime] = None,
 ) -> list[tuple[int, int, int]]:
-    if gpu_count <= 0:
+    if gpu_count <= 0 or resolve_execution(g, m, prec).status == "unsupported":
         return []
 
     result = []
@@ -1359,8 +1468,8 @@ def _moe_tail_multiplier(m: Model, eff: EfficiencyParams) -> float:
     return eff.moe_imbalance if m.is_moe else 1.0
 
 
-def _active_weight_bytes(m: Model, prec: str) -> float:
-    return m.active_weight_bytes(prec)
+def _active_weight_bytes(m: Model, prec: str, phase: str = "decode") -> float:
+    return m.active_weight_bytes(prec, phase)
 
 
 def _decode_step_time(
@@ -1415,7 +1524,10 @@ def _decode_step_time(
     # Callers pass ``extra_flops`` for the whole replica batch (realtime audio
     # charges per-request encoder work), so scale it to the microbatch as well.
     stage_extra_flops = max(extra_flops, 0.0) * mb / max(pr, 1)
-    ct = (flops + stage_extra_flops) / (model_gpu_flops(g, m, prec) * tp * eff.comp_eff)
+    multiplier = verify_positions if spec is not None else 1
+    ct = operator_compute_seconds(
+        g, m, prec, wf * multiplier, af * multiplier + stage_extra_flops
+    ) / (tp * eff.comp_eff)
 
     comm = communication_breakdown(m, tp, pp, mb * verify_positions, avg_seq, g, eff)
     # A decode iteration has a dependency barrier before these sequences can
@@ -1488,7 +1600,7 @@ def _compute_decode_core(
     extra_flops: float = 0.0,
     spec: Optional[SpecRuntime] = None,
 ) -> Optional[DecodeResult]:
-    if not context_supported(m, avg_in, avg_out):
+    if m.is_decision_model or not context_supported(m, avg_in, avg_out):
         return None
     mem = compute_memory(m, tp, pp, g, mu, profiled_non_kv_gb, prec, eff, spec)
     if mem is None:
@@ -1823,10 +1935,9 @@ def compute_prefill(
         # so neither pays a prompt-length drafter pass.
         ffn += 2 * spec.draft_active_params * pr * seq_len * pp_fraction
     att = _prefill_attention_work(m, pr, seq_len, pp)
-    tf = ffn + att
-    ct = tf / (model_gpu_flops(g, m, prec) * tp * eff.comp_eff)
+    ct = operator_compute_seconds(g, m, prec, ffn, att, "prefill") / (tp * eff.comp_eff)
 
-    aw = _active_weight_bytes(m, prec)
+    aw = _active_weight_bytes(m, prec, "prefill")
     if spec is not None:
         # Drafter weights are resident whenever speculation is on, and are
         # read at least once per prefill forward.
@@ -1976,7 +2087,7 @@ def compute_embedding(
     pp_fraction = _pp_peak_fraction(m, pp)
     ffn = 2 * m.active_params * pr * seq * pp_fraction
     att = _prefill_attention_work(m, pr, seq, pp, causal=False)
-    ct = (ffn + att) / (model_gpu_flops(g, m, prec) * max(tp, 1) * eff.comp_eff)
+    ct = operator_compute_seconds(g, m, prec, ffn, att, "prefill") / (max(tp, 1) * eff.comp_eff)
 
     aw = _active_weight_bytes(m, prec)
     mt = (aw * pp_fraction / max(tp, 1)) / (g.effective_bw * eff.bw_eff)
@@ -2048,7 +2159,7 @@ def compute_embedding_distribution(
         share * _prefill_attention_work(m, pr, seq, pp, causal=False)
         for share, seq, _bucket in _embedding_weighted_sequences(m, doc_dist, buckets)
     )
-    ct = (ffn + att) / (model_gpu_flops(g, m, prec) * max(tp, 1) * eff.comp_eff)
+    ct = operator_compute_seconds(g, m, prec, ffn, att, "prefill") / (max(tp, 1) * eff.comp_eff)
 
     aw = _active_weight_bytes(m, prec)
     mt = (aw * pp_fraction / max(tp, 1)) / (g.effective_bw * eff.bw_eff)
@@ -2137,7 +2248,7 @@ def compute_data(
     decode_eff: EfficiencyParams,
     spec: Optional[SpecRuntime] = None,
 ) -> Optional[DataResult]:
-    if not context_supported(m, in_len, out_len):
+    if m.is_decision_model or not context_supported(m, in_len, out_len):
         return None
     # One assignment owns one GPU pool and one memory reservation. Independent P/D
     # layouts would require two explicitly allocated pools; accepting them here would
@@ -2211,7 +2322,7 @@ def compute_data_capacity(
     decode_eff: EfficiencyParams,
     spec: Optional[SpecRuntime] = None,
 ) -> int:
-    if not context_supported(m, in_len, out_len):
+    if m.is_decision_model or not context_supported(m, in_len, out_len):
         return 0
     if prefill_strat != decode_strat:
         return 0
@@ -2476,6 +2587,7 @@ def _is_decode_pareto_model(model: Model) -> bool:
     return (
         getattr(model, "embedding_profile", None) is None
         and getattr(model, "realtime_profile", None) is None
+        and not model.is_decision_model
     )
 
 
@@ -2721,3 +2833,96 @@ def compute_stats_data(state) -> dict:
         "il": il,
         "ol": ol,
     }
+
+
+@dataclass(frozen=True)
+class DecisionResult:
+    rps: float
+    decisions_per_second: float
+    input_tps: float
+    service_time: float
+    max_batch: int
+    input_tokens: int
+    questions_per_request: int
+    options_per_question: int
+    output_tokens: int = 0
+
+
+def compute_decision(
+    m: Model,
+    strat: tuple[int, int, int],
+    bs: int,
+    seq_len: int,
+    g: GPU,
+    mu: float,
+    profiled_non_kv_gb: float,
+    prec: str,
+    eff: EfficiencyParams,
+    *,
+    questions_per_request: int = 1,
+    options_per_question: int = 4,
+) -> DecisionResult | None:
+    """One forward pass over the complete formatted input; never a decode loop.
+
+    Uses the existing prefill roofline and communication model. The work buffer
+    conservatively holds four BF16 activation planes plus FP32 linear recurrent state
+    per request on each rank. Fused attention is assumed (no materialized S²
+    scores). This is a capacity proxy requiring runtime calibration, not a vendor
+    benchmark. Multimodal encoder execution, tokenization and CPU heads are not
+    timed. No prefix-cache savings or speculative decoding are credited.
+    """
+    profile = m.decision_profile
+    if (
+        profile is None
+        or not 0 < seq_len <= profile.max_sequence_length
+        or bs < 1
+        or questions_per_request < 1
+        or options_per_question < 2
+    ):
+        return None
+    tp, pp, dp = strat
+    if min(tp, pp, dp) < 1:
+        return None
+    mem = compute_memory(m, tp, pp, g, mu, profiled_non_kv_gb, prec, eff)
+    if mem is None:
+        return None
+    scratch = (
+        4 * seq_len * max(m.hidden_size, m.num_heads * m.head_dim) * 2
+        + 2 * linear_attention_state_bytes(m, "bf16")
+        + 4 * questions_per_request * options_per_question
+    )
+    max_per_replica = max(0, int(mem.kv_budget / scratch))
+    batch_per_replica = math.ceil(bs / dp)
+    if batch_per_replica > max_per_replica:
+        return None
+    fraction = _pp_peak_fraction(m, pp)
+    ffn = 2 * m.active_params * batch_per_replica * seq_len * fraction
+    attention = _prefill_attention_work(
+        m, batch_per_replica, seq_len, pp, causal=profile.causal_attention
+    )
+    compute_s = (ffn + attention) / (model_gpu_flops(g, m, prec) * tp * eff.comp_eff)
+    weight_s = (_active_weight_bytes(m, prec) * fraction / tp) / (g.effective_bw * eff.bw_eff)
+    output_s = (
+        4
+        * questions_per_request
+        * options_per_question
+        * batch_per_replica
+        / (g.effective_bw * eff.bw_eff)
+    )
+    comm = communication_breakdown(m, tp, pp, batch_per_replica * seq_len, seq_len, g, eff)
+    seconds = (max(compute_s, weight_s) + output_s + comm.total) * (
+        1 + eff.overhead * 1.2 + fixed_paged_oh(seq_len, eff, 0.20)
+    )
+    if not math.isfinite(seconds) or seconds <= 0:
+        return None
+    rps = bs / seconds
+    return DecisionResult(
+        rps,
+        rps * questions_per_request,
+        rps * seq_len,
+        seconds,
+        max_per_replica * dp,
+        seq_len,
+        questions_per_request,
+        options_per_question,
+    )

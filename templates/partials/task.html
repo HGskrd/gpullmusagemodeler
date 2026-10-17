@@ -2,7 +2,12 @@
 <div class="panel">
   {% set is_embedding_workload = state.mode in ('embedding', 'embedquality') %}
   <h2>{{ 'Embedding profile' if is_embedding_workload else 'Task profile' }}</h2>
-  {% if is_embedding_workload %}
+  {% if state.mode == 'decision' %}
+  <p class="T">One question · four options · zero generated tokens. Include state, question and options in the input count. Estimates need runtime calibration.</p>
+  <label class="T" for="decision-input-{{ panel }}">Formatted input tokens: {{ state.task_il|fmt_num }}</label>
+  <input id="decision-input-{{ panel }}" aria-label="Decision input tokens" type="range" min="6" max="18" value="{{ state.task_il|log2int }}" name="value"
+         hx-post="/task/length" hx-target="#main-content" hx-trigger="change" hx-vals='{"panel":"{{ panel }}","kind":"in"}' />
+  {% elif is_embedding_workload %}
   {% set dist = state.embedding_doc_dist %}
   {% set buckets = EMBEDDING_DOC_BUCKETS %}
   {% set norm = normalize_dist(dist) %}

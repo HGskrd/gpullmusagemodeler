@@ -1,7 +1,7 @@
 """GPU types, hardware catalog, researched TCO, and picker cards."""
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .specs import VENDOR_LABELS
 
@@ -29,6 +29,9 @@ class GPU:
     default_tco_per_gpu_hour: float = (
         0.0  # researched owned-hardware TCO, USD per committed GPU-hour
     )
+
+    system_memory_gb: float | None = None
+    price_note: str = "Planning estimate; replace with your hardware quote."
 
     @property
     def mem_gb(self) -> float:
@@ -84,7 +87,7 @@ GPUS: dict[str, GPU] = {
     # Public NVIDIA product pages often quote sparse tensor throughput; use dense rates for planner math.
     # Ampere GPUs without native FP8 use BF16/FP16 tensor throughput for the FP8 planner path.
     "A100": GPU("A100", "A100 80GB SXM", "nv", 80e9, 2.039e12, 312e12, 312e12, 600e9, 8),
-    "A100_40": GPU("A100_40", "A100 40GB PCIe", "nv", 40e9, 1.555e12, 156e12, 156e12, 64e9, 8),
+    "A100_40": GPU("A100_40", "A100 40GB PCIe", "nv", 40e9, 1.555e12, 312e12, 312e12, 64e9, 8),
     "A10": GPU("A10", "A10 24GB PCIe", "nv", 24e9, 600e9, 125e12, 125e12, 64e9, 8),
     "H100": GPU("H100", "H100 80GB SXM", "nv", 80e9, 3.35e12, 989e12, 1979e12, 900e9, 8),
     "H200": GPU("H200", "H200 141GB SXM", "nv", 141e9, 4.8e12, 989e12, 1979e12, 900e9, 8),
@@ -96,8 +99,8 @@ GPUS: dict[str, GPU] = {
         "nv",
         96e9,
         1.597e12,
-        1e15,
-        2e15,
+        500000000000000.0,
+        1000000000000000.0,
         128e9,
         8,
     ),
@@ -107,8 +110,8 @@ GPUS: dict[str, GPU] = {
         "nv",
         96e9,
         1.792e12,
-        1e15,
-        2e15,
+        503800000000000.0,
+        1007600000000000.0,
         128e9,
         4,
     ),
@@ -118,8 +121,8 @@ GPUS: dict[str, GPU] = {
         "nv",
         72e9,
         1.344e12,
-        535.5e12,
-        1071e12,
+        267750000000000.0,
+        535500000000000.0,
         128e9,
         4,
     ),
@@ -135,12 +138,38 @@ GPUS: dict[str, GPU] = {
         4,
     ),
     "RTX5090": GPU(
-        "RTX5090", "GeForce RTX 5090 32GB", "nv", 32e9, 1.792e12, 838e12, 1676e12, 128e9, 1
+        "RTX5090",
+        "GeForce RTX 5090 32GB",
+        "nv",
+        32e9,
+        1.792e12,
+        209500000000000.0,
+        419000000000000.0,
+        128e9,
+        1,
     ),
     "RTX4090": GPU(
-        "RTX4090", "GeForce RTX 4090 24GB", "nv", 24e9, 1.008e12, 330.25e12, 660.5e12, 64e9, 1
+        "RTX4090",
+        "GeForce RTX 4090 24GB",
+        "nv",
+        24e9,
+        1.008e12,
+        165150000000000.0,
+        330300000000000.0,
+        64e9,
+        1,
     ),
-    "RTX3090": GPU("RTX3090", "GeForce RTX 3090 24GB", "nv", 24e9, 936e9, 142e12, 142e12, 64e9, 1),
+    "RTX3090": GPU(
+        "RTX3090",
+        "GeForce RTX 3090 24GB",
+        "nv",
+        24e9,
+        936e9,
+        71150000000000.0,
+        71150000000000.0,
+        64e9,
+        1,
+    ),
     "DGX_SPARK": GPU(
         "DGX_SPARK", "DGX Spark GB10 128GB", "nv", 128e9, 273e9, 125e12, 250e12, 25e9, 1
     ),
@@ -422,12 +451,139 @@ GPUS: dict[str, GPU] = {
     ),
 }
 
+# Purchasable variants added 2026-10-17. Primary sources and proxy notes live
+# beside the chooser metadata in hardware_picker.py and docs/hardware-catalog.md.
+GPUS.update(
+    {
+        "A100_80_PCIE": GPU(
+            "A100_80_PCIE",
+            "A100 80GB PCIe",
+            "nv",
+            80e9,
+            1.935e12,
+            312e12,
+            312e12,
+            64e9,
+            1,
+            tdp_watts=300,
+        ),
+        "A100_40_SXM": GPU(
+            "A100_40_SXM",
+            "A100 40GB SXM",
+            "nv",
+            40e9,
+            1.555e12,
+            312e12,
+            312e12,
+            600e9,
+            8,
+            tdp_watts=400,
+        ),
+        "H100_PCIE": GPU(
+            "H100_PCIE",
+            "H100 80GB PCIe",
+            "nv",
+            80e9,
+            2e12,
+            756e12,
+            1513e12,
+            128e9,
+            1,
+            tdp_watts=350,
+        ),
+        "H100_NVL": GPU(
+            "H100_NVL",
+            "H100 NVL 94GB PCIe",
+            "nv",
+            94e9,
+            3.9e12,
+            835.5e12,
+            1670.5e12,
+            600e9,
+            2,
+            tdp_watts=400,
+        ),
+        "H200_NVL": GPU(
+            "H200_NVL",
+            "H200 NVL 141GB PCIe",
+            "nv",
+            141e9,
+            4.8e12,
+            835.5e12,
+            1670.5e12,
+            900e9,
+            4,
+            tdp_watts=600,
+        ),
+        "RTX3060_12": GPU(
+            "RTX3060_12",
+            "GeForce RTX 3060 12GB",
+            "nv",
+            12e9,
+            360e9,
+            25500000000000.0,
+            25500000000000.0,
+            32e9,
+            1,
+            tdp_watts=170,
+        ),
+        "RTX4060TI_16": GPU(
+            "RTX4060TI_16",
+            "GeForce RTX 4060 Ti 16GB",
+            "nv",
+            16e9,
+            288e9,
+            44125000000000.0,
+            88250000000000.0,
+            32e9,
+            1,
+            tdp_watts=165,
+        ),
+        "RTX5060TI_16": GPU(
+            "RTX5060TI_16",
+            "GeForce RTX 5060 Ti 16GB",
+            "nv",
+            16e9,
+            448e9,
+            47437500000000.0,
+            94875000000000.0,
+            64e9,
+            1,
+            fp4=379500000000000.0,
+            tdp_watts=180,
+        ),
+        "RYZEN_AI_MAX_395_128": GPU(
+            "RYZEN_AI_MAX_395_128",
+            "Ryzen AI Max+ 395 128GB system (96GB GPU budget)",
+            "amd",
+            96e9,
+            256e9,
+            29.7e12,
+            29.7e12,
+            10e9,
+            1,
+            planner_bw=200e9,
+            tdp_watts=120,
+            system_memory_gb=128,
+        ),
+    }
+)
+# Memory tiers retain the same GPU bin and bandwidth. Never reuse an entry key.
+for _key, _parent, _name, _mem in (
+    ("MAC_STUDIO_M5_MAX_64", "MAC_STUDIO_M5_MAX", "Mac Studio M5 Max 64GB", 64e9),
+    ("MAC_STUDIO_M5_ULTRA_256", "MAC_STUDIO_M5_ULTRA", "Mac Studio M5 Ultra 256GB", 256e9),
+    ("MAC_STUDIO_M4_MAX_64", "MAC_STUDIO_M4_MAX", "Mac Studio M4 Max 64GB", 64e9),
+    ("MAC_STUDIO_M3_ULTRA_256", "MAC_STUDIO_M3_ULTRA", "Mac Studio M3 Ultra 256GB", 256e9),
+    ("MAC_MINI_M4_PRO_48", "MAC_MINI_M4_PRO", "Mac mini M4 Pro 48GB", 48e9),
+):
+    GPUS[_key] = replace(GPUS[_parent], key=_key, name=_name, mem=_mem)
+
 GPU_FP4_FLOPS = {
     # Native dense FP4 tensor paths. Sparse marketing figures are intentionally not used.
-    "RTXPRO6000_BSE": 4e15,
-    "RTXPRO6000_BW_WS": 4e15,
-    "RTXPRO5000_BW_72": 2142e12,
-    "RTX5090": 3352e12,
+    "RTXPRO6000_BSE": 2000000000000000.0,
+    "RTXPRO6000_BW_WS": 2015200000000000.0,
+    "RTXPRO5000_BW_72": 1071000000000000.0,
+    "RTX5090": 1676000000000000.0,
     "DGX_SPARK": 500e12,
     "GB200": 10e15,
     "B200": 9e15,
@@ -508,6 +664,9 @@ GPU_TDP_WATTS = {
     # Apple does not publish whole-system peak draw for these configurations.
     "MAC_STUDIO_M5_MAX": 0,
     "MAC_STUDIO_M5_ULTRA": 0,
+    "MAC_STUDIO_M4_MAX_64": 270,
+    "MAC_STUDIO_M3_ULTRA_256": 480,
+    "MAC_MINI_M4_PRO_48": 140,
 }
 for _k, _w in GPU_TDP_WATTS.items():
     if _k in GPUS:
@@ -588,8 +747,23 @@ GPU_TCO_PRICE_USD: dict[str, float] = {
     "MAC_MINI_M4_PRO": 2_199.0,
     "MAC_STUDIO_M4_MAX": 3_499.0,
     "MAC_STUDIO_M3_ULTRA": 9_499.0,
-    "MAC_STUDIO_M5_MAX": 2_499.0,  # launch starting price; max-memory price unpublished
-    "MAC_STUDIO_M5_ULTRA": 5_499.0,  # launch starting price; 512GB price unpublished
+    # No configuration-matched quote: do not use the launch starting prices.
+    "MAC_STUDIO_M5_MAX": 0.0,
+    "MAC_STUDIO_M5_ULTRA": 0.0,
+    "A100_80_PCIE": 0.0,
+    "A100_40_SXM": 0.0,
+    "H100_PCIE": 0.0,
+    "H100_NVL": 0.0,
+    "H200_NVL": 0.0,
+    "RTX3060_12": 0.0,
+    "RTX4060TI_16": 0.0,
+    "RTX5060TI_16": 0.0,
+    "RYZEN_AI_MAX_395_128": 0.0,
+    "MAC_STUDIO_M5_MAX_64": 0.0,
+    "MAC_STUDIO_M5_ULTRA_256": 0.0,
+    "MAC_STUDIO_M4_MAX_64": 0.0,
+    "MAC_STUDIO_M3_ULTRA_256": 0.0,
+    "MAC_MINI_M4_PRO_48": 0.0,
 }
 
 GPU_TCO_COMPLETE_SYSTEMS = frozenset(
@@ -652,6 +826,8 @@ GPU_TCO_PRICE_SOURCES = {
 
 def _researched_gpu_tco_per_hour(gpu_key: str) -> float:
     price = GPU_TCO_PRICE_USD[gpu_key]
+    if price <= 0:
+        return 0.0  # An unknown acquisition quote is not an energy-only TCO.
     allocated_capex = (
         price if gpu_key in GPU_TCO_COMPLETE_SYSTEMS else price * GPU_TCO_BOARD_INFRA_UPLIFT
     )
@@ -863,7 +1039,7 @@ GPU_CARDS: list[GPUCard] = [
         "System-only profile for HGX/DGX B200 class servers. Pool sizes snap to multiples of 8.",
     ),
     GPUCard(
-        "H200 SXM/PCIe",
+        "H200 SXM",
         "NVIDIA",
         "Hopper",
         "141 GB HBM3e",
@@ -872,7 +1048,7 @@ GPU_CARDS: list[GPUCard] = [
         "Planner uses the calibrated H200 141 GB SXM profile.",
     ),
     GPUCard(
-        "H100 SXM/PCIe",
+        "H100 SXM",
         "NVIDIA",
         "Hopper",
         "80 GB HBM3",
@@ -1116,7 +1292,7 @@ GPU_CARDS: list[GPUCard] = [
         "MI250X",
         "AMD",
         "CDNA 2",
-        "64 GB HBM2e",
+        "128 GB HBM2e / module (2 × 64 GB GCDs)",
         "General-purpose HPC and AI inference",
         (GPUPlannerOption("Add", "MI250X"),),
         "Planner models the full MI250X accelerator at 128GB; the 64GB figure commonly refers to one GCD.",
@@ -1226,7 +1402,7 @@ GPU_CARDS: list[GPUCard] = [
         "Gaudi 3",
         "Intel",
         "Gaudi",
-        "8.2 TB rack-scale HBM",
+        "128 GB HBM2e / accelerator",
         "Scalable enterprise/cloud inference, up to 64 accelerators per rack",
         (GPUPlannerOption("Add", "Gaudi3"),),
         "Uses Intel's public 128GB/3.7TB/s Gaudi 3 card specs with a provisional BF16/FP8 roofline.",
@@ -1333,3 +1509,41 @@ GPU_CARDS: list[GPUCard] = [
         "Kept outside the main NVIDIA accelerator list. Dense BF16/FP8 rooflines are derived from NVIDIA's published sparse FP4 figure.",
     ),
 ]
+
+
+for _key, _architecture in (
+    ("A100_80_PCIE", "Ampere"),
+    ("A100_40_SXM", "Ampere"),
+    ("H100_PCIE", "Hopper"),
+    ("H100_NVL", "Hopper"),
+    ("H200_NVL", "Hopper"),
+    ("RTX3060_12", "Ampere"),
+    ("RTX4060TI_16", "Ada Lovelace"),
+    ("RTX5060TI_16", "Blackwell"),
+    ("RYZEN_AI_MAX_395_128", "RDNA 3.5 · Radeon 8060S"),
+    ("MAC_STUDIO_M5_MAX_64", "Apple silicon"),
+    ("MAC_STUDIO_M5_ULTRA_256", "Apple silicon"),
+    ("MAC_STUDIO_M4_MAX_64", "Apple silicon"),
+    ("MAC_STUDIO_M3_ULTRA_256", "Apple silicon"),
+    ("MAC_MINI_M4_PRO_48", "Apple silicon"),
+):
+    _gpu = GPUS[_key]
+    GPU_CARDS.append(
+        GPUCard(
+            _gpu.name,
+            _gpu.vendor_label,
+            _architecture,
+            f"{_gpu.mem_gb:g} GB",
+            "Owned-hardware inference planning",
+            (GPUPlannerOption("Select configuration", _key),),
+        )
+    )
+
+# Quote confidence and unified-memory capacity are independent of pool size.
+for _gpu in GPUS.values():
+    if _gpu.vendor == "apple" or _gpu.key in {"DGX_SPARK", "JETSON_AGX_THOR"}:
+        _gpu.system_memory_gb = _gpu.mem_gb
+    if GPU_TCO_PRICE_USD[_gpu.key] <= 0:
+        _gpu.price_note = (
+            "Quote required for this configuration. Cost is excluded until you enter TCO."
+        )

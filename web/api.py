@@ -16,14 +16,15 @@ from calc import (
 from data import (
     GPUS,
     MODEL_KINDS,
-    gpu_cards_by_vendor,
     models_by_kind,
 )
+from data.hardware_picker import picker_vendors
 from placement import (
     resolve_deployment,
 )
 from presentation.charts import (
     chart_asr_quality,
+    chart_decision_throughput,
     chart_embedding_quality,
     chart_processing_pareto,
     chart_realtime_capacity,
@@ -99,6 +100,12 @@ def _build_chart_payload(sa: PlannerState, sb: PlannerState | None) -> dict:
             datasets += _annotate_chart_spec(sb, chart_processing_pareto(sb, batch_sizes, " (B)"))
         return {"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]}
 
+    if mode == "decision":
+        datasets = chart_decision_throughput(sa)
+        if sb:
+            datasets += chart_decision_throughput(sb, " (B)")
+        return {"type": "line", "datasets": datasets, "mode": mode, "x_max": 256}
+
     if mode == "asrquality":
         datasets = chart_asr_quality(sa)
         if sb:
@@ -168,7 +175,7 @@ def picker_gpu():
     return render_template(
         "partials/gpu_picker.html",
         panel=request.args.get("panel", "A"),
-        gpu_cards_by_vendor=gpu_cards_by_vendor(),
+        picker_vendors=picker_vendors(),
         GPUS=GPUS,
     )
 

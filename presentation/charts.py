@@ -19,6 +19,7 @@ from calc import (
     _iter_resolved_models,
     avg_dist,
     compute_data,
+    compute_decision,
     compute_decode,
     compute_embedding_distribution,
     compute_realtime_capacity,
@@ -50,6 +51,7 @@ from data import (
     Model,
 )
 from deployment import Deployment
+from state import PlannerState
 
 
 def _style(model: Model, is_b: bool) -> dict:
@@ -75,7 +77,7 @@ def _fleet_hardware_label(deployed: list[tuple]) -> str:
     """Summarize the hardware behind aggregate processing series."""
     hardware: dict[str, int] = {}
     for am, gpu in deployed:
-        if getattr(am.model, "embedding_profile", None) is not None:
+        if am.model.is_decision_model or getattr(am.model, "embedding_profile", None) is not None:
             continue
         hardware[gpu.name] = hardware.get(gpu.name, 0) + am.gpu_count
     return " + ".join(f"{count}× {name}" for name, count in hardware.items())
@@ -263,7 +265,7 @@ def chart_data_processing(
 
     for am, gpu in _iter_resolved_models(state):
         model = am.model
-        if getattr(model, "embedding_profile", None) is not None:
+        if model.is_decision_model or getattr(model, "embedding_profile", None) is not None:
             continue
         pts = []
         for bs in batch_sizes:
@@ -299,7 +301,7 @@ def chart_data_processing(
         total = 0
         for am, gpu in _iter_resolved_models(state):
             model = am.model
-            if getattr(model, "embedding_profile", None) is not None:
+            if model.is_decision_model or getattr(model, "embedding_profile", None) is not None:
                 continue
             result = compute_data(
                 model,
@@ -523,7 +525,7 @@ def chart_aggregate(
         total = 0
         for am in deployed:
             model = am.model
-            if getattr(model, "embedding_profile", None) is not None:
+            if model.is_decision_model or getattr(model, "embedding_profile", None) is not None:
                 continue
             gpu = am.gpu_spec
             if gpu is None:
@@ -564,7 +566,7 @@ def chart_aggregate(
 
     for am in deployed:
         model = am.model
-        if getattr(model, "embedding_profile", None) is not None:
+        if model.is_decision_model or getattr(model, "embedding_profile", None) is not None:
             continue
         gpu = am.gpu_spec
         if gpu is None:
@@ -696,7 +698,7 @@ def chart_user_experience(state, panel_suffix: str = "") -> list[dict]:
 
     for am, gpu in _iter_resolved_models(state):
         model = am.model
-        if getattr(model, "embedding_profile", None) is not None:
+        if model.is_decision_model or getattr(model, "embedding_profile", None) is not None:
             continue
         points = _user_exp_curve(
             model,
@@ -1001,7 +1003,10 @@ def chart_processing_pareto(
         for bs in batch_sizes:
             total_tps = 0
             for am, gpu in deployed:
-                if getattr(am.model, "embedding_profile", None) is not None:
+                if (
+                    am.model.is_decision_model
+                    or getattr(am.model, "embedding_profile", None) is not None
+                ):
                     continue
                 result = compute_data(
                     am.model,
@@ -1058,7 +1063,7 @@ def compute_user_exp_table(state) -> list[dict]:
     rows = []
     for am, gpu in _iter_resolved_models(state):
         model = am.model
-        if getattr(model, "embedding_profile", None) is not None:
+        if model.is_decision_model or getattr(model, "embedding_profile", None) is not None:
             continue
         points = _user_exp_curve(
             model,
@@ -1103,3 +1108,45 @@ def compute_user_exp_table(state) -> list[dict]:
             }
         )
     return rows
+
+
+def chart_decision_throughput(state: PlannerState, suffix: str = "") -> list[dict]:
+    """Single-question/four-option text workload; no cross-model quality ranking."""
+    datasets = []
+    for am, gpu in _iter_resolved_models(state):
+        model = am.model
+        if not model.is_decision_model:
+            continue
+        points = []
+        for bs in (1, 2, 4, 8, 16, 32, 64, 128, 256):
+            result = compute_decision(
+                model,
+                (am.prefill_tp, am.prefill_pp, am.prefill_dp),
+                bs,
+                state.task_il,
+                gpu,
+                state.mu,
+                state.profiled_non_kv_gb,
+                am.prec,
+                state.prefill_efficiency,
+            )
+            points.append(
+                {
+                    "x": bs,
+                    "y": result.decisions_per_second if result else None,
+                    "rps": result.rps if result else None,
+                    "latency_ms": result.service_time * 1000 if result else None,
+                    "input_tokens": state.task_il,
+                    "output_tokens": 0,
+                }
+            )
+        datasets.append(
+            {
+                "label": model.name + suffix,
+                "hardware": _hardware_label(am, gpu),
+                "color": model.color,
+                "borderColor": model.color,
+                "data": points,
+            }
+        )
+    return datasets

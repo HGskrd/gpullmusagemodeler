@@ -176,3 +176,23 @@ def _tiny_aya_model(key: str, name: str, color: str) -> Model:
         capabilities_override=frozenset(),
         max_context_tokens=8192,
     )
+
+
+EMBEDDING_QUALITY_SOURCES["pplx-embed-v2-late-0.6b"] = (
+    "Placeholder: vendor multimodal benchmark protocol is not comparable to catalog text retrieval aggregates; no score cross-walk."
+)
+PUBLISHED_EMBEDDING_QUALITY["pplx-embed-v2-late-0.6b"] = 0.5
+
+EMBEDDING_QUALITY_SOURCES["pplx-embed-v2-late-9b"] = (
+    "Placeholder: vendor multimodal benchmark protocol is not comparable to catalog text retrieval aggregates; no score cross-walk."
+)
+PUBLISHED_EMBEDDING_QUALITY["pplx-embed-v2-late-9b"] = 0.5
+
+EMBEDDING_QUALITY_SOURCES["embeddinggemma-2"] = (
+    "Placeholder: vendor multimodal benchmark protocol is not comparable to catalog text retrieval aggregates; no score cross-walk."
+)
+PUBLISHED_EMBEDDING_QUALITY["embeddinggemma-2"] = 0.5
+
+EMBEDDING_QUALITY_PLACEHOLDER = EMBEDDING_QUALITY_PLACEHOLDER | frozenset(
+    {"embeddinggemma-2", "pplx-embed-v2-late-9b", "pplx-embed-v2-late-0.6b"}
+)

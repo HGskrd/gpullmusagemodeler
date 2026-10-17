@@ -36,10 +36,15 @@ from data import (
     SCALE_MODELS,
     USE_CASE_PREFIX_HIT_RATES,
     Model,
+    artifact_precision,
+    configured_model,
+    default_artifact_id,
     normalize_gpu_count,
     normalize_precision,
     normalize_quality_domain,
     normalize_quality_weights,
+    validate_runtime,
+    validate_settings,
 )
 
 _uid_counter = 0
@@ -65,6 +70,7 @@ VISIBLE_PLOT_MODES = (
     ("processingpareto", "Processing Pareto"),
     ("embedquality", "Embedding Quality"),
     ("asrquality", "ASR Quality"),
+    ("decision", "Decision throughput"),
 )
 DEFAULT_PLOT_MODE = VISIBLE_PLOT_MODES[0][0]
 LEGACY_PLOT_MODE_REDIRECTS = {"realtime": "asrquality", "embedding": "embedquality"}
@@ -300,9 +306,21 @@ class ModelAssignment:
     # declared probe concurrency; it must not be rewritten to a profile default.
     spec_method: str = "off"
     spec_k: int = 0
+    artifact_id: str = ""
+    execution_backend: str = "legacy"
+    kv_precision: str = "legacy"
+    recurrent_precision: str = "legacy"
+    serving_runtime: str = "generic"
+    runtime_version: str = ""
 
     def __post_init__(self):
         self.prec = normalize_precision(self.prec)
+        model = MODELS[self.model_key]
+        self.artifact_id = self.artifact_id or default_artifact_id(model, self.prec)
+        if artifact_precision(model, self.artifact_id) != self.prec:
+            raise ValueError("Artifact precision does not match assignment precision.")
+        validate_settings(self.execution_backend, self.kv_precision, self.recurrent_precision)
+        validate_runtime(self.serving_runtime, self.runtime_version)
         if self.prefill_tp is None:
             self.prefill_tp = self.tp
         if self.prefill_pp is None:
@@ -312,7 +330,15 @@ class ModelAssignment:
 
     @property
     def model(self) -> Model:
-        return MODELS[self.model_key]
+        return configured_model(
+            self.model_key,
+            self.artifact_id,
+            self.execution_backend,
+            self.kv_precision,
+            self.recurrent_precision,
+            self.serving_runtime,
+            self.runtime_version,
+        )
 
     @property
     def gpu_spec(self) -> Optional[GPU]:
@@ -445,7 +471,11 @@ class PlannerState:
             allowed = {"off"}
             if model is not None:
                 allowed.update(p.method for p in model.speculative_profiles)
-                if not model.is_asr_model and not model.is_embedding_model:
+                if (
+                    not model.is_asr_model
+                    and not model.is_embedding_model
+                    and not model.is_decision_model
+                ):
                     allowed.add("ngram")
             am.spec_method = str(getattr(am, "spec_method", "off") or "off")
             if am.spec_method not in allowed:
@@ -1472,6 +1502,34 @@ def set_model_prec(state: PlannerState, model_uid: int, prec: str):
     if am is None:
         return
     am.prec = normalize_precision(prec)
+    am.artifact_id = default_artifact_id(MODELS[am.model_key], am.prec)
+    return am
+
+
+@bumps_revision
+def set_model_artifact(
+    state: PlannerState,
+    model_uid: int,
+    artifact_id: str,
+    execution: str = "auto",
+    kv: str = "auto",
+    recurrent: str = "auto",
+    serving_runtime: str = "generic",
+    runtime_version: str = "",
+):
+    am = state.find_model(model_uid)
+    if am is None:
+        raise ValueError("Model assignment not found.")
+    precision = artifact_precision(MODELS[am.model_key], artifact_id)
+    validate_settings(execution, kv, recurrent)
+    validate_runtime(serving_runtime, runtime_version)
+    am.artifact_id = artifact_id
+    am.prec = precision
+    am.execution_backend = execution
+    am.kv_precision = kv
+    am.recurrent_precision = recurrent
+    am.serving_runtime = serving_runtime
+    am.runtime_version = runtime_version
     return am
 
 
@@ -1490,7 +1548,7 @@ def set_model_spec(state: PlannerState, model_uid: int, method: str, spec_k: int
         profile_methods = {getattr(p, "method", "") for p in profiles}
         if method == "ngram":
             # ngram needs no draft weights: available on any plain text model.
-            if model.is_asr_model or model.is_embedding_model:
+            if model.is_asr_model or model.is_embedding_model or model.is_decision_model:
                 method = "off"
         elif method not in profile_methods:
             method = "off"
@@ -1570,7 +1628,7 @@ def set_model_strat(
     if gp is None:
         return
 
-    model = MODELS[am.model_key]
+    model = am.model
     spec = resolve_spec_runtime(model, am.spec_method, am.spec_k, state.spec_acceptance, am.prec)
     valid = valid_strategies(
         model,

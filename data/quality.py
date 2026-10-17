@@ -682,7 +682,27 @@ MODEL_DOMAIN_QUALITY_ANCHORS = {
 # Text models whose quality anchor is intentionally not AA-sourced. Membership must be
 # justified inline; tests assert every other text model carries an AA_MODEL_METRICS row so
 # a new catalog entry cannot silently inherit the quality=0.5 / full-confidence defaults.
-AA_QUALITY_PLACEHOLDER: frozenset[str] = frozenset()
+# October additions have pinned vendor evidence but no directly comparable AA
+# scores. Their model cards explicitly mark quality/efficiency uncalibrated and
+# set quality_confidence=0; do not invent independent benchmark anchors.
+AA_QUALITY_PLACEHOLDER: frozenset[str] = frozenset(
+    {
+        "mimo-v2.6-distill-qwen-9b",
+        "mimo-v2.6-pro-rl",
+        "mellum2.1-12b-a2.5b-thinking",
+        "beam-1.0-501b-a23b",
+        "mimo-v2.6-flash-rl",
+        "hy-memory-30b-a3b",
+        "ternary-bonsai-2-27b",
+        "ternary-bonsai-2-4b",
+        "ternary-bonsai-2-9b",
+        "nemotron35-super-vl",
+        "ternary-bonsai-2-2b",
+        "muse-spark-open-816b-a42b",
+        "nemotron35-bolt-74b",
+        "lfm2.5-24b-a2b",
+    }
+)
 
 
 def text_models_missing_quality_anchors() -> list[str]:
@@ -692,6 +712,7 @@ def text_models_missing_quality_anchors() -> list[str]:
         for key, model in MODELS.items()
         if model.embedding_profile is None
         and not model.is_asr_model
+        and not model.is_decision_model
         and key not in AA_MODEL_METRICS
         and key not in AA_QUALITY_PLACEHOLDER
     )

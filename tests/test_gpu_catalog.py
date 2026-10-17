@@ -67,7 +67,10 @@ class GPUCatalogTests(unittest.TestCase):
 
         for key, gpu in GPUS.items():
             with self.subTest(gpu=key):
-                self.assertGreater(GPU_TCO_DEFAULTS[key], 0.0)
+                if GPU_TCO_PRICE_USD[key] > 0:
+                    self.assertGreater(GPU_TCO_DEFAULTS[key], 0.0)
+                else:
+                    self.assertEqual(GPU_TCO_DEFAULTS[key], 0.0)
                 self.assertEqual(gpu.default_tco_per_gpu_hour, GPU_TCO_DEFAULTS[key])
 
     def test_new_gpu_pools_prefill_researched_tco(self):

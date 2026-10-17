@@ -23,8 +23,8 @@
       {% if am.gpu_count > 0 %}
         {% set m = MODELS[am.model_key] %}
         {% set is_embedding_workload = state.mode in ('embedding', 'embedquality') %}
-        {% set is_prefill_phase = state.mode == 'data' or is_embedding_workload %}
-        {% set phase = 'E' if is_embedding_workload and m.is_embedding_model else ('P' if is_prefill_phase else 'D') %}
+        {% set is_prefill_phase = state.mode in ('data', 'decision') or is_embedding_workload %}
+        {% set phase = 'F' if m.is_decision_model else 'E' if is_embedding_workload and m.is_embedding_model else ('P' if is_prefill_phase else 'D') %}
         {% set phase_tp = am.prefill_tp if is_prefill_phase else am.tp %}
         {% set phase_pp = am.prefill_pp if is_prefill_phase else am.pp %}
         {% set phase_dp = am.prefill_dp if is_prefill_phase else am.dp %}
