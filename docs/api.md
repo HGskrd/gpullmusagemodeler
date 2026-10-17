@@ -74,6 +74,14 @@ all allowed fields and bounds.
   `cost_per_gpu_hour` overrides catalog TCO in USD per accelerator-hour;
   `country` defaults to `FR` for carbon estimates. GPU units and count increments
   follow the catalog, including rack-scale entries.
+- Scenario versions 1 and 2 are accepted; exports use version 2. Version 1
+  assignments preserve their legacy execution/cache assumptions. Version 2 also
+  persists `artifact_id`, `execution_backend` (`legacy`, `auto`, `native`, `w4a16`,
+  `expanded`), `serving_runtime` (`generic`, `vllm`, `sglang`, `trtllm`), optional
+  `runtime_version`, `kv_precision` (`legacy`, `auto`, `bf16`, `fp8`) and
+  `recurrent_precision` (`legacy`, `auto`, `bf16`, `fp32`). Artifact IDs come from
+  each model's `artifacts` catalog. Unknown or mismatched IDs are rejected.
+  Calculation diagnostics include resolved execution and weight-storage quantities.
 - Assignments require `model_key`, `gpu_uid`, `gpu_count` and `prec`. The pool
   reference must exist in the same panel. `gpu_count: 0` keeps a parked model.
   Optional `tp`, `pp`, `dp` and `prefill_tp`, `prefill_pp`, `prefill_dp` request

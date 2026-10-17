@@ -2,6 +2,42 @@
 
 A Flask web application for planning and modeling multi-model LLM deployments across GPUs and AI accelerators. It lets you configure accelerator pools, LLM workloads, and traffic distributions to project infrastructure costs and throughput.
 
+## Artifacts and execution formats
+
+Model cards select a checkpoint artifact by pinned repository/revision, with separate
+choices for serving runtime/version, execution backend, attention KV, and recurrent
+state. The picker includes compatibility casts even when they are the same size as,
+or larger than, the native release. Unpinned conversions remain explicit estimates.
+The API catalog exposes the same artifact IDs, format policies, provenance, and
+separate storage/traffic/compute/runtime evidence.
+
+Scenario exports use version 2. Version 1 imports keep their precision, topology,
+speculation and legacy calculation/cache assumptions; selecting an artifact opts
+into the current model. Version 2 persists `artifact_id`, `execution_backend`,
+`serving_runtime`, `runtime_version`, `kv_precision`, and `recurrent_precision`,
+while retaining `prec` for compatibility and validating that it matches the artifact.
+
+Checkpoint tensor bytes, GPU-resident weights, host tables and BF16 expansion are
+reported separately. Loading footprint is a lower bound; loader workspace and kernel
+repacking buffers are unmeasured. Existing non-KV runtime reservations still apply.
+Active MoE traffic uses the captured mixed-operator shares (or the existing geometry
+override), not the resident checkpoint average. These traffic and throughput values
+are estimates. Phase-specific format inventories are not available: different
+prefill-active geometry is conservatively charged at BF16. Attention/recurrent work
+is charged at BF16 throughput rather than FP4 expert-GEMM peak.
+
+Auto resolves FP4 hardware capability separately from execution. W4A16 retains
+compressed weights and charges four-bit operators at BF16 matmul throughput; no
+fixed FP4 fallback speedup is asserted. Kernel availability/dequantization overhead
+still needs calibration. The [NVIDIA Lightning vLLM recipe](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4)
+(reviewed 2026-10-17, documented vLLM 0.27.1) selects W4A16 on DGX Spark/Hopper/Ampere;
+a recorded runtime version is not a validation of that installation. Other runtime
+paths are marked estimates, and explicitly unsupported native FP4 choices have no
+capacity. Generic recurrent state defaults to conservative FP32 with BF16 convolution
+buffers, independent of KV; validate the actual runtime. Architectural fixed mixed
+cache layouts remain authoritative. DeepSeek V4 NVFP4 cast footprints retain the
+source-size lower bound until converted scale storage is captured, with a fit warning.
+
 ## Accuracy and Scope
 
 This project is a closed-form capacity estimator, not a request-level simulator. It combines published hardware rooflines and model architecture metadata with explicit efficiency, runtime-memory, batching, topology, prefix-cache, and workload-shape assumptions. Results are most useful for comparing scenarios and identifying capacity constraints; they are not a substitute for benchmarking the exact model, quantization, serving runtime/version (for example vLLM), hardware topology, and service-level objective you intend to deploy.

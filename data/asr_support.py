@@ -466,6 +466,15 @@ ASR_WER_PLACEHOLDER: frozenset[str] = frozenset(
     }
 )
 
+# Jais publishes an Arabic macro-average over six named evaluation sets.
+# Keep its protocol separate from English/French scores; lower is better.
+ASR_WER_LANGUAGES = (*ASR_WER_LANGUAGES, "ar_ifm_macro")
+ASR_WER_LANGUAGE_LABELS["ar_ifm_macro"] = "Arabic · IFM macro-average (6 sets)"
+ASR_WER_LANGUAGE_SOURCES["jais-asr"] = {
+    "ar_ifm_macro": "https://huggingface.co/IFM/Jais-ASR/blob/1323995fa189c479369a3929be0e95039eba5cba/README.md — IFM-published WER macro-average over SADA, Common Voice 18, MASC clean/noisy, MGB-2 and Casablanca; not comparable to English/French aggregates.",
+}
+PUBLISHED_ASR_WER["jais-asr"] = {"ar_ifm_macro": 22.85}
+
 # Backward-compatible aliases for older chart/import names.
 ASR_WER_BENCHMARKS = ASR_WER_LANGUAGES
 ASR_WER_BENCHMARK_LABELS = ASR_WER_LANGUAGE_LABELS
@@ -479,3 +488,15 @@ STREAMING_ASR_WER_PLACEHOLDER = ASR_WER_PLACEHOLDER
 # ---------------------------------------------------------------------------
 # Published embedding retrieval quality, in [0, 1]. Used by the "Embedding
 # Quality" plot (quality vs docs/s, one dot per model). Scores are published
+
+
+JAIS_ASR_PROFILE = RealtimeProfile(
+    label="Offline Arabic ASR",
+    tokens_per_second=25.0,
+    audio_ms_per_token=40.0,
+    target_delay_ms=30000,
+    state_tokens=8192,
+    source="IFM/Jais-ASR",
+    streaming=False,
+    note="Offline Arabic and code-switching transcription. Conservative 25 audio-frame/s and 8192 state-token capacity proxy; these are planning assumptions, not published streaming latency or measured RTF. Full checkpoint charged per step; encoder is already included in resident parameters.",
+)

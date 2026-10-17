@@ -402,7 +402,7 @@ function updateChartAccessibleSummary(data) {
   if (!root || !chartEl) return;
   const modeLabels = {
     userpareto: 'User Pareto', processingpareto: 'Processing Pareto',
-    embedquality: 'Embedding Quality', asrquality: 'ASR Quality', realtime: 'Realtime capacity',
+    decision: 'Decision throughput', embedquality: 'Embedding Quality', asrquality: 'ASR Quality', realtime: 'Realtime capacity',
   };
   const modeLabel = modeLabels[data?.mode] || 'Performance estimate';
   const datasets = Array.isArray(data?.datasets) ? data.datasets : [];
@@ -481,6 +481,23 @@ function renderChart(data) {
         type: 'log',
         nameGap: 52,
       }),
+      series: datasets.map(ds => makeSeries(ds, true)),
+    });
+    return;
+  }
+
+  if (data.mode === 'decision') {
+    chart.setOption({
+      ...baseOption(theme, params => {
+        if (!Array.isArray(params)) return '';
+        return axisHeader(theme, 'Batch requests', fmtBatch(Number(params[0]?.axisValue))) + params.map(p => {
+          const r = p.data?.raw;
+          return `<div>${escapeTooltipHtml(p.seriesName)}: ${r?.y == null ? 'Unavailable (input cap or memory)' : `${fmtRate(r.y)} decisions/s · ${Number(r.latency_ms).toFixed(2)} ms/batch · ${Number(r.input_tokens).toLocaleString()} input positions · zero generated tokens`}</div>`;
+        }).join('');
+      }, 'axis'),
+      grid: { top: 18, right: 18, bottom: 48, left: 46, containLabel: true },
+      xAxis: axisCommon(theme, 'Batch requests', v => fmtBatch(Number(v)), {type: 'log', min: 1, max: data.x_max}),
+      yAxis: axisCommon(theme, 'Decisions/s', fmtRate, { nameGap: 52 }),
       series: datasets.map(ds => makeSeries(ds, true)),
     });
     return;

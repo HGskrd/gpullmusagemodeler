@@ -26,6 +26,9 @@ from state import (
     change_gpu_qty as _change_gpu_qty,
 )
 from state import (
+    set_model_artifact as _set_model_artifact,
+)
+from state import (
     set_model_gpu_count as _set_model_gpu_count,
 )
 from state import (
@@ -146,6 +149,9 @@ def add_model(state: PlannerState, model_key: str) -> None:
         gpu_count,
         selected_precision,
     )
+    assignment.execution_backend = "auto"
+    assignment.kv_precision = "auto"
+    assignment.recurrent_precision = "auto"
     _retune_model(state, assignment)
 
 
@@ -165,6 +171,22 @@ def set_model_prec(state: PlannerState, model_uid: int, precision: str) -> None:
     assignment = _set_model_prec(state, model_uid, precision)
     if assignment is not None:
         _retune_model(state, assignment, preserve_existing=True)
+
+
+def set_model_artifact(
+    state: PlannerState,
+    model_uid: int,
+    artifact_id: str,
+    execution: str = "auto",
+    kv: str = "auto",
+    recurrent: str = "auto",
+    serving_runtime: str = "generic",
+    runtime_version: str = "",
+) -> None:
+    assignment = _set_model_artifact(
+        state, model_uid, artifact_id, execution, kv, recurrent, serving_runtime, runtime_version
+    )
+    _retune_model(state, assignment, preserve_existing=True)
 
 
 def set_model_spec(state: PlannerState, model_uid: int, method: str, spec_k: int) -> None:

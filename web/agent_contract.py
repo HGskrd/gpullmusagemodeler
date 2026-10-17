@@ -98,6 +98,12 @@ MODEL_ASSIGNMENT = obj(
         "gpu_uid": UID,
         "gpu_count": number(0, 100_000, integer=True),
         "prec": choices(PRECISIONS),
+        "artifact_id": {"type": "string", "maxLength": 512},
+        "execution_backend": choices(("legacy", "auto", "native", "w4a16", "expanded")),
+        "kv_precision": choices(("legacy", "auto", "bf16", "fp8")),
+        "recurrent_precision": choices(("legacy", "auto", "bf16", "fp32")),
+        "serving_runtime": choices(("generic", "vllm", "sglang", "trtllm")),
+        "runtime_version": {"type": "string", "maxLength": 64},
         **dict.fromkeys(
             ("tp", "pp", "dp", "prefill_tp", "prefill_pp", "prefill_dp"),
             number(1, 100_000, integer=True),
@@ -152,7 +158,7 @@ PANEL = obj(PANEL_FIELDS)
 SCENARIO = obj(
     {
         "type": {"const": "gpullm-scenario"},
-        "version": {"const": 1, "type": "integer"},
+        "version": {"enum": [1, 2], "type": "integer"},
         "panel_a": PANEL,
         "panel_b": {"anyOf": [PANEL, {"type": "null"}]},
     },

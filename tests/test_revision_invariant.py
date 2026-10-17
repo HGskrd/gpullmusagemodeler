@@ -110,6 +110,14 @@ def _mutations():
             lambda s: S.add_model_assignment(s, "q35", gpu(s), 1, "bf16"),
         ),
         ("state.set_model_prec", lambda s: S.set_model_prec(s, model(s), "fp8")),
+        (
+            "state.set_model_artifact",
+            lambda s: S.set_model_artifact(s, model(s), s.models[0].artifact_id),
+        ),
+        (
+            "planner_service.set_model_artifact",
+            lambda s: planner_service.set_model_artifact(s, model(s), s.models[0].artifact_id),
+        ),
         ("state.set_model_spec", lambda s: S.set_model_spec(s, model(s), "ngram", 4)),
         ("state.set_model_gpu_count", lambda s: S.set_model_gpu_count(s, model(s), 1)),
         ("state.set_model_gpu_pool", lambda s: S.set_model_gpu_pool(s, model(s), gpu(s))),

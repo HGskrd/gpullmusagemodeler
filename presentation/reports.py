@@ -110,6 +110,46 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
             gp = state.find_gpu(am.gpu_uid)
             gpu_name = gp.gpu.name if gp else "No GPU pool"
             prec = PRECISION_LABELS.get(am.prec, am.prec.upper())
+            if am.execution_backend != "legacy":
+                info = get_model_info(state, am)
+                weights = info["weight_memory"]
+                execution = info["execution"]
+                profile = info["quant_profile"]
+                lines.append(f"  Artifact for {model.name}: {am.artifact_id}")
+                lines.append(
+                    f"  Execution: {execution.path if execution else 'unassigned'} ({am.serving_runtime} {am.runtime_version or 'version unspecified'}); "
+                    + (
+                        "no KV cache or generated tokens."
+                        if model.is_decision_model
+                        else f"KV {info['kv_format']}; recurrent {info['recurrent_format']}."
+                    )
+                )
+                lines.append(
+                    f"  Weight storage: checkpoint {weights.checkpoint_bytes / 1e9:.3f} GB; GPU {weights.gpu_bytes / 1e9:.3f} GB; host {weights.host_bytes / 1e9:.3f} GB per copy; expansion {weights.repacking_bytes / 1e9:.3f} GB. Loading workspace unmeasured."
+                )
+                lines.append(
+                    f"  Evidence: {profile.storage_evidence if profile else 'catalog estimate'} storage; active traffic and throughput are estimates, not benchmarks."
+                )
+            if model.is_decision_model:
+                decision = get_model_info(state, am)["decision"]
+                profile = model.decision_profile
+                sample = decision["sample"]
+                lines.append(
+                    f"- {model.name}: {model.size_label}, {prec}; {gpu_name} x{am.gpu_count}; "
+                    f"single forward, zero generated tokens; {state.task_il:,} input tokens; "
+                    f"1 question / 4 options; planner input cap {profile.max_sequence_length:,}"
+                )
+                lines.append(
+                    f"  Native checkpoint: {model.weight_gb(am.prec):.3f} GB. {model.architecture_note}"
+                )
+                if sample:
+                    lines.append(
+                        f"  Estimated {sample.rps:.2f} requests/s = decisions/s; "
+                        f"{sample.service_time * 1000:.2f} ms per batch. No generation economics."
+                    )
+                else:
+                    lines.append("  No capacity: check input cap, allocation and working memory.")
+                continue
             if model.is_embedding_model:
                 ep = model.embedding_profile
                 lines.append(

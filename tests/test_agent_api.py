@@ -70,7 +70,7 @@ def test_catalog_keys_match_calculator_and_documented_defaults(client):
         k for k, m in MODELS.items() if not m.hidden
     }
     assert {row["key"] for row in result["gpus"]} == set(GPUS)
-    assert {row["kind"] for row in result["models"]} == {"llm", "embedding", "asr"}
+    assert {row["kind"] for row in result["models"]} == {"llm", "embedding", "asr", "decision"}
     assert result["defaults"]["gpus"] == result["defaults"]["models"] == []
     assert result["distributions"]["input_token_buckets"]
     assert result["limits"]["request_bytes"] == client.application.config["MAX_CONTENT_LENGTH"]

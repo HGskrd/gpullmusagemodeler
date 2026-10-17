@@ -38,6 +38,7 @@ from data import (
     QUALITY_DOMAIN_LABELS,
     Model,
     carbon_intensity_avg,
+    default_artifact_id,
     effective_quality,
     model_domain_anchor,
     model_profile_quality,
@@ -190,6 +191,8 @@ class ProjectionResult:
 
 
 def _model_kind_for_swap(model: Model) -> str:
+    if model.is_decision_model:
+        return "decision"
     if getattr(model, "embedding_profile", None) is not None:
         return "embedding"
     if getattr(model, "is_asr_model", False):
@@ -296,6 +299,7 @@ def _build_model_supply(state, profile, prefix_hit_rate, peak_factor_eff) -> lis
     for am, gpu in _iter_resolved_models(state):
         if (
             getattr(am.model, "is_asr_model", False)
+            or am.model.is_decision_model
             or getattr(am.model, "embedding_profile", None) is not None
         ):
             continue
@@ -994,6 +998,8 @@ def _marginal_model_swap_recommendations(
             continue
         seen.add(key)
         current = am.model
+        if current.is_decision_model:
+            continue
         current_kind = _model_kind_for_swap(current)
         pool = _swap_candidate_shortlist(current, state, current_kind, per_slot_cap)
         current_portfolio_quality, quality_mix, current_anchor_share = _portfolio_domain_quality(
@@ -1015,6 +1021,7 @@ def _marginal_model_swap_recommendations(
             chosen_spec = None
             for prec in (sim_am.prec, "bf16"):
                 sim_am.prec = prec
+                sim_am.artifact_id = default_artifact_id(cand, prec)
                 spec = spec_runtime_for(sim, sim_am, sim_am.model)
                 if valid_strategies(
                     sim_am.model,
@@ -1318,7 +1325,7 @@ def _marginal_gpu_recommendations(
     seen: set[tuple[int, int]] = set()
     rows: list[dict] = []
     for am, gpu in _iter_resolved_models(state):
-        if getattr(am.model, "embedding_profile", None) is not None:
+        if am.model.is_decision_model or getattr(am.model, "embedding_profile", None) is not None:
             continue
         key = (am.uid, am.gpu_uid)
         if key in seen:

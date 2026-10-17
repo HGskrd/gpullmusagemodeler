@@ -36,6 +36,7 @@ from planner_service import (
     add_models,
     change_gpu_qty,
     create_default_scenario,
+    set_model_artifact,
     set_model_gpu_count,
     set_model_gpu_pool,
     set_model_prec,
@@ -249,6 +250,37 @@ def model_prec(s):
     return _htmx_response(s)
 
 
+@planner_bp.route("/model/artifact", methods=["POST"])
+@with_planner_state
+def model_artifact(s):
+    uid = _form_int("uid")
+    assignment = s.find_model(uid)
+    if assignment is None:
+        raise ValueError("Model assignment not found.")
+    set_model_artifact(
+        s,
+        uid,
+        request.form.get("artifact_id", ""),
+        request.form.get(
+            "execution_backend",
+            "auto" if assignment.execution_backend == "legacy" else assignment.execution_backend,
+        ),
+        request.form.get(
+            "kv_precision",
+            "auto" if assignment.kv_precision == "legacy" else assignment.kv_precision,
+        ),
+        request.form.get(
+            "recurrent_precision",
+            "auto"
+            if assignment.recurrent_precision == "legacy"
+            else assignment.recurrent_precision,
+        ),
+        request.form.get("serving_runtime", assignment.serving_runtime),
+        request.form.get("runtime_version", assignment.runtime_version),
+    )
+    return _htmx_response(s)
+
+
 @planner_bp.route("/model/spec", methods=["POST"])
 @with_planner_state
 def model_spec(s):
@@ -316,7 +348,7 @@ def model_strat(s):
     if gp is None:
         return jsonify({"error": "GPU not found"}), 404
 
-    model = MODELS[am.model_key]
+    model = am.model
     spec = resolve_spec_runtime(model, am.spec_method, am.spec_k, s.spec_acceptance, am.prec)
     valid = valid_strategies(model, am.gpu_count, gp.gpu, s.mu, s.profiled_non_kv_gb, am.prec, spec)
     strategy = (tp, pp, dp)

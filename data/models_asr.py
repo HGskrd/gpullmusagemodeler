@@ -4,6 +4,7 @@ from .asr_support import (
     COHERE_TRANSCRIBE_PROFILE,
     FUN_ASR_NANO_PROFILE,
     GRANITE_4_1B_SPEECH_PROFILE,
+    JAIS_ASR_PROFILE,
     KYUTAI_STT_1B_PROFILE,
     KYUTAI_STT_2_6B_PROFILE,
     MIMO_V25_ASR_PROFILE,
@@ -383,3 +384,26 @@ ASR_MODELS: dict[str, Model] = {
         realtime_profile=PARAKEET_TDT_06B_V3_PROFILE,
     ),
 }
+
+
+ASR_MODELS["jais-asr"] = Model(
+    key="jais-asr",
+    name="Jais ASR 5.7B",
+    cat="Audio",
+    color="#C29553",
+    total_params=5717988224,
+    active_params=5717988224,
+    prefill_active_params=5717988224,
+    is_moe=False,
+    layers=36,
+    num_heads=32,
+    kv_heads=8,
+    head_dim=128,
+    is_mla=False,
+    hidden_dim=2560,
+    max_context_tokens=524288,
+    capabilities_override=frozenset(),
+    attention_label="Offline Arabic ASR · GQA decoder + audio encoder",
+    architecture_note="Full checkpoint residency, offline audio-frame throughput proxy; calibrate with runtime RTF. No streaming claim.",
+    realtime_profile=JAIS_ASR_PROFILE,
+)

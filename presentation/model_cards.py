@@ -9,6 +9,7 @@ from calc import (
     EfficiencyParams,
     avg_dist,
     communication_breakdown,
+    compute_decision,
     compute_decode,
     compute_embedding_distribution,
     compute_realtime_capacity,
@@ -19,6 +20,7 @@ from calc import (
     gpu_supports_mxfp4,
     gpu_supports_nvfp4,
     per_replica_kv_cache_bytes,
+    resolve_execution,
     resolve_spec_runtime,
     spec_optimization_for,
     strategy_label,
@@ -28,11 +30,11 @@ from data import (
     EMBEDDING_DOC_BUCKETS,
     GPU,
     INPUT_BUCKETS,
-    MODELS,
     OUTPUT_BUCKETS,
     PRECISION_SPECS,
     PRECISIONS,
     Model,
+    artifact_options,
 )
 from placement import (
     _assignment_memories,
@@ -107,6 +109,10 @@ def _quantization_profile_alerts(model: Model, prec: str) -> list[str]:
     profile = model.quantization_profile(prec)
     if profile is None:
         return []
+    if "lower bound" in profile.storage_evidence:
+        return [
+            "Converted checkpoint size is a source-size lower bound; extra scale bytes are unmeasured. A marginal VRAM fit is not confirmed."
+        ]
     if profile.source_kind == "family":
         return [
             f"{profile.label} uses a family proxy from {profile.source_repo}; exact artifact tensor headers are not pinned yet."
@@ -128,7 +134,11 @@ def _precision_options(model: Model, selected: str) -> list[dict[str, str | bool
             (
                 prec
                 for prec in PRECISIONS
-                if prec != native and model.weight_bytes_per_param(prec) < native_bpp - 1e-9
+                if prec != native
+                and (
+                    model.quantization_profile(prec) is not None
+                    or model.weight_bytes_per_param(prec) < native_bpp - 1e-9
+                )
             ),
             key=model.weight_bytes_per_param,
             reverse=True,
@@ -173,7 +183,7 @@ def _precision_options(model: Model, selected: str) -> list[dict[str, str | bool
 def _build_model_info(
     state: PlannerState, am: ModelAssignment, gpu_pool: Optional[GpuPool], prefill_mem, decode_mem
 ) -> dict:
-    model = MODELS[am.model_key]
+    model = am.model
     gpu = gpu_pool.gpu if gpu_pool else None
     quant_profiles_by_precision = {
         prec: profile
@@ -394,6 +404,25 @@ def _build_model_info(
             "sample": sample,
         }
 
+    decision: dict | None = None
+    if model.is_decision_model:
+        decision_sample = None
+        if gpu and am.gpu_count > 0:
+            for batch in _probe_batch_sizes(am.prefill_dp):
+                candidate = compute_decision(
+                    model,
+                    (am.prefill_tp, am.prefill_pp, am.prefill_dp),
+                    batch,
+                    state.task_il,
+                    gpu,
+                    state.mu,
+                    state.profiled_non_kv_gb,
+                    am.prec,
+                    state.prefill_efficiency,
+                )
+                if candidate and (decision_sample is None or candidate.rps > decision_sample.rps):
+                    decision_sample = candidate
+        decision = {"profile": model.decision_profile, "sample": decision_sample}
     embedding = None
     if embedding_profile is not None and gpu and am.gpu_count > 0 and prefill_mem is not None:
         if embedding_stats is None:
@@ -459,17 +488,21 @@ def _build_model_info(
         "gpu": gpu,
         "mem": mem,
         "prefill_mem": prefill_mem,
-        "decode_mem": decode_mem,
+        "decode_mem": None if model.is_decision_model else decode_mem,
         "strats": strats,
         "kv_gb": f"{mem.kv_budget / 1e9:.0f}" if mem else "0",
         "prefill_kv_gb": prefill_kv_gb,
         "decode_kv_gb": decode_kv_gb,
-        "max_slots": decode_max_slots,
-        "decode_max_slots": decode_max_slots,
+        "max_slots": 0 if model.is_decision_model else decode_max_slots,
+        "decode_max_slots": 0 if model.is_decision_model else decode_max_slots,
         "requested_gb": f"{mem.requested / 1e9:.0f}" if mem else "0",
         "profiled_non_kv_total_gb": f"{mem.profiled_non_kv / 1e9:.0f}" if mem else "0",
         "kv_reserved_gb": f"{mem.kv_reserved / 1e9:.0f}" if mem else "0",
-        "prefill_max_batch": prefill_max_batch,
+        "prefill_max_batch": (
+            decision["sample"].max_batch if decision and decision["sample"] else 0
+        )
+        if model.is_decision_model
+        else prefill_max_batch,
         "prefill_probe_len": prefill_probe_len,
         "max_avail": max_avail,
         "gpu_count_options": _gpu_count_options(max_avail, am.gpu_count, gpu),
@@ -477,18 +510,30 @@ def _build_model_info(
         "quant_profiles_by_precision": quant_profiles_by_precision,
         "quant_profile": quant_profile,
         "precision_options": precision_options,
+        "artifact_options": artifact_options(model),
+        "weight_memory": model.weight_memory(am.prec),
+        "weight_components": model.weight_components(am.prec),
+        "execution": resolve_execution(gpu, model, am.prec) if gpu else None,
+        "kv_format": (
+            "fixed mixed runtime layout"
+            if model.shared_sparse_attention
+            else f"{model.kv_cache_bytes_per_elem(am.prec) * 8:.0f}-bit"
+        ),
+        "recurrent_format": f"{model.recurrent_bytes_per_elem(am.prec) * 8:.0f}-bit",
         "precision_description": next(
             str(option["description"]) for option in precision_options if option["key"] == am.prec
         ),
         "realtime": realtime,
         "embedding": embedding,
+        "decision": decision,
         "spec": spec_info,
         "spec_options": model.available_spec_profiles,
         "mixed_weight_precision": model.uses_mixed_weight_precision(am.prec),
         "fits": mem is not None,
-        "decode_fits": decode_mem is not None,
-        "prefill_fits": prefill_mem is not None,
-        "runnable": bool(strats),
+        "decode_fits": decode_mem is not None and not model.is_decision_model,
+        "prefill_fits": prefill_mem is not None
+        and (decision is None or decision["sample"] is not None),
+        "runnable": bool(strats) and (decision is None or decision["sample"] is not None),
         "recommended_label": recommended_label,
         "topology_label": topology_label,
         "selected_min_gpu_count": selected_min_gpu_count,
@@ -498,7 +543,13 @@ def _build_model_info(
         "alt_min_gpu_count": alt_min_gpu_count,
         "alt_pool_min_gpu_count": alt_pool_min_gpu_count,
         "comm_summary": _comm_summary(am.tp, am.pp),
-        "precision_alerts": _precision_alerts(am.prec, gpu)
+        "precision_alerts": (
+            _precision_alerts(am.prec, gpu)
+            if am.execution_backend == "legacy"
+            else [resolve_execution(gpu, model, am.prec).note]
+            if gpu
+            else []
+        )
         + _quantization_profile_alerts(model, am.prec),
         "alerts": _comm_alerts(model, am.tp, am.pp, am.dp, gpu, avg_seq, state.decode_efficiency),
         "prefill_comm_summary": _comm_summary(am.prefill_tp, am.prefill_pp),

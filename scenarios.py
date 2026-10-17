@@ -318,7 +318,7 @@ def serialize_scenario(state_a: PlannerState, state_b: Optional[PlannerState]) -
         panel_b.pop("revision", None)
     return {
         "type": "gpullm-scenario",
-        "version": 1,
+        "version": 2,
         "panel_a": panel_a,
         "panel_b": panel_b,
     }
@@ -461,6 +461,12 @@ def deserialize_planner_state(payload: Any) -> PlannerState:
             _scenario_int(row, "prefill_dp", 1, 1, max(1, gpu_count)),
             _scenario_spec_method(model_key, row.get("spec_method", "off")),
             _scenario_int(row, "spec_k", 0, 0, 32),
+            artifact_id=str(row.get("artifact_id", "")),
+            execution_backend=str(row.get("execution_backend", "legacy")),
+            kv_precision=str(row.get("kv_precision", "legacy")),
+            recurrent_precision=str(row.get("recurrent_precision", "legacy")),
+            serving_runtime=str(row.get("serving_runtime", "generic")),
+            runtime_version=str(row.get("runtime_version", "")),
         )
         state.models.append(assignment)
 
@@ -534,7 +540,7 @@ def deserialize_planner_state(payload: Any) -> PlannerState:
 def deserialize_scenario(payload: Any) -> tuple[PlannerState, Optional[PlannerState]]:
     if not isinstance(payload, dict) or payload.get("type") != "gpullm-scenario":
         raise ValueError("Scenario JSON must have type 'gpullm-scenario'.")
-    if payload.get("version") != 1:
+    if type(payload.get("version")) is not int or payload.get("version") not in (1, 2):
         raise ValueError("Unsupported scenario version.")
     state_a = deserialize_planner_state(payload.get("panel_a"))
     panel_b = payload.get("panel_b")
