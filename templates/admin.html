@@ -367,6 +367,7 @@ function toggleJson(btn) {
 
 // ── Filter ───────────────────────────────────────────────────────────
 let activeF = 'all';
+let vnavIdx = 0;
 const cards = Array.from(document.querySelectorAll('.vc'));
 
 function setF(f) {
@@ -414,7 +415,6 @@ function applyFilter() {
 applyFilter();
 
 // ── Visitor navigator ────────────────────────────────────────────────
-let vnavIdx = 0;
 
 function vnavVisible() {
   return cards.filter(c => !c.classList.contains('hidden'));
