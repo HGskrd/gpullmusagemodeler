@@ -1,12 +1,14 @@
 """Model, workload-profile, and quantization-profile domain types."""
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .model_archive import ARCHIVED_MODELS
 from .specs import (
     PRECISION_SPECS,
     QuantizationProfile,
+    WeightComponent,
+    WeightMemory,
     bytes_per_param,
     kv_cache_bytes_per_elem,
     normalize_precision,
@@ -372,6 +374,26 @@ class Model:
     conditional_memory_on_host: bool = False
     shared_sparse_attention: SharedSparseAttention | None = None
     architecture_note: str = ""
+    selected_artifact_id: str = ""
+    execution_backend: str = "legacy"
+    cache_precision: str = "legacy"
+    recurrent_precision: str = "legacy"
+    serving_runtime: str = "generic"
+    runtime_version: str = ""
+
+    @property
+    def cache_key(self) -> str:
+        return "|".join(
+            (
+                self.key,
+                self.selected_artifact_id,
+                self.execution_backend,
+                self.cache_precision,
+                self.recurrent_precision,
+                self.serving_runtime,
+                self.runtime_version,
+            )
+        )
 
     @property
     def capabilities(self) -> frozenset[str]:
@@ -510,7 +532,7 @@ class Model:
 
     def weight_bytes_per_param(self, prec: str) -> float:
         prec = normalize_precision(prec)
-        profile = get_quantization_profile(self.key, prec)
+        profile = self.quantization_profile(prec)
         if profile is not None:
             return profile.weight_bytes_per_param(self.total_params)
         if self.conditional_memory_params > 0:
@@ -533,7 +555,7 @@ class Model:
         return PRECISION_SPECS[prec].effective_weight_bytes_per_param + retained_bpp
 
     def uses_mixed_weight_precision(self, prec: str) -> bool:
-        if get_quantization_profile(self.key, prec) is not None:
+        if self.quantization_profile(prec) is not None:
             return True
         return not math.isclose(
             self.weight_bytes_per_param(prec), bytes_per_param(prec), rel_tol=1e-9, abs_tol=1e-9
@@ -550,13 +572,98 @@ class Model:
 
     def gpu_weight_bytes(self, prec: str) -> float:
         """Resident GPU weights, excluding separately provisioned host tables."""
-        return self.weight_bytes(prec) - self.system_ram_weight_bytes
+        resident = self.weight_bytes(prec) - self.system_ram_weight_bytes
+        if self.execution_backend == "expanded":
+            resident = max(
+                resident,
+                (
+                    self.total_params
+                    - (self.conditional_memory_params if self.conditional_memory_on_host else 0)
+                )
+                * 2.0,
+            )
+        return resident
+
+    def weight_memory(self, prec: str) -> WeightMemory:
+        checkpoint = self.weight_bytes(prec)
+        gpu = self.gpu_weight_bytes(prec)
+        repacking = max(0.0, gpu + self.system_ram_weight_bytes - checkpoint)
+        return WeightMemory(
+            checkpoint,
+            gpu,
+            self.system_ram_weight_bytes,
+            repacking,
+            max(checkpoint, gpu + self.system_ram_weight_bytes),
+        )
+
+    def compute_shares(self, prec: str, phase: str = "decode") -> dict[str, float]:
+        profile = self.quantization_profile(prec)
+        if (
+            self.execution_backend != "legacy"
+            and phase == "prefill"
+            and self.prefill_active_params
+            and self.prefill_active_params != self.active_params
+        ):
+            return {"bf16": 1.0}  # no phase-specific operator inventory; conservative bound
+        return profile.compute_precision_shares if profile else {normalize_precision(prec): 1.0}
+
+    def weight_components(self, prec: str, phase: str = "decode") -> tuple[WeightComponent, ...]:
+        profile = self.quantization_profile(prec)
+        params = (
+            (self.prefill_active_params or self.active_params)
+            if phase == "prefill"
+            else self.active_params
+        )
+        if not self.is_moe:
+            params = self.total_params - self.conditional_memory_params
+        shares = self.compute_shares(prec, phase)
+        return tuple(
+            WeightComponent(
+                "routed experts / quantized linears"
+                if fmt in {"mxfp4", "nvfp4"}
+                else "retained attention / shared experts / other linears"
+                if fmt == "bf16"
+                else "FP8 projections / shared operators",
+                fmt,
+                "BF16" if self.execution_backend in {"w4a16", "expanded"} else "runtime-dependent",
+                params * share,
+                PRECISION_SPECS[fmt].effective_weight_bytes_per_param,
+                profile.active_traffic_evidence if profile else "generic conversion estimate",
+            )
+            for fmt, share in shares.items()
+            if share > 0
+        )
 
     def weight_gb(self, prec: str) -> float:
         return self.weight_bytes(prec) / 1e9
 
-    def active_weight_bytes(self, prec: str) -> float:
-        profile = get_quantization_profile(self.key, prec)
+    def active_weight_bytes(self, prec: str, phase: str = "decode") -> float:
+        profile = self.quantization_profile(prec)
+        if self.execution_backend != "legacy":
+            if self.execution_backend == "expanded":
+                params = (
+                    (self.prefill_active_params or self.active_params)
+                    if phase == "prefill"
+                    else self.active_params
+                )
+                return params * 2.0
+            if (
+                profile
+                and profile.active_weight_bytes_per_param_override is not None
+                and not (
+                    phase == "prefill"
+                    and self.prefill_active_params
+                    and self.prefill_active_params != self.active_params
+                )
+            ):
+                params = (
+                    (self.prefill_active_params or self.active_params)
+                    if phase == "prefill"
+                    else self.active_params
+                )
+                return params * profile.active_weight_bytes_per_param_override
+            if self.is_moe:
+                return sum(c.active_bytes for c in self.weight_components(prec, phase))
         if profile is not None:
             params = self.active_params if self.is_moe else self.total_params
             return params * profile.active_weight_bytes_per_param(self.total_params)
@@ -568,12 +675,28 @@ class Model:
         return params * self.weight_bytes_per_param(prec)
 
     def kv_cache_bytes_per_elem(self, prec: str) -> float:
-        profile = get_quantization_profile(self.key, prec)
+        if self.cache_precision in {"bf16", "fp8"}:
+            return 2.0 if self.cache_precision == "bf16" else 1.0
+        profile = self.quantization_profile(prec)
         if profile is not None:
             return profile.kv_cache_bytes_per_elem
         return kv_cache_bytes_per_elem(prec)
 
+    def recurrent_bytes_per_elem(self, prec: str) -> float:
+        if self.recurrent_precision == "legacy":
+            return self.kv_cache_bytes_per_elem(prec)
+        return 2.0 if self.recurrent_precision == "bf16" else 4.0
+
+    def convolution_bytes_per_elem(self, prec: str) -> float:
+        return self.kv_cache_bytes_per_elem(prec) if self.recurrent_precision == "legacy" else 2.0
+
     def quantization_profile(self, prec: str) -> QuantizationProfile | None:
+        if self.selected_artifact_id:
+            selected = MODEL_ARTIFACT_PROFILES.get((self.key, self.selected_artifact_id))
+            if selected is not None and selected.precision_key == normalize_precision(prec):
+                return selected
+            if self.selected_artifact_id == f"estimate:{normalize_precision(prec)}":
+                return None
         return get_quantization_profile(self.key, prec)
 
     @property
@@ -1282,6 +1405,25 @@ MODEL_QUANTIZATION_PROFILES = {
     key: profile
     for key, profile in MODEL_QUANTIZATION_PROFILES.items()
     if key[0] not in ARCHIVED_MODELS
+}
+
+
+for _compat_key in ("deepseek-v4-pro", "deepseek-v4-flash"):
+    _profile = MODEL_QUANTIZATION_PROFILES[(_compat_key, "nvfp4")]
+    MODEL_QUANTIZATION_PROFILES[(_compat_key, "nvfp4")] = replace(
+        _profile, storage_evidence="source-size lower bound; converted scale overhead unmeasured"
+    )
+
+MODEL_QUANTIZATION_PROFILES = {
+    key: replace(profile, active_traffic_evidence="geometry-derived mixed active-weight estimate")
+    if profile.active_weight_bytes_per_param_override is not None
+    else profile
+    for key, profile in MODEL_QUANTIZATION_PROFILES.items()
+}
+
+MODEL_ARTIFACT_PROFILES = {
+    (model_key, profile.artifact_id): profile
+    for (model_key, _precision), profile in MODEL_QUANTIZATION_PROFILES.items()
 }
 
 

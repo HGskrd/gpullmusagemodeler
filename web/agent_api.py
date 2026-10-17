@@ -25,6 +25,7 @@ from data import (
     PRECISION_SPECS,
     PREVIEW_ASSUMPTIONS,
     PROJECT_PRESETS,
+    artifact_options,
 )
 from data.groups import _model_kind
 from engine.economics import compute_revenue_projection
@@ -100,6 +101,11 @@ def _panel_result(state: PlannerState) -> dict:
                 "gpu_uid": assignment.gpu_uid,
                 "gpu_count": assignment.gpu_count,
                 "precision": assignment.prec,
+                "artifact_id": assignment.artifact_id,
+                "execution": info["execution"],
+                "kv_format": info["kv_format"],
+                "recurrent_format": info["recurrent_format"],
+                "weight_storage": info["weight_memory"],
                 **{key: info[key] for key in ("runnable", "prefill_fits", "decode_fits")},
                 "decode_max_slots": info["decode_max_slots"],
                 "prefill_max_batch": info["prefill_max_batch"],
@@ -163,6 +169,7 @@ def catalog():
                 "active_params": model.active_params,
                 "max_context_tokens": model.max_context_tokens,
                 "native_precision": model.native_precision_key,
+                "artifacts": artifact_options(model),
                 "weight_bytes_by_precision": {
                     prec: model.gpu_weight_bytes(prec) for prec in PRECISION_SPECS
                 },

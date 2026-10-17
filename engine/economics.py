@@ -38,6 +38,7 @@ from data import (
     QUALITY_DOMAIN_LABELS,
     Model,
     carbon_intensity_avg,
+    default_artifact_id,
     effective_quality,
     model_domain_anchor,
     model_profile_quality,
@@ -1015,6 +1016,7 @@ def _marginal_model_swap_recommendations(
             chosen_spec = None
             for prec in (sim_am.prec, "bf16"):
                 sim_am.prec = prec
+                sim_am.artifact_id = default_artifact_id(cand, prec)
                 spec = spec_runtime_for(sim, sim_am, sim_am.model)
                 if valid_strategies(
                     sim_am.model,

@@ -96,7 +96,7 @@ def _probe_batch_sizes(dp: int) -> list[int]:
 def _preferred_strategy(
     state: PlannerState, am: ModelAssignment, gpu: GPU, phase: str
 ) -> tuple[int, int, int]:
-    model = MODELS[am.model_key]
+    model = am.model
     spec = resolve_spec_runtime(model, am.spec_method, am.spec_k, state.spec_acceptance, am.prec)
     candidates = valid_strategies(
         model, am.gpu_count, gpu, state.mu, state.profiled_non_kv_gb, am.prec, spec
@@ -217,7 +217,7 @@ def _retune_model(state: PlannerState, am: ModelAssignment, preserve_existing: b
     if gp is None:
         return
 
-    model = MODELS[am.model_key]
+    model = am.model
     spec = resolve_spec_runtime(model, am.spec_method, am.spec_k, state.spec_acceptance, am.prec)
     if getattr(model, "embedding_profile", None) is not None:
         embedding_default = _preferred_strategy(state, am, gp.gpu, "prefill")
@@ -298,7 +298,7 @@ def retune_models(state: PlannerState, preserve_existing: bool = True):
 def _assignment_memories(state: PlannerState, am: ModelAssignment, gpu: GPU):
     if (am.prefill_tp, am.prefill_pp, am.prefill_dp) != (am.tp, am.pp, am.dp):
         return None, None
-    model = MODELS[am.model_key]
+    model = am.model
     spec = resolve_spec_runtime(model, am.spec_method, am.spec_k, state.spec_acceptance, am.prec)
     prefill_mem = compute_memory(
         model,
@@ -421,7 +421,7 @@ def _best_available_placement_on_pool(
 
 
 def _auto_assignment_demand(state: PlannerState, am: ModelAssignment) -> float:
-    model = MODELS[am.model_key]
+    model = am.model
     demand = sum(
         _active_project_demand(project)
         for project in state.projects
@@ -647,7 +647,7 @@ def _seed_empty_auto_pools(state: PlannerState, projects: list[Project], strateg
 
 
 def _auto_assignment_growth_key(state: PlannerState, am: ModelAssignment, strategy: str) -> tuple:
-    model = MODELS[am.model_key]
+    model = am.model
     demand = _auto_assignment_demand(state, am)
     served_projects = [
         project for project in state.projects if _model_serves_project(model, project)
@@ -670,7 +670,7 @@ def _grow_auto_assignments(state: PlannerState, strategy: str):
             grew = False
             for am in candidates:
                 next_count = am.gpu_count + 1
-                model = MODELS[am.model_key]
+                model = am.model
                 spec = resolve_spec_runtime(
                     model, am.spec_method, am.spec_k, state.spec_acceptance, am.prec
                 )
@@ -746,7 +746,7 @@ def auto_select_models(state: PlannerState, strategy: Optional[str] = None):
 
     for project in ordered_projects:
         if strategy in {"coverage", "lean"} and any(
-            _model_serves_project(MODELS[am.model_key], project) for am in state.models
+            _model_serves_project(am.model, project) for am in state.models
         ):
             continue
         candidates = []

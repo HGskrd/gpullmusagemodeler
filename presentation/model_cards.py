@@ -19,6 +19,7 @@ from calc import (
     gpu_supports_mxfp4,
     gpu_supports_nvfp4,
     per_replica_kv_cache_bytes,
+    resolve_execution,
     resolve_spec_runtime,
     spec_optimization_for,
     strategy_label,
@@ -28,11 +29,11 @@ from data import (
     EMBEDDING_DOC_BUCKETS,
     GPU,
     INPUT_BUCKETS,
-    MODELS,
     OUTPUT_BUCKETS,
     PRECISION_SPECS,
     PRECISIONS,
     Model,
+    artifact_options,
 )
 from placement import (
     _assignment_memories,
@@ -107,6 +108,10 @@ def _quantization_profile_alerts(model: Model, prec: str) -> list[str]:
     profile = model.quantization_profile(prec)
     if profile is None:
         return []
+    if "lower bound" in profile.storage_evidence:
+        return [
+            "Converted checkpoint size is a source-size lower bound; extra scale bytes are unmeasured. A marginal VRAM fit is not confirmed."
+        ]
     if profile.source_kind == "family":
         return [
             f"{profile.label} uses a family proxy from {profile.source_repo}; exact artifact tensor headers are not pinned yet."
@@ -128,7 +133,11 @@ def _precision_options(model: Model, selected: str) -> list[dict[str, str | bool
             (
                 prec
                 for prec in PRECISIONS
-                if prec != native and model.weight_bytes_per_param(prec) < native_bpp - 1e-9
+                if prec != native
+                and (
+                    model.quantization_profile(prec) is not None
+                    or model.weight_bytes_per_param(prec) < native_bpp - 1e-9
+                )
             ),
             key=model.weight_bytes_per_param,
             reverse=True,
@@ -173,7 +182,7 @@ def _precision_options(model: Model, selected: str) -> list[dict[str, str | bool
 def _build_model_info(
     state: PlannerState, am: ModelAssignment, gpu_pool: Optional[GpuPool], prefill_mem, decode_mem
 ) -> dict:
-    model = MODELS[am.model_key]
+    model = am.model
     gpu = gpu_pool.gpu if gpu_pool else None
     quant_profiles_by_precision = {
         prec: profile
@@ -477,6 +486,16 @@ def _build_model_info(
         "quant_profiles_by_precision": quant_profiles_by_precision,
         "quant_profile": quant_profile,
         "precision_options": precision_options,
+        "artifact_options": artifact_options(model),
+        "weight_memory": model.weight_memory(am.prec),
+        "weight_components": model.weight_components(am.prec),
+        "execution": resolve_execution(gpu, model, am.prec) if gpu else None,
+        "kv_format": (
+            "fixed mixed runtime layout"
+            if model.shared_sparse_attention
+            else f"{model.kv_cache_bytes_per_elem(am.prec) * 8:.0f}-bit"
+        ),
+        "recurrent_format": f"{model.recurrent_bytes_per_elem(am.prec) * 8:.0f}-bit",
         "precision_description": next(
             str(option["description"]) for option in precision_options if option["key"] == am.prec
         ),
@@ -498,7 +517,13 @@ def _build_model_info(
         "alt_min_gpu_count": alt_min_gpu_count,
         "alt_pool_min_gpu_count": alt_pool_min_gpu_count,
         "comm_summary": _comm_summary(am.tp, am.pp),
-        "precision_alerts": _precision_alerts(am.prec, gpu)
+        "precision_alerts": (
+            _precision_alerts(am.prec, gpu)
+            if am.execution_backend == "legacy"
+            else [resolve_execution(gpu, model, am.prec).note]
+            if gpu
+            else []
+        )
         + _quantization_profile_alerts(model, am.prec),
         "alerts": _comm_alerts(model, am.tp, am.pp, am.dp, gpu, avg_seq, state.decode_efficiency),
         "prefill_comm_summary": _comm_summary(am.prefill_tp, am.prefill_pp),

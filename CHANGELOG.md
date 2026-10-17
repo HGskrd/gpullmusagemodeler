@@ -4,6 +4,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2026-10-17
+
+### Added
+
+- Artifact identity and format/evidence metadata for existing checkpoints, including
+  equal-size/larger compatibility variants and multiple artifacts per precision.
+- Independent serving-runtime/version, execution, KV and recurrent-state choices,
+  checkpoint/GPU/host/expansion diagnostics, and matching API/report fields.
+
+### Changed
+
+- Export scenarios as version 2; preserve version 1 precision, topology, speculation
+  and calculation assumptions during migration.
+- Separate active MoE traffic from resident averages for current artifact execution,
+  avoid FP4 peaks for W4A16/attention, reject unsupported native paths, and reject
+  unknown checkpoint storage dtypes. All uncalibrated assumptions remain labeled.
+
 ## 2026-09-21
 
 ### Added

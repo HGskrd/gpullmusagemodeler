@@ -4,13 +4,6 @@
     <span class="dot" style="background:{{ m.color }};"></span>
     <span class="model-card-name">{{ m.name }}</span>
     <div class="model-card-actions">
-      <select class="prec-select" name="prec" aria-label="Precision for {{ m.name }}" title="{{ info.precision_description }}"
-              hx-post="/model/prec" hx-target="#main-content" hx-trigger="change" hx-include="this"
-              hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}'>
-        {% for option in info.precision_options %}
-        <option value="{{ option.key }}" title="{{ option.description }}" {{ 'selected' if am.prec == option.key else '' }}>{{ option.label }}</option>
-        {% endfor %}
-      </select>
       <button class="ghost sm model-card-remove" aria-label="{{ 'Exclude' if state.auto_mode else 'Remove' }} {{ m.name }}" title="{{ 'Exclude from recommendations' if state.auto_mode else 'Remove model' }}"
               hx-post="{{ '/model/auto-exclude' if state.auto_mode else '/model/remove' }}"
               hx-target="#main-content"
@@ -18,6 +11,75 @@
               hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}'>✕</button>
     </div>
   </div>
+
+  <select class="prec-select artifact-select" name="artifact_id" aria-label="Artifact for {{ m.name }}" title="Choose a released checkpoint or an explicit conversion estimate. Changing artifact enables the current execution model."
+              hx-post="/model/artifact" hx-target="#main-content" hx-trigger="change" hx-include="this"
+              hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}'>
+        {% for option in info.artifact_options %}
+        <option value="{{ option.key }}" title="{{ option.description }}" {{ 'selected' if am.artifact_id == option.key else '' }}>{{ option.label }} · {{ "%.1f"|format(option.checkpoint_bytes / 1e9) }} GB</option>
+        {% endfor %}
+  </select>
+
+  <details class="T" style="margin-bottom:6px;" data-artifact-details {{ 'open' if am.execution_backend != 'legacy' else '' }}>
+    <summary>Execution {{ info.execution.path if info.execution else 'unassigned' }} · KV {{ info.kv_format }}{% if m.linear_attention_layer_count %} · recurrent {{ info.recurrent_format }}{% endif %}</summary>
+    <div class="artifact-runtime" style="display:grid;gap:6px;margin:6px 0;">
+      <label>Serving runtime
+        <select class="prec-select" name="serving_runtime" aria-label="Serving runtime for {{ m.name }}"
+                hx-post="/model/artifact" hx-target="#main-content" hx-trigger="change" hx-include="closest .artifact-runtime"
+                hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}","artifact_id":"{{ am.artifact_id }}"}'>
+          {% for key, label in [('generic','Unspecified / estimate'),('vllm','vLLM'),('sglang','SGLang'),('trtllm','TensorRT-LLM')] %}
+          <option value="{{ key }}" {{ 'selected' if am.serving_runtime == key else '' }}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Runtime version (optional)
+        <input name="runtime_version" aria-label="Runtime version for {{ m.name }}" maxlength="64" value="{{ am.runtime_version }}"
+               hx-post="/model/artifact" hx-target="#main-content" hx-trigger="change" hx-include="closest .artifact-runtime"
+               hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}","artifact_id":"{{ am.artifact_id }}"}'>
+      </label>
+      <label>Execution path
+        <select class="prec-select" name="execution_backend" aria-label="Execution path for {{ m.name }}"
+                hx-post="/model/artifact" hx-target="#main-content" hx-trigger="change" hx-include="closest .artifact-runtime"
+                hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}","artifact_id":"{{ am.artifact_id }}"}'>
+          {% for key, label in [('legacy','Preserved scenario assumptions'),('auto','Auto hardware / recipe'),('native','Native compute'),('w4a16','Compressed weights / W4A16'),('expanded','Expand weights to BF16')] %}
+          <option value="{{ key }}" {{ 'selected' if am.execution_backend == key else '' }}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Attention KV cache
+        <select class="prec-select" name="kv_precision" aria-label="KV cache for {{ m.name }}"
+                hx-post="/model/artifact" hx-target="#main-content" hx-trigger="change" hx-include="closest .artifact-runtime"
+                hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}","artifact_id":"{{ am.artifact_id }}"}'>
+          {% for key, label in [('legacy','Preserved scenario cache'),('auto','Artifact cache default'),('bf16','BF16'),('fp8','FP8')] %}
+          <option value="{{ key }}" {{ 'selected' if am.kv_precision == key else '' }}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Recurrent state
+        <select class="prec-select" name="recurrent_precision" aria-label="Recurrent state for {{ m.name }}"
+                hx-post="/model/artifact" hx-target="#main-content" hx-trigger="change" hx-include="closest .artifact-runtime"
+                hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}","artifact_id":"{{ am.artifact_id }}"}'>
+          {% for key, label in [('legacy','Preserved scenario state'),('auto','Conservative FP32 state / BF16 convolution'),('bf16','BF16 state / convolution'),('fp32','FP32 state / BF16 convolution')] %}
+          <option value="{{ key }}" {{ 'selected' if am.recurrent_precision == key else '' }}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+    <p>Checkpoint {{ "%.3f"|format(info.weight_memory.checkpoint_bytes / 1e9) }} GB · GPU weights {{ "%.3f"|format(info.weight_memory.gpu_bytes / 1e9) }} GB · host weights {{ "%.3f"|format(info.weight_memory.host_bytes / 1e9) }} GB per copy.</p>
+    <p>Repacking/expansion {{ "%.3f"|format(info.weight_memory.repacking_bytes / 1e9) }} GB. Loading footprint ≥{{ "%.3f"|format(info.weight_memory.loading_peak_lower_bound_bytes / 1e9) }} GB across host/GPU; loader workspace is unmeasured. Runtime non-KV memory remains separately reserved.</p>
+    <details>
+    <summary>Format, source and estimate assumptions</summary>
+    {% if info.quant_profile %}
+    <p>Storage: {{ info.quant_profile.storage_evidence }}. Active traffic: {{ info.quant_profile.active_traffic_evidence }}. Compute: {{ info.quant_profile.compute_evidence }}.</p>
+    <p>{{ info.quant_profile.container }} · {{ info.quant_profile.quant_algo }} · {{ info.quant_profile.format_scheme.encoding }} · block {{ info.quant_profile.format_scheme.block_shape }} · scales {{ info.quant_profile.format_scheme.scale_format }} · zero points {{ info.quant_profile.format_scheme.zero_point_format }}.</p>
+    <p>Quantized: {{ info.quant_profile.quantized|join('; ') }}. Retained: {{ info.quant_profile.retained|join('; ') }}.</p>
+    <p><a href="https://huggingface.co/{{ info.quant_profile.source_repo }}/tree/{{ info.quant_profile.source_revision }}" target="_blank" rel="noopener">Pinned checkpoint {{ info.quant_profile.source_revision[:12] }}</a> · captured {{ info.quant_profile.captured_at }}.</p>
+    {% else %}
+    <p>Storage and conversion are catalog estimates; no exact tensor inventory is pinned for this choice.</p>
+    {% endif %}
+    {% if am.execution_backend != 'legacy' %}<p>Active read estimate {{ "%.3f"|format(m.active_weight_bytes(am.prec) / 1e9) }} GB/token before batching/sharding. Operator shares are proxies, not measured kernel throughput. FP32 recurrent state is a conservative default; validate the selected runtime. Fixed architectural cache layouts override generic KV choices.</p>{% endif %}
+    </details>
+  </details>
 
   {% if not m.is_embedding_model and not m.is_asr_model %}
   <div class="flex" style="margin-bottom:3px;gap:3px;">
@@ -81,7 +143,7 @@
   {% endif %}
   {% if info.quant_profile %}
   <div class="T" style="margin-bottom:3px;" title="{{ info.quant_profile.notes }}{% if info.quant_profile.storage_summary %} Storage: {{ info.quant_profile.storage_summary }}.{% endif %}">
-    {{ info.quant_profile.label }} LUT · {{ info.quant_profile.source_repo }}{% if info.quant_profile.source_kind != 'exact' %} · {{ info.quant_profile.source_kind }}{% endif %} · {{ info.quant_profile.compute_summary }} · KV {{ info.quant_profile.kv_cache_format }}
+    {{ info.quant_profile.label }} LUT · {{ info.quant_profile.source_repo }}{% if info.quant_profile.source_kind != 'exact' %} · {{ info.quant_profile.source_kind }}{% endif %} · {{ info.quant_profile.compute_summary }} estimated compute · KV {{ info.kv_format }}
   </div>
   {% elif info.quant_profiles_by_precision %}
   {% set available_profile = info.quant_profiles_by_precision.values()|first %}

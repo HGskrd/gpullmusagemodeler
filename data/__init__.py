@@ -11,6 +11,7 @@ from .asr_support import *
 from .embedding_support import *
 from .text_support import *
 from .models import *
+from .artifacts import *
 from .model_archive import *
 from .model_sources import *
 from .quality import *
