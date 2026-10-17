@@ -7,6 +7,7 @@ from typing import Optional
 
 from calc import (
     avg_dist,
+    compute_decision,
     compute_decode,
     compute_embedding_distribution,
     compute_memory,
@@ -129,11 +130,26 @@ def _preferred_strategy(
         )
         kv_headroom = mem.kv_budget if mem else 0.0
         local_tp = 1 if tp <= gpu.node_size else 0
-        peak_tps = -1
+        peak_tps = -1.0
         aux = float("-inf")
 
         for bs in _probe_batch_sizes(dp):
-            if is_embedding:
+            if model.is_decision_model:
+                decision_result = compute_decision(
+                    model,
+                    (tp, pp, dp),
+                    bs,
+                    state.task_il,
+                    gpu,
+                    state.mu,
+                    state.profiled_non_kv_gb,
+                    am.prec,
+                    state.prefill_efficiency,
+                )
+                if decision_result is None:
+                    continue
+                metric = (decision_result.input_tps, decision_result.rps)
+            elif is_embedding:
                 embedding_result = compute_embedding_distribution(
                     model,
                     (tp, pp, dp),
@@ -219,7 +235,7 @@ def _retune_model(state: PlannerState, am: ModelAssignment, preserve_existing: b
 
     model = am.model
     spec = resolve_spec_runtime(model, am.spec_method, am.spec_k, state.spec_acceptance, am.prec)
-    if getattr(model, "embedding_profile", None) is not None:
+    if model.is_decision_model or getattr(model, "embedding_profile", None) is not None:
         embedding_default = _preferred_strategy(state, am, gp.gpu, "prefill")
         if not preserve_existing:
             am.tp, am.pp, am.dp = embedding_default
@@ -349,6 +365,7 @@ def resolve_deployment(state: PlannerState) -> Deployment:
 def _model_serves_project(model: Model, project: Project) -> bool:
     if (
         getattr(model, "is_asr_model", False)
+        or model.is_decision_model
         or getattr(model, "embedding_profile", None) is not None
     ):
         return False

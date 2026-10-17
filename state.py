@@ -70,6 +70,7 @@ VISIBLE_PLOT_MODES = (
     ("processingpareto", "Processing Pareto"),
     ("embedquality", "Embedding Quality"),
     ("asrquality", "ASR Quality"),
+    ("decision", "Decision throughput"),
 )
 DEFAULT_PLOT_MODE = VISIBLE_PLOT_MODES[0][0]
 LEGACY_PLOT_MODE_REDIRECTS = {"realtime": "asrquality", "embedding": "embedquality"}
@@ -470,7 +471,11 @@ class PlannerState:
             allowed = {"off"}
             if model is not None:
                 allowed.update(p.method for p in model.speculative_profiles)
-                if not model.is_asr_model and not model.is_embedding_model:
+                if (
+                    not model.is_asr_model
+                    and not model.is_embedding_model
+                    and not model.is_decision_model
+                ):
                     allowed.add("ngram")
             am.spec_method = str(getattr(am, "spec_method", "off") or "off")
             if am.spec_method not in allowed:
@@ -1543,7 +1548,7 @@ def set_model_spec(state: PlannerState, model_uid: int, method: str, spec_k: int
         profile_methods = {getattr(p, "method", "") for p in profiles}
         if method == "ngram":
             # ngram needs no draft weights: available on any plain text model.
-            if model.is_asr_model or model.is_embedding_model:
+            if model.is_asr_model or model.is_embedding_model or model.is_decision_model:
                 method = "off"
         elif method not in profile_methods:
             method = "off"

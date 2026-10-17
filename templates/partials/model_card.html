@@ -21,7 +21,7 @@
   </select>
 
   <details class="T" style="margin-bottom:6px;" data-artifact-details {{ 'open' if am.execution_backend != 'legacy' else '' }}>
-    <summary>Execution {{ info.execution.path if info.execution else 'unassigned' }} · KV {{ info.kv_format }}{% if m.linear_attention_layer_count %} · recurrent {{ info.recurrent_format }}{% endif %}</summary>
+    <summary>Execution {{ info.execution.path if info.execution else 'unassigned' }}{% if not m.is_decision_model %} · KV {{ info.kv_format }}{% if m.linear_attention_layer_count %} · recurrent {{ info.recurrent_format }}{% endif %}{% endif %}</summary>
     <div class="artifact-runtime" style="display:grid;gap:6px;margin:6px 0;">
       <label>Serving runtime
         <select class="prec-select" name="serving_runtime" aria-label="Serving runtime for {{ m.name }}"
@@ -46,6 +46,7 @@
           {% endfor %}
         </select>
       </label>
+      {% if not m.is_decision_model %}
       <label>Attention KV cache
         <select class="prec-select" name="kv_precision" aria-label="KV cache for {{ m.name }}"
                 hx-post="/model/artifact" hx-target="#main-content" hx-trigger="change" hx-include="closest .artifact-runtime"
@@ -64,6 +65,7 @@
           {% endfor %}
         </select>
       </label>
+      {% endif %}
     </div>
     <p>Checkpoint {{ "%.3f"|format(info.weight_memory.checkpoint_bytes / 1e9) }} GB · GPU weights {{ "%.3f"|format(info.weight_memory.gpu_bytes / 1e9) }} GB · host weights {{ "%.3f"|format(info.weight_memory.host_bytes / 1e9) }} GB per copy.</p>
     <p>Repacking/expansion {{ "%.3f"|format(info.weight_memory.repacking_bytes / 1e9) }} GB. Loading footprint ≥{{ "%.3f"|format(info.weight_memory.loading_peak_lower_bound_bytes / 1e9) }} GB across host/GPU; loader workspace is unmeasured. Runtime non-KV memory remains separately reserved.</p>
@@ -77,11 +79,11 @@
     {% else %}
     <p>Storage and conversion are catalog estimates; no exact tensor inventory is pinned for this choice.</p>
     {% endif %}
-    {% if am.execution_backend != 'legacy' %}<p>Active read estimate {{ "%.3f"|format(m.active_weight_bytes(am.prec) / 1e9) }} GB/token before batching/sharding. Operator shares are proxies, not measured kernel throughput. FP32 recurrent state is a conservative default; validate the selected runtime. Fixed architectural cache layouts override generic KV choices.</p>{% endif %}
+    {% if am.execution_backend != 'legacy' %}<p>Active read estimate {{ "%.3f"|format(m.active_weight_bytes(am.prec) / 1e9) }} GB/{{ 'forward' if m.is_decision_model else 'token' }} before batching/sharding. Operator shares are proxies, not measured kernel throughput. FP32 recurrent state is a conservative default; validate the selected runtime. Fixed architectural cache layouts override generic KV choices.</p>{% endif %}
     </details>
   </details>
 
-  {% if not m.is_embedding_model and not m.is_asr_model %}
+  {% if not m.is_embedding_model and not m.is_asr_model and not m.is_decision_model %}
   <div class="flex" style="margin-bottom:3px;gap:3px;">
     <span class="T" style="min-width:28px;">⚡</span>
     <select class="prec-select" name="method" aria-label="Speculative decoding for {{ m.name }}"
@@ -130,7 +132,7 @@
   {% if m.system_ram_weight_bytes %}
   <div class="T" style="margin-bottom:3px;">Engram: {{ "%.3f"|format(m.system_ram_weight_bytes / 1e9) }} GB system RAM per model copy, outside VRAM. Provision host RAM separately; capacity and transfer latency are not validated.</div>
   {% endif %}
-  {% if not m.is_embedding_model and not m.is_asr_model %}
+  {% if not m.is_embedding_model and not m.is_asr_model and not m.is_decision_model %}
   <div class="T" style="margin-bottom:3px;" title="Maximum supported combined prompt and generated-token length used by planner feasibility checks.">
     Context limit {{ m.max_context_tokens|fmt_num }} tokens (prompt + output)
   </div>
@@ -143,7 +145,7 @@
   {% endif %}
   {% if info.quant_profile %}
   <div class="T" style="margin-bottom:3px;" title="{{ info.quant_profile.notes }}{% if info.quant_profile.storage_summary %} Storage: {{ info.quant_profile.storage_summary }}.{% endif %}">
-    {{ info.quant_profile.label }} LUT · {{ info.quant_profile.source_repo }}{% if info.quant_profile.source_kind != 'exact' %} · {{ info.quant_profile.source_kind }}{% endif %} · {{ info.quant_profile.compute_summary }} estimated compute · KV {{ info.kv_format }}
+    {{ info.quant_profile.label }} LUT · {{ info.quant_profile.source_repo }}{% if info.quant_profile.source_kind != 'exact' %} · {{ info.quant_profile.source_kind }}{% endif %} · {{ info.quant_profile.compute_summary }} estimated compute{% if not m.is_decision_model %} · KV {{ info.kv_format }}{% endif %}
   </div>
   {% elif info.quant_profiles_by_precision %}
   {% set available_profile = info.quant_profiles_by_precision.values()|first %}
@@ -154,6 +156,9 @@
   {% for alert in info.precision_alerts %}
   <div class="warn">⚠ {{ alert }}</div>
   {% endfor %}
+  {% if m.is_decision_model %}
+  <div class="T">Decision model · single forward · zero generated tokens · planner input cap {{ m.decision_profile.max_sequence_length|fmt_num }} positions. No speculative decoding or generation economics.</div>
+  {% endif %}
   {% if m.is_embedding_model %}
   {% set ep = m.embedding_profile %}
   <div class="T" style="margin-bottom:3px;" title="{{ ep.note }} Source: {{ ep.source }}.">
@@ -187,9 +192,13 @@
     {% endif %}
   </div>
   {% endif %}
-  {% if not m.is_asr_model and not m.is_embedding_model %}
+  {% if not m.is_asr_model and not m.is_embedding_model and not m.is_decision_model %}
   <div class="T" style="margin-bottom:3px;display:flex;gap:6px;flex-wrap:wrap;">
+    {% if m.quality_confidence > 0 %}
     <span class="tip" title="Artificial Analysis Intelligence Index anchor, transformed internally only for routing. Scores supplied through a family proxy are confidence-discounted.">AA&nbsp;{{ "%.1f"|format(quality_to_aa_intelligence(m.quality)) }}</span>
+    {% else %}
+    <span class="tip" title="No comparable independent quality or token-efficiency benchmark is available. Routing uses an explicitly discounted placeholder.">Quality uncalibrated</span>
+    {% endif %}
     <span class="tip" title="Confidence-adjusted general routing quality. Raw Q {{ '%.2f'|format(m.quality) }} · benchmark confidence {{ '%.0f'|format(m.quality_confidence * 100) }}%.">Q general&nbsp;{{ "%.2f"|format(effective_quality(m)) }}</span>
     {% for domain, anchor in MODEL_DOMAIN_QUALITY_ANCHORS.get(m.key, {}).items() %}
     <span class="tip" title="{{ anchor.benchmark }} raw {{ '%.1f'|format(anchor.raw_score) }} · confidence {{ '%.0f'|format(anchor.confidence * 100) }}%{% if anchor.note %} · {{ anchor.note }}{% endif %}">
@@ -236,9 +245,9 @@
   </div>
 
   {% if am.gpu_count > 0 and info.strats|length > 0 %}
-  {% if m.is_embedding_model %}
+  {% if m.is_embedding_model or m.is_decision_model %}
   <div class="flex" style="margin-bottom:3px;gap:2px;">
-    <span class="T" style="min-width:28px;">E</span>
+    <span class="T" style="min-width:28px;">{{ 'F' if m.is_decision_model else 'E' }}</span>
     {% for tp_val, pp_val, dp_val in info.strats %}
       {% set sel = (tp_val == am.prefill_tp and pp_val == am.prefill_pp and dp_val == am.prefill_dp) %}
       {% if tp_val == 1 and pp_val == 1 and dp_val == 1 %}
@@ -250,7 +259,7 @@
       {% else %}
         {% set strat_label = 'TP' + tp_val|string + '×PP' + pp_val|string + '×DP' + dp_val|string %}
       {% endif %}
-      <button class="sm" aria-label="Use {{ strat_label }} embedding topology for {{ m.name }}" aria-pressed="{{ 'true' if sel else 'false' }}" style="padding:2px 6px;{{ 'background:'+m.color+';color:white;border-color:'+m.color+';' if sel else '' }}"
+      <button class="sm" aria-label="Use {{ strat_label }} {{ 'decision' if m.is_decision_model else 'embedding' }} topology for {{ m.name }}" aria-pressed="{{ 'true' if sel else 'false' }}" style="padding:2px 6px;{{ 'background:'+m.color+';color:white;border-color:'+m.color+';' if sel else '' }}"
               hx-post="/model/strat" hx-target="#main-content"
               hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}","phase":"prefill","tp":"{{ tp_val }}","pp":"{{ pp_val }}","dp":"{{ dp_val }}"}'>
         {{ strat_label }}
@@ -353,7 +362,14 @@
     <div class="T">{{ PRECISION_LABELS[info.alt_prec] }} needs at least {{ info.alt_pool_min_gpu_count }} GPUs on this pool.</div>
     {% endif %}
   {% else %}
-    {% if m.is_embedding_model %}
+    {% if m.is_decision_model %}
+      <div class="T">F {{ info.prefill_kv_gb }} GB work buffer · no persistent decode KV</div>
+      {% if info.decision and info.decision.sample %}
+      <div class="T">~{{ info.decision.sample.rps|fmt_num }} requests/s = decisions/s · {{ (info.decision.sample.service_time * 1000)|round(2) }} ms/batch · 1 question / 4 options</div>
+      {% else %}
+      <div class="T">No capacity at this input length. Check the served cap and work buffer.</div>
+      {% endif %}
+    {% elif m.is_embedding_model %}
       {% if info.prefill_fits %}
       <div class="T" title="Embedding requested {{ "%.1f"|format(info.prefill_mem.requested / 1e9) }} GB · weights {{ "%.1f"|format(info.prefill_mem.weights / 1e9) }} GB · profiled non-KV {{ "%.1f"|format(info.prefill_mem.profiled_non_kv / 1e9) }} GB · work buffer {{ "%.1f"|format(info.prefill_mem.kv_reserved / 1e9) }} GB">
         E {{ info.prefill_kv_gb }} GB work buffer{% if info.embedding and info.embedding.sample %} · {{ info.embedding.sample.rps|fmt_num }} docs/s · {{ info.embedding.sample.tps|fmt_num }} tok/s{% endif %}

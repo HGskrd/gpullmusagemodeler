@@ -8,6 +8,18 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Added Perplexity Decider Flash v1.2 (4B), including its separate BF16 decision head, noncausal attention, and explicit long-context/fast-path caveats.
+
+- Add 12 source-pinned decision checkpoints, a Decision picker and throughput chart, single-forward capacity and reports with zero generated tokens; keep decision workloads outside generation economics.
+
+- Added 18 pinned October model entries across text, embeddings and ASR, including
+  Beam, MiMo V2.6, Bonsai 2, Muse Spark Open, Nemotron 3.5, LFM2.5 24B,
+  Mellum 2.1, Hy-Memory, Perplexity v2, EmbeddingGemma 2 and Jais ASR.
+- Added Claude Opus/Sonnet/Haiku 5.5 and Mistral Large 4 API preview with a
+  dedicated comparison preset, dated pricing and explicit proxy caveats. Refreshed
+  DeepSeek V4.1 Flash to the 1017 checkpoint and added Jais Arabic WER evidence.
+  See [source and verification notes](docs/catalog-additions-2026-10-17.md).
+
 - Artifact identity and format/evidence metadata for existing checkpoints, including
   equal-size/larger compatibility variants and multiple artifacts per precision.
 - Independent serving-runtime/version, execution, KV and recurrent-state choices,

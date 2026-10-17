@@ -1600,7 +1600,7 @@ def _compute_decode_core(
     extra_flops: float = 0.0,
     spec: Optional[SpecRuntime] = None,
 ) -> Optional[DecodeResult]:
-    if not context_supported(m, avg_in, avg_out):
+    if m.is_decision_model or not context_supported(m, avg_in, avg_out):
         return None
     mem = compute_memory(m, tp, pp, g, mu, profiled_non_kv_gb, prec, eff, spec)
     if mem is None:
@@ -2248,7 +2248,7 @@ def compute_data(
     decode_eff: EfficiencyParams,
     spec: Optional[SpecRuntime] = None,
 ) -> Optional[DataResult]:
-    if not context_supported(m, in_len, out_len):
+    if m.is_decision_model or not context_supported(m, in_len, out_len):
         return None
     # One assignment owns one GPU pool and one memory reservation. Independent P/D
     # layouts would require two explicitly allocated pools; accepting them here would
@@ -2322,7 +2322,7 @@ def compute_data_capacity(
     decode_eff: EfficiencyParams,
     spec: Optional[SpecRuntime] = None,
 ) -> int:
-    if not context_supported(m, in_len, out_len):
+    if m.is_decision_model or not context_supported(m, in_len, out_len):
         return 0
     if prefill_strat != decode_strat:
         return 0
@@ -2587,6 +2587,7 @@ def _is_decode_pareto_model(model: Model) -> bool:
     return (
         getattr(model, "embedding_profile", None) is None
         and getattr(model, "realtime_profile", None) is None
+        and not model.is_decision_model
     )
 
 
@@ -2832,3 +2833,96 @@ def compute_stats_data(state) -> dict:
         "il": il,
         "ol": ol,
     }
+
+
+@dataclass(frozen=True)
+class DecisionResult:
+    rps: float
+    decisions_per_second: float
+    input_tps: float
+    service_time: float
+    max_batch: int
+    input_tokens: int
+    questions_per_request: int
+    options_per_question: int
+    output_tokens: int = 0
+
+
+def compute_decision(
+    m: Model,
+    strat: tuple[int, int, int],
+    bs: int,
+    seq_len: int,
+    g: GPU,
+    mu: float,
+    profiled_non_kv_gb: float,
+    prec: str,
+    eff: EfficiencyParams,
+    *,
+    questions_per_request: int = 1,
+    options_per_question: int = 4,
+) -> DecisionResult | None:
+    """One forward pass over the complete formatted input; never a decode loop.
+
+    Uses the existing prefill roofline and communication model. The work buffer
+    conservatively holds four BF16 activation planes plus FP32 linear recurrent state
+    per request on each rank. Fused attention is assumed (no materialized S²
+    scores). This is a capacity proxy requiring runtime calibration, not a vendor
+    benchmark. Multimodal encoder execution, tokenization and CPU heads are not
+    timed. No prefix-cache savings or speculative decoding are credited.
+    """
+    profile = m.decision_profile
+    if (
+        profile is None
+        or not 0 < seq_len <= profile.max_sequence_length
+        or bs < 1
+        or questions_per_request < 1
+        or options_per_question < 2
+    ):
+        return None
+    tp, pp, dp = strat
+    if min(tp, pp, dp) < 1:
+        return None
+    mem = compute_memory(m, tp, pp, g, mu, profiled_non_kv_gb, prec, eff)
+    if mem is None:
+        return None
+    scratch = (
+        4 * seq_len * max(m.hidden_size, m.num_heads * m.head_dim) * 2
+        + 2 * linear_attention_state_bytes(m, "bf16")
+        + 4 * questions_per_request * options_per_question
+    )
+    max_per_replica = max(0, int(mem.kv_budget / scratch))
+    batch_per_replica = math.ceil(bs / dp)
+    if batch_per_replica > max_per_replica:
+        return None
+    fraction = _pp_peak_fraction(m, pp)
+    ffn = 2 * m.active_params * batch_per_replica * seq_len * fraction
+    attention = _prefill_attention_work(
+        m, batch_per_replica, seq_len, pp, causal=profile.causal_attention
+    )
+    compute_s = (ffn + attention) / (model_gpu_flops(g, m, prec) * tp * eff.comp_eff)
+    weight_s = (_active_weight_bytes(m, prec) * fraction / tp) / (g.effective_bw * eff.bw_eff)
+    output_s = (
+        4
+        * questions_per_request
+        * options_per_question
+        * batch_per_replica
+        / (g.effective_bw * eff.bw_eff)
+    )
+    comm = communication_breakdown(m, tp, pp, batch_per_replica * seq_len, seq_len, g, eff)
+    seconds = (max(compute_s, weight_s) + output_s + comm.total) * (
+        1 + eff.overhead * 1.2 + fixed_paged_oh(seq_len, eff, 0.20)
+    )
+    if not math.isfinite(seconds) or seconds <= 0:
+        return None
+    rps = bs / seconds
+    return DecisionResult(
+        rps,
+        rps * questions_per_request,
+        rps * seq_len,
+        seconds,
+        max_per_replica * dp,
+        seq_len,
+        questions_per_request,
+        options_per_question,
+    )

@@ -1,5 +1,6 @@
 """Cloud model pricing and corporate gateway presets."""
 
+from .hardware import PREVIEW_ASSUMPTIONS
 from .quality import aa_intelligence_to_quality, aa_output_tokens_to_efficiency
 
 CLOUD_PRICING_CAPTURED_AT = "2026-09-21"
@@ -299,7 +300,8 @@ CLOUD_MODELS = {
         "token_efficiency": 1.0,
     },
     "deepseek-v4-flash": {
-        "label": "DeepSeek V4.1 Flash",
+        "label": "DeepSeek V4.1 Flash 1017",
+        "released_at": "2026-10-17",
         "vendor": "DeepSeek",
         "api_model": "deepseek-flash",
         "in_per_m": 0.18125,
@@ -393,11 +395,92 @@ CLOUD_MODELS = {
     },
 }
 
+# New releases carry their own dated provenance; older rows retain their snapshot.
+CLOUD_MODELS.update(
+    {
+        "claude-opus-5.5": {
+            "label": "Claude Opus 5.5",
+            "vendor": "Anthropic",
+            "api_model": "claude-opus-5-5",
+            "in_per_m": 4,
+            "cached_in_per_m": 0.2,
+            "cache_write_per_m": 5.0,
+            "cache_write_1h_per_m": 8,
+            "out_per_m": 20,
+            "max_context_tokens": 1000000,
+            "max_output_tokens": 128000,
+            "released_at": "2026-09-22",
+            "pricing_captured_at": "2026-10-17",
+            "pricing_source": "https://www.anthropic.com/claude-opus-5-5",
+            "quality": 0.5,
+            "token_efficiency": 1.0,
+            "price_note": "Quality and token efficiency retain a conservative predecessor-family proxy; pricing is current published list pricing.",
+        },
+        "claude-sonnet-5.5": {
+            "label": "Claude Sonnet 5.5",
+            "vendor": "Anthropic",
+            "api_model": "claude-sonnet-5-5",
+            "in_per_m": 2,
+            "cached_in_per_m": 0.1,
+            "cache_write_per_m": 2.5,
+            "cache_write_1h_per_m": 4,
+            "out_per_m": 10,
+            "max_context_tokens": 1000000,
+            "max_output_tokens": 128000,
+            "released_at": "2026-09-28",
+            "pricing_captured_at": "2026-10-17",
+            "pricing_source": "https://www.anthropic.com/claude-sonnet-5-5",
+            "quality": 0.5,
+            "token_efficiency": 1.0,
+            "price_note": "Quality and token efficiency retain a conservative predecessor-family proxy; pricing is current published list pricing.",
+        },
+        "claude-haiku-5.5": {
+            "label": "Claude Haiku 5.5",
+            "vendor": "Anthropic",
+            "api_model": "claude-haiku-5-5",
+            "in_per_m": 0.1,
+            "cached_in_per_m": 0.01,
+            "cache_write_per_m": 0.125,
+            "cache_write_1h_per_m": 0.2,
+            "out_per_m": 0.5,
+            "max_context_tokens": 1000000,
+            "max_output_tokens": 128000,
+            "released_at": "2026-10-07",
+            "pricing_captured_at": "2026-10-17",
+            "pricing_source": "https://www.anthropic.com/claude-haiku-5-5",
+            "quality": 0.5,
+            "token_efficiency": 1.0,
+            "price_note": "Quality and token efficiency retain a conservative predecessor-family proxy; pricing is current published list pricing.",
+            "long_context_threshold_tokens": 100000,
+            "long_context_in_per_m": 0.5,
+            "long_context_cached_in_per_m": 0.05,
+            "long_context_cache_write_per_m": 0.625,
+            "long_context_cache_write_1h_per_m": 1.0,
+            "long_context_out_per_m": 2.5,
+        },
+        "mistral-large-4": {
+            "label": "Mistral Large 4 Preview",
+            "vendor": "Mistral",
+            "api_model": "mistral-large-4",
+            "in_per_m": 0.68,
+            "cached_in_per_m": 0.07,
+            "out_per_m": 2.09,
+            "max_context_tokens": 1000000,
+            "released_at": "2026-10-06",
+            "pricing_captured_at": "2026-10-17",
+            "pricing_source": "https://docs.mistral.ai/models/mistral-large-4-0",
+            "price_note": "Public API preview; weights pending. Launch promotion: 50% off for two weeks from October 6. Standard input/cached/output prices are $1.36/$0.14/$4.18 per million; recheck after October 20. Quality/verbosity is an explicit Large 3 family proxy.",
+            "quality": 0.5,
+            "token_efficiency": 1.0,
+        },
+    }
+)
+
 for _cloud in CLOUD_MODELS.values():
     _pricing_source = CLOUD_PRICING_SOURCES.get(str(_cloud["vendor"]))
     if _pricing_source:
-        _cloud["pricing_source"] = _pricing_source
-        _cloud["pricing_captured_at"] = CLOUD_PRICING_CAPTURED_AT
+        _cloud.setdefault("pricing_source", _pricing_source)
+        _cloud.setdefault("pricing_captured_at", CLOUD_PRICING_CAPTURED_AT)
 
 AA_CLOUD_METRICS: dict[str, tuple[float, float]] = {
     "gpt-6-astra": (59.0, 80.0),  # Frontier-bound proxy pending a directly comparable AA row.
@@ -434,6 +517,16 @@ AA_CLOUD_METRICS: dict[str, tuple[float, float]] = {
         8.3,
     ),  # Size-class proxy from compact open instruction models; no AA row found.
 }
+
+# Conservative predecessor-family proxies, not new AA measurements.
+AA_CLOUD_METRICS.update(
+    {
+        "claude-opus-5.5": AA_CLOUD_METRICS["claude-opus"],
+        "claude-sonnet-5.5": AA_CLOUD_METRICS["claude-sonnet"],
+        "claude-haiku-5.5": AA_CLOUD_METRICS["claude-haiku"],
+        "mistral-large-4": AA_CLOUD_METRICS["mistral-large"],
+    }
+)
 
 for _k, (_score, _verbosity_m) in AA_CLOUD_METRICS.items():
     if _k in CLOUD_MODELS:
@@ -554,6 +647,17 @@ CORPO_CLOUD_PRESETS = {
         ),
     },
 }
+CORPO_CLOUD_PRESETS["october_2026"] = {
+    "label": "Recent API releases · October 2026",
+    "models": (
+        "claude-opus-5.5",
+        "claude-sonnet-5.5",
+        "claude-haiku-5.5",
+        "mistral-large-4",
+        "deepseek-v4-flash",
+    ),
+}
+
 CORPO_CLOUD_DEFAULT = "current"
 
 
@@ -563,3 +667,26 @@ def corpo_cloud_models(name: str) -> tuple[str, ...]:
 
 
 # Opinionated use-case definitions so the demo is one click from a realistic story.
+
+
+PREVIEW_ASSUMPTIONS["cloud:mistral-large-4"] = {
+    "captured_at": "2026-10-17",
+    "status": "public API preview; weights pending",
+    "source": "https://docs.mistral.ai/models/mistral-large-4-0",
+    "assumptions": (
+        "1M served context; architecture geometry is not invented for local deployment",
+        "launch promotion is time-limited; the row includes standard successor pricing",
+        "quality and verbosity retain a conservative Large 3 family proxy",
+    ),
+}
+CLOUD_MODELS["mistral-large-4"]["future_pricing"] = {
+    "effective_at": "2026-10-20",
+    "in_per_m": 1.36,
+    "cached_in_per_m": 0.14,
+    "out_per_m": 4.18,
+}
+
+
+# New release capabilities are explicit so constrained routing can use them.
+for _release_key in ("claude-opus-5.5", "claude-sonnet-5.5", "claude-haiku-5.5", "mistral-large-4"):
+    CLOUD_MODELS[_release_key]["capabilities"] = ("tools", "ctx_128k", "images", "reasoning")

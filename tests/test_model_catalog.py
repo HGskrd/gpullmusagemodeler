@@ -110,7 +110,7 @@ class ModelCatalogTests(unittest.TestCase):
             "mistral-small": ("Mistral Small 4", 0.15, 0.015, 0.60),
             "codestral-2501": ("Codestral", 0.30, 0.03, 0.90),
             "grok-4.6": ("Grok 4.6", 2.00, 0.50, 6.00),
-            "deepseek-v4-flash": ("DeepSeek V4.1 Flash", 0.18125, 0.003625, 0.725),
+            "deepseek-v4-flash": ("DeepSeek V4.1 Flash 1017", 0.18125, 0.003625, 0.725),
             "deepseek-v4-pro": ("DeepSeek V4 Pro Preview", 0.7975, 0.026583333333333334, 2.3925),
         }
 
@@ -127,7 +127,12 @@ class ModelCatalogTests(unittest.TestCase):
                 self.assertEqual(cloud["pricing_source"], CLOUD_PRICING_SOURCES[cloud["vendor"]])
 
         for key, cloud in CLOUD_MODELS.items():
-            if key.startswith("kimi"):
+            if key.startswith("kimi") or key in {
+                "claude-opus-5.5",
+                "claude-sonnet-5.5",
+                "claude-haiku-5.5",
+                "mistral-large-4",
+            }:
                 continue
             with self.subTest(provenance=key):
                 self.assertEqual(cloud["pricing_captured_at"], CLOUD_PRICING_CAPTURED_AT)
@@ -201,7 +206,12 @@ class ModelCatalogTests(unittest.TestCase):
         for key, record in PREVIEW_ASSUMPTIONS.items():
             with self.subTest(key=key):
                 self.assertNotIn("kimi", key)
-                self.assertEqual(record["captured_at"], PREVIEW_ASSUMPTIONS_CAPTURED_AT)
+                self.assertEqual(
+                    record["captured_at"],
+                    "2026-10-17"
+                    if key == "cloud:mistral-large-4"
+                    else PREVIEW_ASSUMPTIONS_CAPTURED_AT,
+                )
                 self.assertTrue(str(record["source"]).startswith("https://"))
                 self.assertTrue(record["status"])
                 self.assertTrue(record["assumptions"])
@@ -1210,6 +1220,9 @@ class ModelCatalogTests(unittest.TestCase):
             "cohere-embed-v4-0": 0.6000,
             "nvidia-nemotron-3-embed-8b": 0.7846,
             "nvidia-nemotron-3-embed-1b": 0.5000,
+            "pplx-embed-v2-late-0.6b": 0.5,
+            "pplx-embed-v2-late-9b": 0.5,
+            "embeddinggemma-2": 0.5,
         }
         expected_decontaminated_beir = {
             "denseon": 0.5771,
@@ -1220,7 +1233,15 @@ class ModelCatalogTests(unittest.TestCase):
 
         self.assertEqual(
             EMBEDDING_QUALITY_PLACEHOLDER,
-            frozenset({"cohere-embed-v4-0", "nvidia-nemotron-3-embed-1b"}),
+            frozenset(
+                {
+                    "cohere-embed-v4-0",
+                    "nvidia-nemotron-3-embed-1b",
+                    "pplx-embed-v2-late-0.6b",
+                    "pplx-embed-v2-late-9b",
+                    "embeddinggemma-2",
+                }
+            ),
         )
         self.assertEqual(set(PUBLISHED_EMBEDDING_QUALITY), set(expected_quality))
         self.assertEqual(set(EMBEDDING_QUALITY_SOURCES), set(expected_quality))
@@ -1356,7 +1377,7 @@ class ModelCatalogTests(unittest.TestCase):
         for key, model in MODELS.items():
             with self.subTest(model=key):
                 available = model.available_spec_profiles
-                if model.is_asr_model or model.is_embedding_model:
+                if model.is_asr_model or model.is_embedding_model or model.is_decision_model:
                     self.assertEqual(available, ())
                 else:
                     self.assertIs(available[-1], NGRAM_SPECULATIVE_PROFILE)

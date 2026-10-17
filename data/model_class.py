@@ -7,6 +7,7 @@ from .model_archive import ARCHIVED_MODELS
 from .specs import (
     PRECISION_SPECS,
     QuantizationProfile,
+    QuantizationScheme,
     WeightComponent,
     WeightMemory,
     bytes_per_param,
@@ -31,6 +32,19 @@ class RealtimeProfile:
     audio_attention_head_dim: int = 0
     audio_attention_window: int = 0
     streaming: bool = True
+
+
+@dataclass(frozen=True)
+class DecisionProfile:
+    """Single-forward classification; the input includes questions and options."""
+
+    max_sequence_length: int
+    source: str
+    note: str
+    causal_attention: bool = True
+
+
+DECISION_PROFILES: dict[str, DecisionProfile] = {}
 
 
 @dataclass(frozen=True)
@@ -406,6 +420,7 @@ class Model:
         if (
             not self.is_asr_model
             and not self.is_embedding_model
+            and not self.is_decision_model
             and self.max_context_tokens >= 131072
         ):
             capabilities = capabilities | {"ctx_128k"}
@@ -429,13 +444,21 @@ class Model:
         return "Realtime" if self.is_streaming_asr else "Non-realtime"
 
     @property
+    def decision_profile(self) -> DecisionProfile | None:
+        return DECISION_PROFILES.get(self.key)
+
+    @property
+    def is_decision_model(self) -> bool:
+        return self.decision_profile is not None
+
+    @property
     def is_embedding_model(self) -> bool:
         return self.embedding_profile is not None
 
     @property
     def available_spec_profiles(self) -> tuple[SpeculativeProfile, ...]:
         # N-gram needs no drafter and is always available to plain text models.
-        if self.is_asr_model or self.is_embedding_model:
+        if self.is_asr_model or self.is_embedding_model or self.is_decision_model:
             return ()
         return self.speculative_profiles + (NGRAM_SPECULATIVE_PROFILE,)
 
@@ -773,6 +796,9 @@ def _artifact_profile(
     group_size: int | None = None,
     storage_format_counts: dict[str, int] | None = None,
     captured_at: str = "2026-09-02",
+    container: str = "safetensors",
+    scheme: QuantizationScheme | None = None,
+    storage_evidence: str = "exact tensor bytes",
 ) -> tuple[tuple[str, str], QuantizationProfile]:
     return (
         (model_key, precision_key),
@@ -786,7 +812,7 @@ def _artifact_profile(
             source_kind="exact",
             quant_algo=quant_algo,
             kv_cache_format=kv_cache_format,
-            kv_cache_bytes_per_elem=1.0,
+            kv_cache_bytes_per_elem=2.0 if kv_cache_format == "BF16" else 1.0,
             group_size=group_size,
             storage_format_counts=storage_format_counts or {},
             compute_precision_shares=compute_precision_shares,
@@ -794,6 +820,9 @@ def _artifact_profile(
             retained=retained,
             total_weight_bytes_override=total_weight_bytes,
             notes=notes,
+            container=container,
+            scheme=scheme,
+            storage_evidence=storage_evidence,
         ),
     )
 
@@ -917,8 +946,8 @@ MODEL_QUANTIZATION_PROFILES: dict[tuple[str, str], QuantizationProfile] = dict(
             QuantizationProfile(
                 precision_key="mxfp4",
                 label="Native MXFP4/FP8",
-                source_repo="deepseek-ai/DeepSeek-V4.1-Flash",
-                source_revision="df42c109f1defefcbfcedbe7d905718a12266e40",
+                source_repo="deepseek-ai/DeepSeek-V4.1-Flash-1017",
+                source_revision="1bae0e1088993b9b82de08f59de5be5a34e42170",
                 source_downloads=0,
                 captured_at="2026-09-10",
                 source_kind="exact",
@@ -1401,6 +1430,267 @@ ARCHIVED_QUANTIZATION_PROFILES = {
     for key, profile in MODEL_QUANTIZATION_PROFILES.items()
     if key[0] in ARCHIVED_MODELS
 }
+
+# Exact released artifacts captured 2026-10-17. Storage and compute formats
+# are deliberately separate; custom-kernel performance remains a proxy.
+MODEL_QUANTIZATION_PROFILES.update(
+    dict(
+        [
+            _artifact_profile(
+                model_key="beam-1.0-501b-a23b",
+                precision_key="bf16",
+                label="Official BF16",
+                source_repo="reflection/Beam-1.0-501B-A23B",
+                source_revision="78f8f654d40a40919b8e9954b40dd879ecb9a692",
+                total_weight_bytes=1002663700352,
+                compute_precision_shares={"bf16": 1.0},
+                quantized=("Released checkpoint storage; see source notes.",),
+                retained=(
+                    "Non-quantized tensors and modality components included in artifact total.",
+                ),
+                notes="Exact indexed storage. Compute shares are conservative tensor-role proxies, not measured throughput.",
+                quant_algo="Official BF16",
+                kv_cache_format="BF16",
+                captured_at="2026-10-17",
+            ),
+            _artifact_profile(
+                model_key="beam-1.0-501b-a23b",
+                precision_key="fp8",
+                label="Official FP8",
+                source_repo="reflection/Beam-1.0-501B-A23B-FP8",
+                source_revision="077872da1757aa43e0330ab924b834825c54ecbc",
+                total_weight_bytes=503276437376,
+                compute_precision_shares={"fp8": 0.97, "bf16": 0.03},
+                quantized=("Released checkpoint storage; see source notes.",),
+                retained=(
+                    "Non-quantized tensors and modality components included in artifact total.",
+                ),
+                notes="Exact indexed storage. Compute shares are conservative tensor-role proxies, not measured throughput.",
+                quant_algo="Official FP8",
+                kv_cache_format="FP8",
+                captured_at="2026-10-17",
+            ),
+            _artifact_profile(
+                model_key="beam-1.0-501b-a23b",
+                precision_key="nvfp4",
+                label="Official NVFP4",
+                source_repo="reflection/Beam-1.0-501B-A23B-NVFP4",
+                source_revision="3bd1dccf13c8f7aa3d6732c5aaa48ba107a2c086",
+                total_weight_bytes=293616910208,
+                compute_precision_shares={"nvfp4": 0.92, "bf16": 0.08},
+                quantized=("Released checkpoint storage; see source notes.",),
+                retained=(
+                    "Non-quantized tensors and modality components included in artifact total.",
+                ),
+                notes="Exact indexed storage. Compute shares are conservative tensor-role proxies, not measured throughput.",
+                quant_algo="Official NVFP4",
+                kv_cache_format="FP8",
+                captured_at="2026-10-17",
+            ),
+            _artifact_profile(
+                model_key="mimo-v2.6-flash-rl",
+                precision_key="mxfp4",
+                label="Official mixed MXFP4",
+                source_repo="XiaomiMiMo/MiMo-V2.6-Flash-RL",
+                source_revision="dcd3fd83fb181622fbc606fbb1709901982a62c2",
+                total_weight_bytes=172923364096,
+                compute_precision_shares={"mxfp4": 0.85, "fp8": 0.1, "bf16": 0.05},
+                quantized=("Released checkpoint storage; see source notes.",),
+                retained=(
+                    "Non-quantized tensors and modality components included in artifact total.",
+                ),
+                notes="Exact checkpoint index includes packed weights/scales, retained tensors, modality modules and draft tensors. Compute shares are explicit uncalibrated proxies.",
+                quant_algo="Official mixed MXFP4",
+                kv_cache_format="FP8",
+                captured_at="2026-10-17",
+            ),
+            _artifact_profile(
+                model_key="mimo-v2.6-pro-rl",
+                precision_key="mxfp4",
+                label="Official mixed MXFP4",
+                source_repo="XiaomiMiMo/MiMo-V2.6-Pro-RL",
+                source_revision="b61f21852680ee02a29e946e18cf8697f4844061",
+                total_weight_bytes=566027990784,
+                compute_precision_shares={"mxfp4": 0.85, "fp8": 0.1, "bf16": 0.05},
+                quantized=("Released checkpoint storage; see source notes.",),
+                retained=(
+                    "Non-quantized tensors and modality components included in artifact total.",
+                ),
+                notes="Exact checkpoint index includes packed weights/scales, retained tensors, modality modules and draft tensors. Compute shares are explicit uncalibrated proxies.",
+                quant_algo="Official mixed MXFP4",
+                kv_cache_format="FP8",
+                captured_at="2026-10-17",
+            ),
+            _artifact_profile(
+                model_key="mimo-v2.6-distill-qwen-9b",
+                precision_key="bf16",
+                label="Official BF16",
+                source_repo="XiaomiMiMo/MiMo-V2.6-Distill-Qwen-9B",
+                source_revision="2367e865d009c13ac81713a2878291d33ab28177",
+                total_weight_bytes=18819627488,
+                compute_precision_shares={"bf16": 1.0},
+                quantized=("Released checkpoint storage; see source notes.",),
+                retained=(
+                    "Non-quantized tensors and modality components included in artifact total.",
+                ),
+                notes="",
+                quant_algo="Official BF16",
+                kv_cache_format="BF16",
+                captured_at="2026-10-17",
+            ),
+            _artifact_profile(
+                model_key="ternary-bonsai-2-2b",
+                precision_key="bf16",
+                label="Ternary PTQ1_0 + Q8 vision",
+                source_repo="prism-ml/Ternary-Bonsai-2-2B-gguf",
+                source_revision="683f7be2629342a50987627b40881e54761a2430",
+                total_weight_bytes=793847808,
+                compute_precision_shares={"bf16": 1.0},
+                quantized=("Released checkpoint storage; see source notes.",),
+                retained=(
+                    "Non-quantized tensors and modality components included in artifact total.",
+                ),
+                notes="Exact GGUF file sizes including headers, FP32 state tensors, scales and Q8 vision projector. Canonical bf16 key selects the native packed artifact with BF16 compute proxy; this is not BF16 storage or an FP4 tensor-core benchmark.",
+                quant_algo="Ternary PTQ1_0 + Q8 vision",
+                kv_cache_format="BF16",
+                captured_at="2026-10-17",
+                container="gguf",
+                scheme=QuantizationScheme("TERNARY PTQ1_0", (), "FP16 group scales; Q8 vision"),
+                storage_evidence="exact complete GGUF files including headers and Q8 vision projector",
+            ),
+            _artifact_profile(
+                model_key="ternary-bonsai-2-4b",
+                precision_key="bf16",
+                label="Ternary PTQ1_0 + Q8 vision",
+                source_repo="prism-ml/Ternary-Bonsai-2-4B-gguf",
+                source_revision="8d6557168168f91ea6697a4a49ed2ef622b53adb",
+                total_weight_bytes=1316444544,
+                compute_precision_shares={"bf16": 1.0},
+                quantized=("Released checkpoint storage; see source notes.",),
+                retained=(
+                    "Non-quantized tensors and modality components included in artifact total.",
+                ),
+                notes="Exact GGUF file sizes including headers, FP32 state tensors, scales and Q8 vision projector. Canonical bf16 key selects the native packed artifact with BF16 compute proxy; this is not BF16 storage or an FP4 tensor-core benchmark.",
+                quant_algo="Ternary PTQ1_0 + Q8 vision",
+                kv_cache_format="BF16",
+                captured_at="2026-10-17",
+                container="gguf",
+                scheme=QuantizationScheme("TERNARY PTQ1_0", (), "FP16 group scales; Q8 vision"),
+                storage_evidence="exact complete GGUF files including headers and Q8 vision projector",
+            ),
+            _artifact_profile(
+                model_key="ternary-bonsai-2-9b",
+                precision_key="bf16",
+                label="Ternary PTQ1_0 + Q8 vision",
+                source_repo="prism-ml/Ternary-Bonsai-2-9B-gguf",
+                source_revision="5b2abb02362efbed46bbe204014b02837778b2c2",
+                total_weight_bytes=2621716640,
+                compute_precision_shares={"bf16": 1.0},
+                quantized=("Released checkpoint storage; see source notes.",),
+                retained=(
+                    "Non-quantized tensors and modality components included in artifact total.",
+                ),
+                notes="Exact GGUF file sizes including headers, FP32 state tensors, scales and Q8 vision projector. Canonical bf16 key selects the native packed artifact with BF16 compute proxy; this is not BF16 storage or an FP4 tensor-core benchmark.",
+                quant_algo="Ternary PTQ1_0 + Q8 vision",
+                kv_cache_format="BF16",
+                captured_at="2026-10-17",
+                container="gguf",
+                scheme=QuantizationScheme("TERNARY PTQ1_0", (), "FP16 group scales; Q8 vision"),
+                storage_evidence="exact complete GGUF files including headers and Q8 vision projector",
+            ),
+            _artifact_profile(
+                model_key="ternary-bonsai-2-27b",
+                precision_key="bf16",
+                label="Ternary PTQ1_0 + Q8 vision",
+                source_repo="prism-ml/Ternary-Bonsai-2-27B-gguf",
+                source_revision="b072e1d3b35a0a630cece372c2127528e0994386",
+                total_weight_bytes=6575895904,
+                compute_precision_shares={"bf16": 1.0},
+                quantized=("Released checkpoint storage; see source notes.",),
+                retained=(
+                    "Non-quantized tensors and modality components included in artifact total.",
+                ),
+                notes="Exact GGUF file sizes including headers, FP32 state tensors, scales and Q8 vision projector. Canonical bf16 key selects the native packed artifact with BF16 compute proxy; this is not BF16 storage or an FP4 tensor-core benchmark.",
+                quant_algo="Ternary PTQ1_0 + Q8 vision",
+                kv_cache_format="BF16",
+                captured_at="2026-10-17",
+                container="gguf",
+                scheme=QuantizationScheme("TERNARY PTQ1_0", (), "FP16 group scales; Q8 vision"),
+                storage_evidence="exact complete GGUF files including headers and Q8 vision projector",
+            ),
+            _artifact_profile(
+                model_key="nemotron35-super-vl",
+                precision_key="bf16",
+                label="Official BF16",
+                source_repo="nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16",
+                source_revision="1f8953f7f0935358e3605150d22bc15df062061c",
+                total_weight_bytes=248906833960,
+                compute_precision_shares={"bf16": 1.0},
+                quantized=("Released checkpoint storage; see source notes.",),
+                retained=(
+                    "Non-quantized tensors and modality components included in artifact total.",
+                ),
+                notes="Exact indexed resident bytes including modality modules and retained tensors. Canonical bf16 compute proxy; IQ2 is not an FP4 tensor-core format.",
+                quant_algo="Official BF16",
+                kv_cache_format="BF16",
+                captured_at="2026-10-17",
+            ),
+            _artifact_profile(
+                model_key="nemotron35-bolt-74b",
+                precision_key="bf16",
+                label="Official IQ2 + BF16 vision",
+                source_repo="nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB",
+                source_revision="c6cc2e8ffa353403213d6b9b18aaf8eb684d705a",
+                total_weight_bytes=24079678824,
+                compute_precision_shares={"bf16": 1.0},
+                quantized=("Released checkpoint storage; see source notes.",),
+                retained=(
+                    "Non-quantized tensors and modality components included in artifact total.",
+                ),
+                notes="Exact indexed resident bytes including modality modules and retained tensors. Canonical bf16 compute proxy; IQ2 is not an FP4 tensor-core format.",
+                quant_algo="Official IQ2 + BF16 vision",
+                kv_cache_format="BF16",
+                captured_at="2026-10-17",
+                scheme=QuantizationScheme("IQ2", (), "checkpoint-specific mixed scales"),
+            ),
+            _artifact_profile(
+                model_key="muse-spark-open-816b-a42b",
+                precision_key="bf16",
+                label="Official BF16",
+                source_repo="meta-models/Muse-Spark-Open-816B-A42B",
+                source_revision="0fb02478b02565b2ce7fc57e6051c91172774ac9",
+                total_weight_bytes=1644333137920,
+                compute_precision_shares={"bf16": 1.0},
+                quantized=("Released checkpoint storage; see source notes.",),
+                retained=(
+                    "Non-quantized tensors and modality components included in artifact total.",
+                ),
+                notes="Exact public Hub dtype counts including FP32 tensors; checkpoint config is gated. Full-global KV proxy.",
+                quant_algo="Official BF16",
+                kv_cache_format="BF16",
+                captured_at="2026-10-17",
+            ),
+            _artifact_profile(
+                model_key="muse-spark-open-816b-a42b",
+                precision_key="nvfp4",
+                label="Official NVFP4",
+                source_repo="meta-models/Muse-Spark-Open-816B-A42B-NVFP4",
+                source_revision="4239e4db19376904f2e82c167e78f70abb5455fe",
+                total_weight_bytes=533010718720,
+                compute_precision_shares={"nvfp4": 0.85, "bf16": 0.15},
+                quantized=("Released checkpoint storage; see source notes.",),
+                retained=(
+                    "Non-quantized tensors and modality components included in artifact total.",
+                ),
+                notes="Exact public Hub physical dtype counts include packed payloads, scales, retained BF16 and FP32 tensors; compute shares are conservative proxies.",
+                quant_algo="Official NVFP4",
+                kv_cache_format="FP8",
+                captured_at="2026-10-17",
+            ),
+        ]
+    )
+)
+
 MODEL_QUANTIZATION_PROFILES = {
     key: profile
     for key, profile in MODEL_QUANTIZATION_PROFILES.items()

@@ -12,14 +12,28 @@ from .asr_support import (
 from .model_archive import ARCHIVED_MODELS
 from .model_class import Model
 from .models_asr import ASR_MODELS
+from .models_decision import DECISION_MODELS
 from .models_embedding import EMBEDDING_MODELS
 from .models_text import TEXT_MODELS
 
-_ALL_MODEL_DEFINITIONS = {**EMBEDDING_MODELS, **TEXT_MODELS, **ASR_MODELS}
+_ALL_MODEL_DEFINITIONS = {**EMBEDDING_MODELS, **TEXT_MODELS, **ASR_MODELS, **DECISION_MODELS}
 _INITIAL_MODELS = {
     key: model for key, model in _ALL_MODEL_DEFINITIONS.items() if key not in ARCHIVED_MODELS
 }
 MODEL_ORDER = (
+    "d1-3b",
+    "d1-omni-600m",
+    "pplx-decider-v1.1-27b",
+    "pplx-decider-flash-v1.2",
+    "clef",
+    "clef-flash",
+    "mapika-decider-2b",
+    "mapika-decider-4b",
+    "mapika-decider-35b-a3b",
+    "kev-27b",
+    "intern-decision-0.8b",
+    "intern-decision-2b",
+    "intern-decision-4b",
     "nvidia-nemotron-3-embed-8b",
     "nvidia-nemotron-3-embed-1b",
     "denseon",
@@ -134,6 +148,24 @@ MODEL_ORDER = (
     "mimo-v2.5-pro",
     "mimo-v2.5",
     "cr13",
+    "beam-1.0-501b-a23b",
+    "mimo-v2.6-flash-rl",
+    "mimo-v2.6-pro-rl",
+    "mimo-v2.6-distill-qwen-9b",
+    "ternary-bonsai-2-2b",
+    "ternary-bonsai-2-4b",
+    "ternary-bonsai-2-9b",
+    "ternary-bonsai-2-27b",
+    "lfm2.5-24b-a2b",
+    "mellum2.1-12b-a2.5b-thinking",
+    "hy-memory-30b-a3b",
+    "nemotron35-super-vl",
+    "nemotron35-bolt-74b",
+    "muse-spark-open-816b-a42b",
+    "pplx-embed-v2-late-0.6b",
+    "pplx-embed-v2-late-9b",
+    "embeddinggemma-2",
+    "jais-asr",
 )
 MODELS: dict[str, Model] = {key: _INITIAL_MODELS[key] for key in MODEL_ORDER}
 

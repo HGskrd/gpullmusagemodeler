@@ -9,6 +9,7 @@ from calc import (
     EfficiencyParams,
     avg_dist,
     communication_breakdown,
+    compute_decision,
     compute_decode,
     compute_embedding_distribution,
     compute_realtime_capacity,
@@ -403,6 +404,25 @@ def _build_model_info(
             "sample": sample,
         }
 
+    decision: dict | None = None
+    if model.is_decision_model:
+        decision_sample = None
+        if gpu and am.gpu_count > 0:
+            for batch in _probe_batch_sizes(am.prefill_dp):
+                candidate = compute_decision(
+                    model,
+                    (am.prefill_tp, am.prefill_pp, am.prefill_dp),
+                    batch,
+                    state.task_il,
+                    gpu,
+                    state.mu,
+                    state.profiled_non_kv_gb,
+                    am.prec,
+                    state.prefill_efficiency,
+                )
+                if candidate and (decision_sample is None or candidate.rps > decision_sample.rps):
+                    decision_sample = candidate
+        decision = {"profile": model.decision_profile, "sample": decision_sample}
     embedding = None
     if embedding_profile is not None and gpu and am.gpu_count > 0 and prefill_mem is not None:
         if embedding_stats is None:
@@ -468,17 +488,21 @@ def _build_model_info(
         "gpu": gpu,
         "mem": mem,
         "prefill_mem": prefill_mem,
-        "decode_mem": decode_mem,
+        "decode_mem": None if model.is_decision_model else decode_mem,
         "strats": strats,
         "kv_gb": f"{mem.kv_budget / 1e9:.0f}" if mem else "0",
         "prefill_kv_gb": prefill_kv_gb,
         "decode_kv_gb": decode_kv_gb,
-        "max_slots": decode_max_slots,
-        "decode_max_slots": decode_max_slots,
+        "max_slots": 0 if model.is_decision_model else decode_max_slots,
+        "decode_max_slots": 0 if model.is_decision_model else decode_max_slots,
         "requested_gb": f"{mem.requested / 1e9:.0f}" if mem else "0",
         "profiled_non_kv_total_gb": f"{mem.profiled_non_kv / 1e9:.0f}" if mem else "0",
         "kv_reserved_gb": f"{mem.kv_reserved / 1e9:.0f}" if mem else "0",
-        "prefill_max_batch": prefill_max_batch,
+        "prefill_max_batch": (
+            decision["sample"].max_batch if decision and decision["sample"] else 0
+        )
+        if model.is_decision_model
+        else prefill_max_batch,
         "prefill_probe_len": prefill_probe_len,
         "max_avail": max_avail,
         "gpu_count_options": _gpu_count_options(max_avail, am.gpu_count, gpu),
@@ -501,13 +525,15 @@ def _build_model_info(
         ),
         "realtime": realtime,
         "embedding": embedding,
+        "decision": decision,
         "spec": spec_info,
         "spec_options": model.available_spec_profiles,
         "mixed_weight_precision": model.uses_mixed_weight_precision(am.prec),
         "fits": mem is not None,
-        "decode_fits": decode_mem is not None,
-        "prefill_fits": prefill_mem is not None,
-        "runnable": bool(strats),
+        "decode_fits": decode_mem is not None and not model.is_decision_model,
+        "prefill_fits": prefill_mem is not None
+        and (decision is None or decision["sample"] is not None),
+        "runnable": bool(strats) and (decision is None or decision["sample"] is not None),
         "recommended_label": recommended_label,
         "topology_label": topology_label,
         "selected_min_gpu_count": selected_min_gpu_count,

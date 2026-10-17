@@ -25,16 +25,19 @@ def models_by_category() -> dict[str, list[Model]]:
     return cats
 
 
-# Three top-level kinds used by the model picker tabs. Order is the tab order;
+# Top-level kinds used by the model picker tabs. Order is the tab order;
 # the first non-empty kind is the default active tab.
 MODEL_KINDS: tuple[tuple[str, str], ...] = (
     ("llm", "LLM"),
     ("embedding", "Embedding"),
     ("asr", "ASR"),
+    ("decision", "Decision"),
 )
 
 
 def _model_kind(m: Model) -> str:
+    if m.is_decision_model:
+        return "decision"
     if m.is_asr_model:
         return "asr"
     if m.is_embedding_model:
