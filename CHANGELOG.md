@@ -4,6 +4,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2026-10-17
+
+### Added
+
+- Added visitor insight pages to `/admin`: overview with tracking health, audience & geography (world map, channels, local-time heatmap), rule-based personas, per-person profiles that read each visit as a story, journeys & friction (funnel, recovery after "doesn't fit", friction signals), and demand & gaps (model-size × hardware demand, fit rates, unanswered requests, self-reported $/GPU-hr, agent questions). The snapshot browser moved to `/admin/snapshots`.
+- Added visitor analytics storage: first-touch visitor context (Cloudflare country/city/timezone headers, referrer host, UTM, device class, language; never an IP) and slim per-action events with fit outcomes. Previously untracked edits (model add/remove/precision/GPU count, GPU quantity and cost) are now recorded as coalesced events, as are rejected model adds, exports, economics and use-case page views, and agent-API calls.
+
+### Changed
+
+- "Delete my stored scenarios" also deletes the visitor's analytics rows, and the privacy note discloses the new fields.
+
 ## 2026-09-21
 
 ### Added

@@ -186,8 +186,8 @@
 
   <div class="topbar">
     <div>
-      <h1>Planner Admin</h1>
-      <div class="meta">
+      <h1>Planner Admin · raw snapshots</h1>
+      <div class="meta"><a href="{{ url_for('admin.admin') }}">← Visitor insights</a> &nbsp;·&nbsp;
         <strong>{{ total_snapshots }}</strong> snapshot{{ '' if total_snapshots == 1 else 's' }} &nbsp;·&nbsp;
         <strong>{{ visitors|length }}</strong> visitor{{ '' if visitors|length == 1 else 's' }} on this page
       </div>

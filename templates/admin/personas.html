@@ -1,0 +1,203 @@
+{% extends "admin/_layout.html" %}
+{% block styles %}
+  .share { display: flex; height: 26px; gap: 2px; border-radius: 6px; overflow: hidden; }
+  .share span { display: flex; align-items: center; padding-left: 7px; font-size: 11px; color: #fff; white-space: nowrap; overflow: hidden; }
+  .pcards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+  @media (max-width: 1000px) { .pcards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 640px) { .pcards { grid-template-columns: minmax(0, 1fr); } }
+  .pc { border-top: 4px solid; display: flex; flex-direction: column; gap: 9px; }
+  .pc .big { font-size: 22px; font-weight: 600; }
+  .pc .blurb { color: var(--text-2); font-size: 12px; }
+  .pc dl { display: grid; grid-template-columns: 92px 1fr; gap: 4px 8px; font-size: 12px; }
+  .pc dt { color: var(--muted); }
+  .pc dd { min-width: 0; }
+  .pc .rule { font-size: 11px; color: var(--muted); background: var(--panel-2); border-radius: 6px; padding: 5px 8px; }
+  .pc .idea { font-size: 12px; border-left: 3px solid var(--line); padding-left: 8px; color: var(--text-2); }
+  .matrix { display: grid; gap: 2px; font-size: 11px; }
+  .matrix .c { height: 26px; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums; }
+  .matrix .h { color: var(--muted); text-align: center; align-self: end; padding-bottom: 3px; }
+  .sm { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 16px; }
+  @media (max-width: 900px) { .sm { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .sm svg { width: 100%; height: auto; display: block; }
+{% endblock %}
+{% block content %}
+  <section class="card">
+    <div class="card-head"><h2>Who the calculator is serving</h2><span class="spacer"></span><span class="seg" id="basis"><button type="button" data-v="all" class="on">All visitors</button><button type="button" data-v="eng">Engaged only</button></span></div>
+    <div class="q">Personas are derived from what people do, never asked. Each card shows its rule.</div>
+    <div class="share" id="share"></div>
+    <div class="legend" id="share-legend" style="margin-top:8px"></div>
+  </section>
+  <section class="pcards" id="cards"></section>
+  <section class="card">
+    <h2>Side by side</h2>
+    <div class="q">How each persona behaves. Use this to decide who a feature is for.</div>
+    <div style="overflow:auto"><table class="t" id="cmp"></table></div>
+  </section>
+  <section class="grid g2">
+    <div class="card">
+      <h2>Persona mix by country</h2>
+      <div class="q">Share of each country’s engaged visitors (columns sum to 100%). Top 12 countries.</div>
+      <div id="matrix" style="overflow:auto"></div>
+    </div>
+    <div class="card">
+      <h2>Weekly new visitors per persona</h2>
+      <div class="q">Each persona on its own scale: compare shapes, not heights.</div>
+      <div class="sm" id="sm"></div>
+    </div>
+  </section>
+  <section class="card">
+    <h2>Unclassified explorers: candidates for a new persona</h2>
+    <div class="q">Engaged visitors that no rule matched. If a pattern repeats here, add a rule in <span class="mono">static/admin/admin.js</span>.</div>
+    <table class="t" id="other"></table>
+  </section>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const { A, PERSONAS, PERSONA_ORDER, RULES, pColor, pchip, fmt, pct, flag, countryName, esc, shortGpu, shortModel, gpuName, modelName, visible, filterBar, setCount, countBy, engaged, dur, date, emptyState } = UI;
+  const PEOPLE_URL = "{{ url_for('admin.people') }}";
+  let basis = "all";
+  document.querySelectorAll("#basis button").forEach((b) => b.addEventListener("click", () => {
+    basis = b.dataset.v; document.querySelectorAll("#basis button").forEach((x) => x.classList.toggle("on", x === b)); render();
+  }));
+  filterBar(document.getElementById("filters"), render);
+
+  const IDEAS = {
+    homelab: "Lead with GGUF/MLX quant choices and tokens/s on llama.cpp & MLX. Add the consumer cards they ask about.",
+    buyer: "One-click PDF/quote with assumptions; $/M tokens vs. API side by side; persist comparisons across visits.",
+    evaluator: "Saved shortlists and a multi-model table (fit, TP/PP, tok/s) instead of adding models one by one.",
+    speech: "Headline concurrent streams per GPU and RTF; pair ASR + LLM in one plan.",
+    solutions: "A wizard from users/docs per day to a recommended stack, with a shareable link for their team.",
+    agent: "Keep the agent API stable and explain each verdict; check which assistants send traffic and what they ask.",
+  };
+
+  function stats(list) {
+    const eng = list.filter(engaged);
+    const med = (a) => { const s = a.filter((x) => x != null).sort((x, y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : null; };
+    const finals = eng.flatMap((v) => v.sessions.map((s) => s.final).filter((f) => f && f.models.length));
+    const share = (fn) => (eng.length ? eng.filter(fn).length / eng.length : 0);
+    return {
+      n: list.length,
+      ret: list.filter((v) => v.sessions.length > 1).length / Math.max(1, list.length),
+      sessT: med(eng.map((v) => v.f.durMs / v.sessions.length)),
+      models: med(eng.filter((v) => v.f.nModels > 0).map((v) => v.f.nModels)),
+      fit: finals.length ? finals.filter((f) => f.fit).length / finals.length : null,
+      oom: share((v) => v.f.oom > 0), compare: share((v) => v.f.compare), econ: share((v) => v.f.econ), exp: share((v) => v.f.exports),
+      mobile: list.filter((v) => v.device === "mobile").length / Math.max(1, list.length),
+      ttfm: med(eng.map((v) => v.f.firstModelMs)),
+    };
+  }
+
+  function share(vs) {
+    const base = basis === "eng" ? vs.filter(engaged) : vs;
+    const rows = PERSONA_ORDER.map((k) => [k, base.filter((v) => v.persona === k).length]).filter(([, n]) => n);
+    const tot = base.length || 1;
+    document.getElementById("share").innerHTML = rows.map(([k, n]) =>
+      `<span style="width:${(n / tot) * 100}%;background:${pColor(k)}" data-tip="<b>${PERSONAS[k].label}</b><div>${fmt(n)} visitors · ${pct(n / tot)}</div>">${n / tot > 0.07 ? PERSONAS[k].short : ""}</span>`).join("");
+    document.getElementById("share-legend").innerHTML = rows.length ? rows.map(([k, n]) => pchip(k, `${PERSONAS[k].label} <span class="muted num">${pct(n / tot)}</span>`)).join("") : emptyState();
+  }
+
+  function cards(vs) {
+    document.getElementById("cards").innerHTML = PERSONA_ORDER.filter((k) => IDEAS[k]).map((k) => {
+      const list = vs.filter((v) => v.persona === k);
+      if (!list.length) return `<div class="card pc" style="border-top-color:${pColor(k)}">${pchip(k, `<b>${PERSONAS[k].label}</b>`)}<div class="muted">Nobody in this range.</div><div class="rule">Rule: ${RULES[k]}</div></div>`;
+      const s = stats(list);
+      const countries = countBy(list, (v) => v.country).slice(0, 5);
+      const channels = countBy(list, (v) => v.channel).slice(0, 2);
+      const gpus = countBy(list.flatMap((v) => Object.keys(v.f.gpus)), (x) => x).slice(0, 3);
+      const models = countBy(list.flatMap((v) => Object.keys(v.f.models)), (x) => x).slice(0, 3);
+      const rejected = countBy(list.flatMap((v) => v.f.rejected), (x) => x).slice(0, 2);
+      return `<div class="card pc" style="border-top-color:${pColor(k)}">
+        <div class="card-head">${pchip(k, `<b>${PERSONAS[k].label}</b>`)}<span class="spacer"></span><a href="${PEOPLE_URL}#persona=${k}" style="font-size:12px">people →</a></div>
+        <div><span class="big num">${fmt(list.length)}</span> <span class="muted">visitors · ${pct(s.ret)} return</span></div>
+        <div class="blurb">${PERSONAS[k].blurb}</div>
+        <dl>
+          <dt>From</dt><dd>${countries.map(([c, n]) => `<span data-tip="${esc(countryName(c))}: ${n}">${flag(c)}</span>`).join(" ")} <span class="muted">${countries.length ? esc(countryName(countries[0][0])) + " top" : ""}</span></dd>
+          <dt>Arrives via</dt><dd>${channels.map(([c]) => esc(c)).join(", ")}</dd>
+          <dt>Hardware</dt><dd>${gpus.map(([g]) => `<span title="${esc(gpuName(g))}">${esc(shortGpu(g))}</span>`).join(" · ") || "—"}</dd>
+          <dt>Models</dt><dd>${models.map(([m]) => `<span title="${esc(modelName(m))}">${esc(shortModel(m))}</span>`).join(" · ") || "—"}</dd>
+          ${rejected.length ? `<dt>Couldn’t fit</dt><dd>${rejected.map(([m]) => `<span class="tag">${esc(shortModel(m))}</span>`).join(" ")}</dd>` : ""}
+          <dt>Gets a fit</dt><dd>${s.fit == null ? "—" : pct(s.fit) + " of final plans"}</dd>
+        </dl>
+        <div class="idea"><b>Improve for them:</b> ${IDEAS[k]}</div>
+        <div class="rule">Rule: ${RULES[k]}</div>
+      </div>`;
+    }).join("");
+  }
+
+  function compareTable(vs) {
+    const cols = [
+      ["Visitors", (s) => fmt(s.n)], ["Returning", (s) => pct(s.ret)], ["Median visit", (s) => (s.sessT == null ? "—" : dur(s.sessT))],
+      ["Time to 1st model", (s) => (s.ttfm == null ? "—" : dur(s.ttfm))], ["Models / visitor", (s) => (s.models == null ? "—" : s.models)],
+      ["Hit doesn’t-fit", (s) => pct(s.oom)], ["Final plan fits", (s) => (s.fit == null ? "—" : pct(s.fit))], ["Used compare", (s) => pct(s.compare)],
+      ["Used economics", (s) => pct(s.econ)], ["Exported", (s) => pct(s.exp)], ["Mobile", (s) => pct(s.mobile)],
+    ];
+    const rows = PERSONA_ORDER.map((k) => [k, vs.filter((v) => v.persona === k)]).filter(([, l]) => l.length);
+    document.getElementById("cmp").innerHTML = rows.length ? `<thead><tr><th>Persona</th>${cols.map(([c]) => `<th class="r">${c}</th>`).join("")}</tr></thead><tbody>` +
+      rows.map(([k, l]) => { const s = stats(l); return `<tr><td>${pchip(k)}</td>${cols.map(([, f]) => `<td class="r">${f(s)}</td>`).join("")}</tr>`; }).join("") + `</tbody>` : "";
+  }
+
+  function matrix(vs) {
+    const eng = vs.filter(engaged);
+    const top = countBy(eng.filter((v) => v.country), (v) => v.country).slice(0, 12).map(([c]) => c);
+    if (!top.length) { document.getElementById("matrix").innerHTML = `<div class="muted">No engaged visitors with a country yet.</div>`; return; }
+    const ks = PERSONA_ORDER.filter((k) => k !== "bouncer");
+    let html = `<div class="matrix" style="grid-template-columns:150px repeat(${top.length}, minmax(34px, 1fr))"><div></div>` +
+      top.map((c) => `<div class="h" data-tip="${esc(countryName(c))}">${flag(c)}<br>${c}</div>`).join("");
+    for (const k of ks) {
+      html += `<div style="align-self:center">${pchip(k, PERSONAS[k].short)}</div>`;
+      for (const c of top) {
+        const col = eng.filter((v) => v.country === c);
+        const n = col.filter((v) => v.persona === k).length;
+        const r = col.length ? n / col.length : 0;
+        const step = r === 0 ? "--seq-0" : `--seq-${Math.min(6, 1 + Math.floor(r * 10))}`;
+        html += `<div class="c" style="background:var(${step});color:${r >= 0.35 ? "var(--panel)" : "var(--text-2)"}" data-tip="<b>${flag(c)} ${esc(countryName(c))} · ${PERSONAS[k].label}</b><div>${n} of ${col.length} engaged (${pct(r)})</div>">${r ? Math.round(r * 100) : ""}</div>`;
+      }
+    }
+    document.getElementById("matrix").innerHTML = html + "</div>";
+  }
+
+  function smallMultiples(vs) {
+    const WEEK = 7 * 86400000;
+    const nW = Math.max(2, Math.ceil(UI.filter.range / 7));
+    const start = UI.now() - nW * WEEK;
+    const W = 200, H = 70, L = 4, R = 4, T = 6, B = 14;
+    document.getElementById("sm").innerHTML = PERSONA_ORDER.filter((k) => k !== "other").map((k) => {
+      const counts = new Array(nW).fill(0);
+      for (const v of vs) if (v.persona === k) {
+        const i = Math.floor((v.first - start) / WEEK);
+        if (i >= 0 && i < nW) counts[i]++;
+      }
+      const max = Math.max(1, ...counts);
+      const x = (i) => L + (i / (nW - 1)) * (W - L - R);
+      const y = (n) => T + (1 - n / max) * (H - T - B);
+      const d = counts.map((n, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(n).toFixed(1)}`).join("");
+      const hits = counts.map((n, i) => `<rect x="${x(i) - W / nW / 2}" y="0" width="${W / nW}" height="${H}" fill="transparent" data-tip="<b>${PERSONAS[k].short}</b> · week of ${date(start + i * WEEK)}<div>${n} new visitors</div>"/>`).join("");
+      const last = counts[nW - 1];
+      return `<div><div style="font-size:12px;display:flex;justify-content:space-between">${pchip(k, PERSONAS[k].short)}<span class="muted num">${last}/wk</span></div>
+        <svg viewBox="0 0 ${W} ${H}"><line class="baseline" x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}"/>
+        <path d="${d}" fill="none" stroke="${pColor(k)}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+        <circle cx="${x(nW - 1)}" cy="${y(last)}" r="3" fill="${pColor(k)}" stroke="var(--panel)" stroke-width="2"/>${hits}</svg></div>`;
+    }).join("");
+  }
+
+  function others(vs) {
+    const list = vs.filter((v) => v.persona === "other").slice(0, 15);
+    document.getElementById("other").innerHTML = list.length ? `<thead><tr><th>Visitor</th><th>From</th><th>Hardware</th><th>Models</th><th>Did</th></tr></thead><tbody>` +
+      list.map((v) => `<tr class="click" data-id="${esc(v.id)}"><td class="mono">${esc(v.id.slice(0, 8))}</td><td>${flag(v.country)} ${esc(v.city || countryName(v.country))}</td>
+        <td>${Object.entries(v.f.gpus).map(([g, q]) => `${q}× ${esc(shortGpu(g))}`).join(", ") || "—"}</td>
+        <td>${Object.keys(v.f.models).map((m) => esc(shortModel(m))).join(", ") || "—"}</td>
+        <td class="muted">${v.f.config} edits · ${v.f.oom ? v.f.oom + " doesn’t-fit" : "no fit issue"}</td></tr>`).join("") + "</tbody>"
+      : `<tbody><tr><td class="muted">None in this range.</td></tr></tbody>`;
+    document.querySelectorAll("#other tr[data-id]").forEach((tr) => tr.addEventListener("click", () => { location.href = `${PEOPLE_URL}#v=${encodeURIComponent(tr.dataset.id)}`; }));
+  }
+
+  function render() {
+    const vs = visible();
+    setCount(vs.length);
+    share(vs); cards(vs); compareTable(vs); matrix(vs); smallMultiples(vs); others(vs);
+  }
+  UI.start(render);
+})();
+</script>
+{% endblock %}

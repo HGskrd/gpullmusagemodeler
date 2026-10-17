@@ -17,6 +17,7 @@ from planner_service import (
 from scenarios import (
     serialize_scenario,
 )
+from web.analytics import record_event
 from web.helpers import (
     _htmx_response,
     _load_import_json,
@@ -94,7 +95,9 @@ def session_data_delete():
 
 @scenarios_bp.route("/scenario/export", methods=["GET"])
 def scenario_export():
-    payload = serialize_scenario(get_state(_scope_id()), get_compare_state(_scope_id()))
+    state_a, state_b = get_state(_scope_id()), get_compare_state(_scope_id())
+    record_event("scenario_export", state_a, state_b)
+    payload = serialize_scenario(state_a, state_b)
     body = json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
     response = make_response(body)
     response.headers["Content-Type"] = "application/json; charset=utf-8"

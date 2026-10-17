@@ -7,7 +7,7 @@ import math
 from dataclasses import asdict, is_dataclass
 from typing import Any
 
-from flask import Blueprint, current_app, jsonify, request, send_file
+from flask import Blueprint, current_app, g, jsonify, request, send_file
 from jsonschema import Draft202012Validator
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
@@ -210,11 +210,15 @@ def calculate():
         raise BadRequest("Request body must be valid JSON with bounded nesting.") from error
     _validate_request(payload)
     state_a, state_b = deserialize_scenario(payload["scenario"])
+    panel_a_result = _panel_result(state_a)
+    if panel_a_result["models"]:
+        # Read by the analytics after_request hook (web/analytics.py).
+        g.analytics_api_result = all(row["runnable"] for row in panel_a_result["models"])
     result = {
         "api_version": "1",
         "scenario": serialize_scenario(state_a, state_b),
         "results": {
-            "panel_a": _panel_result(state_a),
+            "panel_a": panel_a_result,
             "panel_b": _panel_result(state_b) if state_b is not None else None,
         },
         "warnings": [

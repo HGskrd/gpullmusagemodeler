@@ -138,7 +138,9 @@ LLM agents can use the calculator without a browser session through the stateles
 `POST /api/v1/calculate` endpoint. It accepts the existing scenario export format
 inside a `scenario` field and returns normalized A/B configurations, structured
 capacity/economics estimates, fit diagnostics, and optional text reports/charts.
-API calls do not save snapshots or change browser scenarios.
+API calls do not save snapshots, set cookies, or change browser scenarios; each call
+logs one usage event (endpoint, status, requested model/GPU keys) under a pseudonymous,
+daily-rotating id so `/admin` can show what agents ask.
 
 Start at [`/llms.txt`](llms.txt) or read the [API guide](docs/api.md). Runtime
 discovery is available at `/api/v1/catalog`, `/api/v1/example` and
@@ -162,8 +164,8 @@ curl --fail-with-body http://localhost:5014/api/v1/calculate \
 | `WEB_CONCURRENCY` | Gunicorn worker count used by the shipped Docker command; must stay at `1` while planner state is in process memory |
 | `GUNICORN_THREADS` | Gunicorn thread count; defaults to `4` |
 | `GUNICORN_TIMEOUT` | Gunicorn request timeout in seconds; defaults to `120` |
-| `PLANNER_TRACKING_ENABLED` | Persist complete planner scenario snapshots; defaults to `true` |
-| `PLANNER_SNAPSHOT_RETENTION_DAYS` | Delete snapshots older than this many days; defaults to `90`; `0` keeps the full history indefinitely |
+| `PLANNER_TRACKING_ENABLED` | Persist planner scenario snapshots and visitor analytics; defaults to `true` |
+| `PLANNER_SNAPSHOT_RETENTION_DAYS` | Delete snapshots, analytics events and idle visitor rows older than this many days; defaults to `90`; `0` keeps the full history indefinitely |
 | `PLANNER_SNAPSHOT_MAX_PER_TAB` | Maximum snapshots retained per browser tab; defaults to `250`; `0` keeps every snapshot |
 | `PLANNER_ADMIN_PAGE_SIZE` | Snapshots rendered per admin page; defaults to `100` |
 | `PLANNER_STATE_TTL_SECONDS` | Idle lifetime for an in-memory planner scope; defaults to `86400` |
@@ -224,7 +226,9 @@ Tighten those two directives if you remove the inline script block in
 
 The planner stores complete A/B scenario snapshots—including hardware, model assignments, topology, costs, workload shapes, and use-case economics—so administrators can inspect how planning decisions evolve. Snapshot persistence is enabled by default, bounded to 90 days and 250 snapshots per browser tab; set either limit to `0` for unlimited history. Stored rows omit use-case definitions that match the built-in presets and reattach them on read, so custom libraries are preserved without duplicating preset content in every row.
 
-Snapshots are stored transactionally in `instance/planner_snapshots.sqlite3`; the legacy JSON file is imported on first use when present. The calculator discloses this behavior and provides a **Delete my scenarios** action that removes the current visitor's persisted snapshots and in-memory state. Set `PLANNER_TRACKING_ENABLED=false` when a deployment should not retain scenarios, or configure the optional retention limits above.
+Snapshots are stored transactionally in `instance/planner_snapshots.sqlite3`; the legacy JSON file is imported on first use when present.
+
+The same database holds visitor analytics for the `/admin` insight pages (overview, audience & geography, personas, people, journeys & friction, demand & gaps; the raw snapshot browser moved to `/admin/snapshots`). Each visitor row keeps first-touch context only: Cloudflare's `CF-IPCountry` and, when the **Add visitor location headers** managed transform is enabled, `CF-IPCity`/`CF-Region`/`CF-Timezone`; the referrer *host*; `utm_*` tags; the entry path; a device class derived from the User-Agent; and the first `Accept-Language` tag. Per action it stores a slim event (whitelisted form fields plus a compact summary of the affected panel, including whether each model fits); rapid repeats of the same edit collapse into one event. No IP address is stored; cookie-less agent-API callers are grouped by a salted hash that rotates daily. Indexing crawlers are not recorded, and browsers that log in to `/admin` are flagged internal and hidden by default. Personas on the admin pages are transparent rules over these events (`static/admin/admin.js`), not stored labels. The calculator discloses this behavior and provides a **Delete my scenarios** action that removes the current visitor's persisted snapshots, analytics events and visitor row, and in-memory state. Set `PLANNER_TRACKING_ENABLED=false` when a deployment should not retain scenarios, or configure the optional retention limits above.
 
 Complete scenarios can be exported and imported as versioned JSON from the calculator. Treat these files as potentially sensitive infrastructure-planning data.
 

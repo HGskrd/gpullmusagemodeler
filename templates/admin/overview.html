@@ -1,0 +1,98 @@
+{% extends "admin/_layout.html" %}
+{% block styles %}
+  .share { display: flex; height: 24px; gap: 2px; border-radius: 6px; overflow: hidden; }
+  .share span { height: 100%; }
+  .links { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); gap: 14px; }
+  .links a { text-decoration: none; color: inherit; display: flex; flex-direction: column; gap: 4px; }
+  .links a:hover { border-color: var(--accent); }
+  .links h3 { font-size: 14px; }
+  .links p { font-size: 12px; color: var(--muted); }
+  .health { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; font-size: 12px; align-items: baseline; }
+  .health .ok { color: var(--good-ink); font-weight: 600; }
+  .health .warn { color: var(--critical); font-weight: 600; }
+  .recent .vrow { display: grid; grid-template-columns: 4px 1fr auto; gap: 0 10px; padding: 6px 0; border-bottom: 1px solid var(--line-soft); text-decoration: none; color: inherit; }
+  .recent .vrow:last-child { border-bottom: 0; }
+  .recent .vrow:hover { background: var(--panel-2); }
+  .recent .stripe { border-radius: 0 3px 3px 0; }
+  .recent .l2 { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+{% endblock %}
+{% block content %}
+  <section class="grid g4" id="kpis"></section>
+  <section class="grid g-73">
+    <div class="card">
+      <h2>Who is using it</h2>
+      <div class="q">Visitors by derived persona. Rules and details on <a href="{{ url_for('admin.personas') }}">Personas</a>.</div>
+      <div class="share" id="share"></div>
+      <div class="legend" id="legend" style="margin-top:8px"></div>
+      <h2 style="margin-top:16px">Latest people</h2>
+      <div class="recent" id="recent"></div>
+    </div>
+    <div class="card">
+      <h2>Tracking health</h2>
+      <div class="q">Is the data these pages need actually arriving?</div>
+      <div class="health" id="health"></div>
+    </div>
+  </section>
+  <section class="links">
+    <a class="card" href="{{ url_for('admin.audience') }}"><h3>Audience & geo</h3><p>Where people are, which channels bring engaged visitors, when they use it.</p></a>
+    <a class="card" href="{{ url_for('admin.personas') }}"><h3>Personas</h3><p>Who the tool really serves, and what to build for each group.</p></a>
+    <a class="card" href="{{ url_for('admin.people') }}"><h3>People</h3><p>Search one person and read what they were trying to do.</p></a>
+    <a class="card" href="{{ url_for('admin.journeys') }}"><h3>Journeys & friction</h3><p>Funnel, what happens after “doesn’t fit”, and fixable problems.</p></a>
+    <a class="card" href="{{ url_for('admin.demand') }}"><h3>Demand & gaps</h3><p>Model × hardware demand, fit rates, what the catalog can’t answer.</p></a>
+  </section>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const { A, PERSONAS, PERSONA_ORDER, pColor, pchip, fmt, pct, flag, esc, ago, datetime, shortGpu, shortModel, visible, engaged, filterBar, setCount, emptyState } = UI;
+  filterBar(document.getElementById("filters"), render);
+
+  function summary(v) {
+    if (v.persona === "agent") return `${v.f.api} API calls · ${esc(v.ua || "")}`;
+    const last = [...v.sessions].reverse().find((s) => s.final && (s.final.gpus.length || s.final.models.length));
+    if (!last) return "looked at the default scenario";
+    const g = last.final.gpus.map((x) => `${x.qty}× ${shortGpu(x.key)}`).join(" + ");
+    const m = last.final.models.map((x) => shortModel(x.key)).slice(0, 2).join(", ");
+    return esc([g, m].filter(Boolean).join(" · "));
+  }
+
+  function render() {
+    const vs = visible();
+    setCount(vs.length);
+    const st = A.meta.status || {};
+    const eng = vs.filter(engaged);
+    document.getElementById("kpis").innerHTML = [
+      ["Visitors", fmt(vs.length), `${fmt(vs.filter((v) => v.persona === "agent").length)} of them agents`],
+      ["Engaged", vs.length ? pct(eng.length / vs.length) : "—", "changed at least one input"],
+      ["Returning", vs.length ? pct(vs.filter((v) => v.sessions.length > 1).length / vs.length) : "—", "more than one visit"],
+      ["Countries", fmt(new Set(vs.map((v) => v.country).filter(Boolean)).size), `${fmt(vs.filter((v) => !v.country).length)} visitors without a country`],
+    ].map(([l, v, d]) => `<div class="card kpi"><div class="label">${l}</div><div class="value num">${v}</div><div class="delta">${d}</div></div>`).join("");
+
+    const rows = PERSONA_ORDER.map((k) => [k, vs.filter((v) => v.persona === k).length]).filter(([, n]) => n);
+    const tot = vs.length || 1;
+    document.getElementById("share").innerHTML = rows.map(([k, n]) => `<span style="width:${(n / tot) * 100}%;background:${pColor(k)}" data-tip="<b>${PERSONAS[k].label}</b><div>${fmt(n)} · ${pct(n / tot)}</div>"></span>`).join("");
+    document.getElementById("legend").innerHTML = rows.length ? rows.map(([k, n]) => pchip(k, `${PERSONAS[k].short} <span class="muted">${pct(n / tot)}</span>`)).join("") : emptyState();
+
+    const recent = eng.filter((v) => v.persona !== "internal").sort((a, b) => b.last - a.last).slice(0, 8);
+    document.getElementById("recent").innerHTML = recent.map((v) => `
+      <a class="vrow" href="{{ url_for('admin.people') }}#v=${encodeURIComponent(v.id)}">
+        <div class="stripe" style="background:${pColor(v.persona)}"></div>
+        <div style="min-width:0"><div style="font-size:12px">${flag(v.country)} <b>${esc(v.city || UI.countryName(v.country))}</b> <span class="muted">${PERSONAS[v.persona].short}</span></div><div class="l2">${summary(v)}</div></div>
+        <div class="muted" style="font-size:11px">${ago(v.last)}</div></a>`).join("") || `<div class="muted">No engaged visitors in this range yet.</div>`;
+
+    const all = st.visitors || 0;
+    const cRate = all ? st.visitors_with_country / all : 0;
+    const tRate = all ? st.visitors_with_timezone / all : 0;
+    const line = (ok, label, text) => `<span class="${ok ? "ok" : "warn"}">${ok ? "✓" : "!"} ${label}</span><span>${text}</span>`;
+    document.getElementById("health").innerHTML = [
+      line(st.events > 0, "Events", st.events ? `${fmt(st.events)} stored since ${datetime(st.first_event_ms)} · last ${ago(st.last_event_ms)}` : "none recorded yet"),
+      line(cRate > 0.5, "Country", all ? `${pct(cRate)} of ${fmt(all)} visitors. ${cRate > 0.5 ? "" : "Is the site behind Cloudflare? It sends CF-IPCountry."}` : "no visitors yet"),
+      line(tRate > 0.5, "City & timezone", all ? `${pct(tRate)} of visitors. ${tRate > 0.5 ? "" : "Turn on Cloudflare → Rules → Managed Transforms → “Add visitor location headers”. Local time falls back to the country’s main timezone."}` : "no visitors yet"),
+      line(true, "Internal", "Browsers that log in here are flagged and hidden by default."),
+      line(!A.meta.truncated, "Volume", A.meta.truncated ? "Range hit the event cap; older events are left out." : "All events in range loaded."),
+    ].join("");
+  }
+  UI.start(render);
+})();
+</script>
+{% endblock %}

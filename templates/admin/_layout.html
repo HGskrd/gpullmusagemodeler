@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin · {{ title }}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='admin/admin.css') }}">
+<style>{% block styles %}{% endblock %}</style>
+</head>
+<body>
+<div class="page">
+  <header class="topbar">
+    <div><h1>{{ title }}</h1><div class="sub">{{ subtitle }}</div></div>
+    <span class="spacer"></span>
+    <nav class="nav" aria-label="Admin pages">
+      {% for endpoint, _template, label, _title, _sub in pages %}
+      <a href="{{ url_for('admin.' ~ endpoint) }}" class="{{ 'on' if endpoint == page else '' }}">{{ label }}</a>
+      {% endfor %}
+      <a href="{{ url_for('admin.snapshots') }}">Raw snapshots</a>
+    </nav>
+    <button class="btn" id="theme-btn" type="button" title="Toggle theme" aria-label="Toggle theme">◐</button>
+    <form class="logout" method="post" action="{{ url_for('admin.admin_logout') }}"><button class="btn" type="submit">Log out</button></form>
+  </header>
+  {% if not tracking_enabled %}
+  <div class="banner">Tracking is disabled (<span class="mono">PLANNER_TRACKING_ENABLED</span>), so no new visits are recorded.</div>
+  {% endif %}
+  <div class="filters" id="filters"></div>
+  <div id="loading" class="loading">Loading visitors…</div>
+  <div id="content" class="content" hidden>
+    {% block content %}{% endblock %}
+  </div>
+</div>
+<script src="{{ url_for('static', filename='admin/admin.js') }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>
