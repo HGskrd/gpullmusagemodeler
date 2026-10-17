@@ -18,6 +18,7 @@ from web.admin import admin_bp
 from web.agent_api import agent_api_bp
 from web.analytics import register_analytics
 from web.api import api_bp
+from web.assets import register_asset_versions
 from web.cache import FingerprintCache, ScopedRevisionCache
 from web.config import (
     ADMIN_LOGIN_RATE_LIMIT,
@@ -127,6 +128,7 @@ def create_app(config: dict | None = None) -> Flask:
     ):
         application.register_blueprint(blueprint)
 
+    register_asset_versions(application)
     register_middleware(application)
     # Registered after the middleware so it runs first among after_request
     # hooks: a visitor id it creates still gets its cookie set.

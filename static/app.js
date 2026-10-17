@@ -229,7 +229,7 @@ function tooltipBase(theme, trigger, formatter) {
     borderWidth: 1,
     padding: [9, 13],
     confine: true,
-    extraCssText: `box-shadow:0 6px 24px ${shadow};border-radius:7px;font-family:${theme.fontFamily};line-height:1.35;max-width:min(460px,calc(100vw - 24px));overflow-wrap:anywhere;`,
+    extraCssText: `box-shadow:0 6px 24px ${shadow};border-radius:7px;font-family:${theme.fontFamily};line-height:1.35;max-width:min(460px,calc(100vw - 24px));white-space:normal;overflow-wrap:anywhere;`,
     textStyle: { color: theme.text, fontFamily: theme.fontFamily, fontSize: 11 },
     axisPointer: trigger === 'axis' ? {
       type: 'cross',
@@ -257,7 +257,7 @@ function baseOption(theme, tooltipFormatter, trigger) {
 
 function axisRow(p, theme, yStr) {
   const oom = yStr === 'OOM';
-  return `<div style="display:flex;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
+  return `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
     `<span style="display:inline-block;width:10px;height:2.5px;border-radius:2px;background:${p.color};flex-shrink:0;"></span>` +
     `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px;color:${theme.text};">${escapeTooltipHtml(p.seriesName)}</span>` +
     `<span style="font-weight:600;margin-left:4px;color:${oom ? 'var(--red)' : theme.text};">${yStr}</span>` +
@@ -461,7 +461,7 @@ function renderChart(data) {
             const yStr = raw?.y != null ? `${fmtUserTok(Number(raw.y))} tok/s/user` : 'OOM';
             const detail = raw?.y != null ? ` <span style="color:${theme.tc};font-size:10px;">total ${Number(raw.total_tps).toLocaleString()} tok/s · ${Number(raw.lat).toFixed(1)}ms/tok</span>` : '';
             const oom = raw?.y == null;
-            html += `<div style="display:flex;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
+            html += `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
               `<span style="display:inline-block;width:10px;height:2.5px;border-radius:2px;background:${p.color};flex-shrink:0;"></span>` +
               `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px;color:${theme.text};">${escapeTooltipHtml(p.seriesName)}</span>` +
               `<span style="margin-left:4px;text-align:right;font-weight:600;color:${oom ? 'var(--red)' : theme.text};">${yStr}${detail}</span>` +
@@ -516,7 +516,7 @@ function renderChart(data) {
             const yStr = raw?.y != null ? `${fmtRate(Number(raw.y))} req/s` : 'OOM';
             const detail = raw?.y != null ? ` <span style="color:${theme.tc};font-size:10px;">avg in ${Number(raw.in_len).toLocaleString()} / out ${Number(raw.out_len).toLocaleString()} · ${Number(raw.tps).toLocaleString()} tok/s</span>` : '';
             const oom = raw?.y == null;
-            html += `<div style="display:flex;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
+            html += `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
               `<span style="display:inline-block;width:10px;height:2.5px;border-radius:2px;background:${p.color};flex-shrink:0;"></span>` +
               `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px;color:${theme.text};">${escapeTooltipHtml(p.seriesName)}</span>` +
               `<span style="margin-left:4px;text-align:right;font-weight:600;color:${oom ? 'var(--red)' : theme.text};">${yStr}${detail}</span>` +
@@ -571,7 +571,7 @@ function renderChart(data) {
             const detail = raw?.y != null
               ? ` <span style="color:${theme.tc};font-size:10px;">max ${fmtBatch(Number(raw.max_users || 0))} users · ${Number(raw.per_user_tps || 0).toFixed(1)} tok/s/user · ${Number(raw.step_ms || 0).toFixed(1)}ms step</span>`
               : '';
-            html += `<div style="display:flex;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
+            html += `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
               `<span style="display:inline-block;width:10px;height:2.5px;border-radius:2px;background:${p.color};flex-shrink:0;"></span>` +
               `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px;color:${theme.text};">${escapeTooltipHtml(p.seriesName)}</span>` +
               `<span style="margin-left:4px;text-align:right;font-weight:600;color:${raw?.y == null ? 'var(--red)' : (ok ? theme.text : 'var(--amber)')};">${yStr}${detail}</span>` +
@@ -616,9 +616,9 @@ function renderChart(data) {
           ? `border-radius:50%;background:${params.color};`
           : `transform:rotate(45deg);background:${params.color};`;
         let html = axisHeader(theme, 'WER', `${fmtWer(raw.wer)} · ${raw.language || 'Benchmark'}`);
-        html += `<div style="display:flex;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
+        html += `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
           `<span style="display:inline-block;width:10px;height:10px;${markerStyle}flex-shrink:0;"></span>` +
-          `<span style="flex:1;color:${theme.text};">${escapeTooltipHtml(params.seriesName)}</span>` +
+          `<span style="flex:1;min-width:0;color:${theme.text};">${escapeTooltipHtml(params.seriesName)}</span>` +
           `<span style="margin-left:8px;font-weight:600;color:${theme.text};">${fmtBatch(Number(raw.max_users))} streams</span>` +
           `</div>`;
         html += hardwareDisclosureHtml(params, theme);
@@ -694,9 +694,9 @@ function renderChart(data) {
         const raw = params.data?.raw;
         if (!raw) return '';
         let html = axisHeader(theme, 'Peak throughput', `${fmtRate(Number(raw.docs_per_second))} docs/s`);
-        html += `<div style="display:flex;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
+        html += `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
           `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${params.color};flex-shrink:0;"></span>` +
-          `<span style="flex:1;color:${theme.text};">${escapeTooltipHtml(params.seriesName)}</span>` +
+          `<span style="flex:1;min-width:0;color:${theme.text};">${escapeTooltipHtml(params.seriesName)}</span>` +
           `<span style="margin-left:8px;font-weight:600;color:${theme.text};">${raw.quality_metric || 'quality'} ${fmtQuality(raw.quality)}</span>` +
           `</div>`;
         html += hardwareDisclosureHtml(params, theme);
@@ -803,6 +803,14 @@ document.addEventListener('click', e => {
   if (!e.target.closest('.picker') && !e.target.closest('[data-picker]')) closePicker();
 });
 
+function positionPicker(picker) {
+  if (!picker?.isConnected) return;
+  picker.style.transform = '';
+  const bounds = picker.getBoundingClientRect();
+  const shift = Math.max(12 - bounds.left, Math.min(0, window.innerWidth - 12 - bounds.right));
+  picker.style.transform = `translateX(${shift}px)`;
+}
+
 function togglePicker(btn, url) {
   const wrap = btn.closest('.picker-wrap');
   const shouldCloseOnly = openPicker && openPicker.parentElement === wrap;
@@ -812,6 +820,7 @@ function togglePicker(btn, url) {
   pk.className = 'picker';
   pk.innerHTML = '<div style="padding:10px;text-align:center;" class="T">Loading...</div>';
   wrap.appendChild(pk);
+  positionPicker(pk);
   openPicker = pk;
   btn.setAttribute('aria-expanded', 'true');
   pk.setAttribute('role', 'dialog');
@@ -819,6 +828,7 @@ function togglePicker(btn, url) {
   fetch(withTabUrl(url), { headers: requestHeaders() }).then(r => r.text()).then(html => {
     replaceHtml(pk, html);
     initGpuPicker(pk);
+    positionPicker(pk);
   });
 }
 
@@ -1171,6 +1181,7 @@ if (colorSchemeQuery.addEventListener) {
 }
 
 window.addEventListener('resize', () => {
+  positionPicker(openPicker);
   if (chart) chart.resize();
 });
 
