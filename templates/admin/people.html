@@ -1,0 +1,273 @@
+{% extends "admin/_layout.html" %}
+{% block styles %}
+  .split { display: grid; grid-template-columns: 380px minmax(0, 1fr); gap: 14px; align-items: start; }
+  @media (max-width: 900px) { .split { grid-template-columns: minmax(0, 1fr); } }
+  .dir { padding: 0; overflow: hidden; position: sticky; top: 10px; }
+  @media (max-width: 900px) { .dir { position: static; } }
+  .dir-f { padding: 10px 12px; display: flex; flex-wrap: wrap; gap: 6px; border-bottom: 1px solid var(--line); background: var(--panel-2); }
+  .dir-f input[type=search] { flex: 1 1 100%; }
+  .dir-f select { flex: 1 1 45%; min-width: 0; }
+  .dir-list { max-height: calc(100vh - 240px); overflow: auto; }
+  .vrow { display: grid; grid-template-columns: 4px 1fr auto; gap: 0 10px; padding: 8px 12px 8px 0; border-bottom: 1px solid var(--line-soft); cursor: pointer; }
+  .vrow:hover { background: var(--panel-2); }
+  .vrow.on { background: var(--accent-soft); }
+  .vrow .stripe { border-radius: 0 3px 3px 0; }
+  .vrow .l1 { display: flex; gap: 6px; align-items: baseline; font-size: 12px; }
+  .vrow .l2 { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .vrow .r { text-align: right; font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .dir-foot { padding: 7px 12px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); }
+  .prof { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  .ident { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+  .ident .big { font-size: 34px; line-height: 1; }
+  .ident h2 { font-size: 17px; }
+  .facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 16px; margin-top: 12px; }
+  @media (max-width: 700px) { .facts { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .facts .k { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+  .facts .v { font-size: 13px; overflow-wrap: anywhere; }
+  .why { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .intent { font-size: 14px; line-height: 1.5; }
+  .plan { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 700px) { .plan { grid-template-columns: 1fr; } }
+  .plan .side { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  .plan .side h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; margin-bottom: 6px; }
+  .status { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; }
+  .status.ok { color: var(--good-ink); }
+  .status.bad { color: var(--critical); }
+  .sess { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .sess + .sess { margin-top: 10px; }
+  .sess-h { display: flex; gap: 10px; align-items: baseline; padding: 8px 12px; background: var(--panel-2); cursor: pointer; flex-wrap: wrap; }
+  .sess-h .t { font-weight: 600; font-size: 12px; }
+  .sess-b { padding: 6px 12px 10px; }
+  .sess.closed .sess-b { display: none; }
+  .step { display: grid; grid-template-columns: 58px 18px 1fr; gap: 6px; font-size: 12px; padding: 3px 0; align-items: baseline; }
+  .step .ts { font-family: "IBM Plex Mono", monospace; font-size: 10px; color: var(--muted); }
+  .step .ic { text-align: center; color: var(--muted); }
+  .step.bad .ic, .step.bad .tx { color: var(--critical); }
+  .step.ok .ic { color: var(--good-ink); }
+  .step.key .tx { font-weight: 600; }
+  .step.dim .tx { color: var(--muted); }
+{% endblock %}
+{% block content %}
+  <div class="split">
+    <aside class="card dir">
+      <div class="dir-f">
+        <input type="search" id="q" placeholder="Search id, city, GPU, model…" aria-label="Search people">
+        <select id="f-persona" aria-label="Persona"></select>
+        <select id="f-country" aria-label="Country"></select>
+        <label class="chk"><input type="checkbox" id="f-eng" checked> Hide bounced</label>
+        <label class="chk"><input type="checkbox" id="f-ret"> Returning only</label>
+        <select id="f-sort" style="flex:1 1 100%" aria-label="Sort"><option value="last">Sort: last seen</option><option value="depth">Sort: most engaged</option><option value="sessions">Sort: most visits</option></select>
+      </div>
+      <div class="dir-list" id="list"></div>
+      <div class="dir-foot" id="list-foot"></div>
+    </aside>
+    <main class="prof" id="prof"></main>
+  </div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const { precLabel, A, PERSONAS, PERSONA_ORDER, pColor, pchip, fmt, flag, countryName, esc, shortGpu, shortModel, gpuName, modelName, visible, filterBar, setCount, engaged, dur, ago, datetime, date, localParts, tzOf } = UI;
+  const st = { q: "", persona: "", country: "", eng: true, ret: false, sort: "last", sel: null };
+  for (const part of location.hash.slice(1).split("&")) {
+    const [k, v] = part.split("=");
+    const val = decodeURIComponent(v || "");
+    if (k === "v") st.sel = val;
+    if (k === "persona") st.persona = val;
+    if (k === "country") st.country = val;
+  }
+  if (st.persona === "bouncer") st.eng = false;
+  const $ = (id) => document.getElementById(id);
+  $("f-persona").innerHTML = `<option value="">All personas</option>` + [...PERSONA_ORDER, "internal"].map((k) => `<option value="${k}">${PERSONAS[k].label}</option>`).join("");
+  $("f-persona").value = st.persona;
+  $("f-eng").checked = st.eng;
+  const bind = (id, key, prop = "value") => $(id).addEventListener("input", () => { st[key] = $(id)[prop]; renderList(); });
+  bind("q", "q"); bind("f-persona", "persona"); bind("f-country", "country"); bind("f-eng", "eng", "checked"); bind("f-ret", "ret", "checked"); bind("f-sort", "sort");
+  filterBar($("filters"), renderList);
+
+  const MODE_LABEL = { userpareto: "User Pareto", processingpareto: "Processing Pareto", embedquality: "Embedding", asrquality: "ASR" };
+  const place = (v) => esc(v.city ? `${v.city}${v.country ? ", " + countryName(v.country) : ""}` : countryName(v.country));
+
+  function lastPlan(v) { return [...v.sessions].reverse().find((s) => s.final && (s.final.gpus.length || s.final.models.length)); }
+  function summaryLine(v) {
+    if (v.persona === "agent") return `${v.f.api} API calls · ${esc(v.ua || "")}`;
+    const last = lastPlan(v);
+    if (!last) return v.f.econ ? "read the economics page" : "looked at the default scenario";
+    const g = last.final.gpus.map((x) => `${x.qty}× ${shortGpu(x.key)}`).join(" + ");
+    const m = last.final.models.map((x) => shortModel(x.key)).slice(0, 2).join(", ");
+    return esc([g, m].filter(Boolean).join(" · ")) + (last.final.models.length > 2 ? ` +${last.final.models.length - 2}` : "");
+  }
+  function haystack(v) {
+    return [v.id, v.city, v.region, countryName(v.country), v.channel, v.ref, PERSONAS[v.persona].label, ...Object.keys(v.f.gpus).map(gpuName), ...Object.keys(v.f.models).map(modelName)].join(" ").toLowerCase();
+  }
+
+  function renderList() {
+    let vs = visible();
+    if (st.persona === "internal") vs = A.visitors.filter((v) => v.internal);
+    setCount(vs.length);
+    const countries = UI.countBy(vs, (v) => v.country || "??");
+    $("f-country").innerHTML = `<option value="">All countries</option>` + countries.map(([c, n]) => `<option value="${c}">${c === "??" ? "🌐 Unknown" : `${flag(c)} ${esc(countryName(c))}`} (${n})</option>`).join("");
+    $("f-country").value = st.country;
+    const q = st.q.trim().toLowerCase();
+    const list = vs.filter((v) => (!st.persona || v.persona === st.persona) && (!st.country || (v.country || "??") === st.country) && (!st.eng || engaged(v)) && (!st.ret || v.sessions.length > 1) && (!q || haystack(v).includes(q)));
+    const sorters = { last: (a, b) => b.last - a.last, depth: (a, b) => b.f.config - a.f.config, sessions: (a, b) => b.sessions.length - a.sessions.length || b.last - a.last };
+    list.sort(sorters[st.sort]);
+    const shown = list.slice(0, 300);
+    $("list").innerHTML = shown.map((v) => `
+      <div class="vrow ${v.id === st.sel ? "on" : ""}" data-id="${esc(v.id)}">
+        <div class="stripe" style="background:${pColor(v.persona)}"></div>
+        <div style="min-width:0">
+          <div class="l1"><span class="flag">${flag(v.country)}</span><b>${esc(v.city || countryName(v.country))}</b><span class="muted">${PERSONAS[v.persona].short}</span></div>
+          <div class="l2">${summaryLine(v)}</div>
+        </div>
+        <div class="r">${ago(v.last)}<br>${v.sessions.length > 1 ? `${v.sessions.length} visits` : "1 visit"}</div>
+      </div>`).join("") || `<div style="padding:20px" class="muted">No one matches.</div>`;
+    $("list-foot").textContent = `${fmt(list.length)} people${list.length > shown.length ? ` · showing ${shown.length}` : ""}`;
+    $("list").querySelectorAll(".vrow").forEach((r) => r.addEventListener("click", () => { st.sel = r.dataset.id; history.replaceState(null, "", "#v=" + encodeURIComponent(st.sel)); renderList(); }));
+    if (!st.sel || !A.visitors.find((v) => v.id === st.sel)) st.sel = shown[0] && shown[0].id;
+    renderProfile(A.visitors.find((v) => v.id === st.sel));
+  }
+
+  const ICON = { open: "→", session_reset: "↺", scenario_import: "⤒", gpu_add: "+", gpu_qty: "#", gpu_remove: "−", gpu_cost: "$", mode: "⇄", model_add: "+",
+    model_rejected: "✕", model_prec: "↓", model_remove: "−", model_count: "#", model_tune: "⋮", compare_duplicate: "⧉", compare_close: "⧉", compare_gpu: "⧉",
+    econ_view: "$", use_cases_view: "▤", use_case_add: "▤", use_case_edit: "▤", projection: "↗", workload: "⋮", settings: "⚙", explainer_view: "?",
+    export_report: "⤓", scenario_export: "⤓", use_case_export: "⤓", api_call: "⌁", result: "·" };
+  function stepText(e) {
+    switch (e.type) {
+      case "open": return [`Opened <span class="mono">${esc(e.path || "/")}</span>`, "dim"];
+      case "session_reset": return ["Cleared the scenario", "dim"];
+      case "scenario_import": return ["Imported a scenario file", "key"];
+      case "gpu_add": return [`Added <b>${e.qty}× ${esc(gpuName(e.gpu))}</b>`, "key"];
+      case "gpu_qty": return [`Set ${esc(shortGpu(e.gpu))} count to <b>${e.qty}</b>`, ""];
+      case "gpu_remove": return [`Removed ${esc(shortGpu(e.gpu))}`, ""];
+      case "gpu_cost": return [`Entered <b>$${e.usd_hr}</b>/GPU-hr for ${esc(shortGpu(e.gpu))}`, "key"];
+      case "compare_gpu": return [`Side B: <b>${e.qty}× ${esc(gpuName(e.gpu))}</b>`, ""];
+      case "mode": return [`Switched to <b>${esc(MODE_LABEL[e.mode] || e.mode)}</b>`, "key"];
+      case "model_add": return [`${e.auto ? "Auto-picked" : "Added"} <b>${esc(modelName(e.model))}</b> at ${esc(precLabel(e.prec))}${e.side === "B" ? " (side B)" : ""}`, "key"];
+      case "model_rejected": return e.reason === "no_gpu"
+        ? [`<span class="status bad">✕ Picked ${esc(shortModel(e.model))} before adding any GPU</span>`, "bad"]
+        : [`<span class="status bad">✕ Couldn’t add</span> ${esc(modelName(e.model))}: ${esc(e.error)}`, "bad"];
+      case "model_prec": return [`Changed ${esc(shortModel(e.model))} to <b>${esc(precLabel(e.prec))}</b>`, ""];
+      case "model_count": return [`Gave ${esc(shortModel(e.model))} <b>${e.count}</b> GPUs`, ""];
+      case "model_remove": return [`Removed ${esc(shortModel(e.model))}`, ""];
+      case "model_tune": return [`${esc(shortModel(e.model || ""))}: ${esc(e.what)}`, ""];
+      case "result": return e.fits ? [`<span class="status ok">✓ Fits</span> <span class="muted">${fmt(e.need_gb)} GB of weights on ${fmt(e.vram_gb)} GB</span>`, "ok"]
+        : e.qty === 0 ? [`<span class="status bad">✕ Not placed</span>: no free GPU left in the pool for ${esc(shortModel(e.model))}`, "bad"]
+        : [`<span class="status bad">✕ Doesn’t fit</span>: ${esc(shortModel(e.model))} weights ${fmt(e.need_gb)} GB on ${e.qty}× ${esc(shortGpu(e.gpu))} (${fmt(e.vram_gb)} GB)`, "bad"];
+      case "compare_duplicate": return ["Opened A/B compare", "key"];
+      case "compare_close": return ["Closed compare", "dim"];
+      case "econ_view": return [`Opened economics${e.page ? ` (${esc(e.page)})` : ""}`, "key"];
+      case "use_cases_view": return ["Opened the use-case library", "key"];
+      case "use_case_add": return [`Added use-case “${esc(e.use_case)}”`, "key"];
+      case "use_case_edit": return [`Edited a use-case${e.field ? ` (${esc(e.field)})` : ""}`, ""];
+      case "projection": return [`Projection: ${esc(e.what)} ${esc(e.key || "")}`, ""];
+      case "workload": return [`Workload: ${esc(e.what)} ${esc(e.detail || "")}`, ""];
+      case "settings": return [`Setting ${esc(e.what)}${e.key ? " " + esc(e.key) : ""} → ${esc(e.value)}`, ""];
+      case "explainer_view": return ["Read the explainer", ""];
+      case "export_report": return ["Copied the projection report", "key"];
+      case "scenario_export": return ["Exported the scenario JSON", "key"];
+      case "use_case_export": return ["Exported use-cases JSON", "key"];
+      case "api_call": {
+        const ok = e.status < 400;
+        let tx = `<span class="mono">${esc(e.endpoint)}</span>`;
+        if (e.model) tx += `: ${e.gpu ? `${e.qty || 1}× ${esc(shortGpu(e.gpu))} + ` : ""}${esc(shortModel(e.model))} ${esc(precLabel(e.prec))}`;
+        if (e.fits != null) tx += ` → ${e.fits ? '<span class="status ok">✓ runnable</span>' : '<span class="status bad">✕ not runnable</span>'}`;
+        if (!ok) tx += ` <span class="status bad">HTTP ${e.status}</span> ${esc(e.error || "")}`;
+        if (e.unknown) tx += ` <span class="tag">unknown: ${esc(e.unknown.join(", "))}</span>`;
+        return [tx, ok ? "" : "bad"];
+      }
+      default: return [esc(e.what || e.type), "dim"];
+    }
+  }
+
+  function intent(v) {
+    const f = v.f;
+    if (v.persona === "bouncer") return f.econ ? "Read the economics page and left without changing anything." : "Opened the planner and left without changing anything. The default scenario didn’t hook them.";
+    if (v.persona === "agent") {
+      const m = UI.countBy(v.sessions.flatMap((s) => s.events).filter((e) => e.type === "api_call" && e.model), (e) => e.model)[0];
+      return `An assistant or script (<b>${esc(v.ua || "unknown client")}</b>)${m ? ` asking whether <b>${esc(shortModel(m[0]))}</b> runs on their hardware` : " reading the API catalog"}.`;
+    }
+    const last = lastPlan(v);
+    const g = last && last.final.gpus.length ? last.final.gpus.map((x) => `${x.qty}× ${shortGpu(x.key)}`).join(" + ") : "their hardware";
+    const ms = last ? last.final.models.map((x) => shortModel(x.key)) : [];
+    const mtxt = ms.length ? `<b>${esc(ms.slice(0, 2).join(" and "))}</b>${ms.length > 2 ? ` (+${ms.length - 2})` : ""}` : "a model";
+    const bits = {
+      homelab: `Trying to run ${mtxt} locally on <b>${esc(g)}</b>.`,
+      buyer: `Sizing a purchase or rental: ${mtxt} on <b>${esc(g)}</b>${f.compare ? ", weighed against an alternative" : ""}${f.econ ? ", checked the economics" : ""}.`,
+      evaluator: `Surveying ${f.nModels} models to see what <b>${esc(g)}</b> can hold.`,
+      speech: `Planning speech/retrieval capacity: ${mtxt} on <b>${esc(g)}</b>.`,
+      solutions: `Working back from a business workload to hardware: ${mtxt} on <b>${esc(g)}</b>.`,
+      other: `Configured ${mtxt} on <b>${esc(g)}</b>; no clear pattern yet.`,
+      internal: "You (admin browser).",
+    }[v.persona];
+    const tail = [];
+    if (f.rejected.length) tail.push(`Tried to add ${f.rejected.map((m) => `<b>${esc(shortModel(m))}</b>`).join(", ")}, which didn’t fit anywhere.`);
+    if (f.oom > f.rejected.length && !f.recovered) tail.push(`Hit <span class="status bad">✕ doesn’t fit</span> and never got a fitting plan.`);
+    else if (f.oom > f.rejected.length) tail.push("Hit doesn’t-fit and worked around it.");
+    if (f.exports) tail.push("Took the result away (export/report).");
+    return [bits, ...tail].join(" ");
+  }
+
+  function planSide(title, gpus, models, fit) {
+    return `<div class="side"><h3>${title}</h3>
+      ${gpus.length ? gpus.map((g) => `<div><b>${g.qty}×</b> ${esc(gpuName(g.key))}</div>`).join("") : '<div class="muted">No hardware</div>'}
+      <div style="margin-top:6px">${models === null ? '<div class="muted">Same models as plan A</div>' : models.length ? models.map((m) => `<div>${esc(modelName(m.key))} <span class="tag">${esc(precLabel(m.prec))}</span>${m.fits === false ? ' <span class="status bad">✕</span>' : ""}</div>`).join("") : '<div class="muted">No models</div>'}</div>
+      ${fit == null ? "" : `<div style="margin-top:8px">${fit ? '<span class="status ok">✓ Everything fits</span>' : '<span class="status bad">✕ Something doesn’t fit</span>'}</div>`}</div>`;
+  }
+
+  function renderProfile(v) {
+    const el = $("prof");
+    if (!v) { el.innerHTML = `<div class="card">${UI.A.visitors.length ? "Pick someone on the left." : UI.emptyState()}</div>`; return; }
+    const f = v.f;
+    const last = lastPlan(v);
+    const cmp = v.sessions.flatMap((s) => s.events).filter((e) => e.type === "compare_gpu").pop();
+    const lt = localParts(UI.now(), v);
+    el.innerHTML = `
+      <div class="card">
+        <div class="ident">
+          <div class="big">${flag(v.country)}</div>
+          <div style="flex:1;min-width:220px">
+            <h2>${place(v)} <span class="mono muted" style="font-size:12px;font-weight:400">${esc(v.id.slice(0, 8))}</span></h2>
+            <div style="margin-top:4px">${pchip(v.persona, `<b>${PERSONAS[v.persona].label}</b>`)}</div>
+            <div class="why">${v.why.map((w) => `<span class="tag">${esc(w)}</span>`).join("")}</div>
+          </div>
+        </div>
+        <div class="facts">
+          <div><div class="k">First seen</div><div class="v">${datetime(v.first)}</div></div>
+          <div><div class="k">Last seen</div><div class="v">${ago(v.last)}</div></div>
+          <div><div class="k">Visits</div><div class="v">${v.sessions.length} · ${dur(f.durMs)} total</div></div>
+          <div><div class="k">Arrived via</div><div class="v">${esc(v.channel)}${v.ref ? ` <span class="muted">(${esc(v.ref)})</span>` : ""}${v.utm ? `<div class="mono muted" style="font-size:10px">${esc(v.utm)}</div>` : ""}</div></div>
+          <div><div class="k">Device</div><div class="v">${v.device === "agent" ? esc(v.ua || "agent") : `${esc(v.device)}${v.os ? " · " + esc(v.os) : ""}`}</div></div>
+          <div><div class="k">Language</div><div class="v">${esc(v.lang || "—")}</div></div>
+          <div><div class="k">Their local time now</div><div class="v">${lt.hm} <span class="muted">${esc(tzOf(v))}${v.tz ? "" : " (guessed)"}</span></div></div>
+          <div><div class="k">Entry page</div><div class="v mono">${esc(v.entry)}</div></div>
+        </div>
+      </div>
+      <div class="card"><h2>What they seem to be trying to do</h2><p class="intent" style="margin-top:6px">${intent(v)}</p></div>
+      ${last ? `<div class="card"><h2>Where they ended up</h2><div class="q">Final state of their last configured visit (${date(last.start)}).</div>
+        <div class="plan">${planSide("Plan A", last.final.gpus, last.final.models, last.final.fit)}
+        ${cmp ? planSide("Compared against (B)", [{ key: cmp.gpu, qty: cmp.qty }], null, null) : `<div class="side muted" style="display:flex;align-items:center;justify-content:center">No A/B comparison</div>`}</div></div>` : ""}
+      <div class="card">
+        <div class="card-head"><h2>Visits</h2><span class="spacer"></span><button class="btn" type="button" id="exp-all">Expand all</button></div>
+        <div class="q">Newest first. A visit ends after 30 minutes of inactivity. Red = friction.</div>
+        <div id="sessions"></div>
+      </div>`;
+    $("sessions").innerHTML = [...v.sessions].reverse().map((s, i) => {
+      const bad = s.events.filter((e) => (e.type === "result" && !e.fits) || e.type === "model_rejected" || (e.type === "api_call" && e.status >= 400)).length;
+      return `<div class="sess ${i > 1 ? "closed" : ""}">
+        <div class="sess-h"><span class="t">${datetime(s.start)}</span><span class="muted">${dur(s.end - s.start)} · ${s.events.length} steps${bad ? ` · <span class="status bad">${bad} friction</span>` : ""}</span>
+          <span class="spacer" style="flex:1"></span><span class="muted mono" style="font-size:10px">${s.tabs.length > 1 ? `${s.tabs.length} tabs` : ""}</span></div>
+        <div class="sess-b">${s.events.map((e) => {
+          const [tx, cls] = stepText(e);
+          const off = Math.round((e.t - s.start) / 1000);
+          return `<div class="step ${cls}"><span class="ts">+${off >= 60 ? Math.floor(off / 60) + "m" + String(off % 60).padStart(2, "0") : off + "s"}</span><span class="ic">${ICON[e.type] || "·"}</span><span class="tx">${tx}</span></div>`;
+        }).join("")}</div></div>`;
+    }).join("");
+    $("sessions").querySelectorAll(".sess-h").forEach((h) => h.addEventListener("click", () => h.parentElement.classList.toggle("closed")));
+    $("exp-all").addEventListener("click", () => $("sessions").querySelectorAll(".sess").forEach((s) => s.classList.remove("closed")));
+  }
+
+  UI.start(renderList);
+})();
+</script>
+{% endblock %}

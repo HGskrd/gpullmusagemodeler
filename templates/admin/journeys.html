@@ -1,0 +1,254 @@
+{% extends "admin/_layout.html" %}
+{% block styles %}
+  .funnel { display: grid; grid-template-columns: 210px 1fr 120px; gap: 8px 12px; align-items: center; }
+  @media (max-width: 700px) { .funnel { grid-template-columns: 120px 1fr 80px; } }
+  .funnel .lab { font-size: 12px; }
+  .funnel .lab small { display: block; color: var(--muted); font-size: 11px; }
+  .funnel .track { height: 22px; position: relative; }
+  .funnel .fill { height: 100%; border-radius: 0 4px 4px 0; }
+  .funnel .drop { font-size: 11px; color: var(--muted); text-align: right; }
+  .seghm { display: grid; gap: 2px; font-size: 11px; }
+  .seghm .c { height: 24px; display: flex; align-items: center; justify-content: center; border-radius: 3px; font-variant-numeric: tabular-nums; }
+  .seghm .h { color: var(--muted); font-size: 10px; text-align: center; align-self: end; padding-bottom: 3px; line-height: 1.2; }
+  .path { display: flex; gap: 3px; flex-wrap: wrap; align-items: center; }
+  .path .s { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--chip); white-space: nowrap; }
+  .path .s.bad { background: transparent; color: var(--critical); box-shadow: inset 0 0 0 1px var(--critical); }
+  .path .s.ok { background: transparent; color: var(--good-ink); box-shadow: inset 0 0 0 1px var(--good-ink); }
+  .path .arr { color: var(--muted); font-size: 10px; }
+{% endblock %}
+{% block content %}
+  <section class="card">
+    <div class="card-head"><h2>From landing to a plan they take away</h2><span class="spacer"></span><span class="muted" style="font-size:12px">Human visitors · counted once per person</span></div>
+    <div class="q">Each bar is the share of all human visitors who reached that stage.</div>
+    <div class="funnel" id="funnel"></div>
+  </section>
+  <section class="card">
+    <div class="card-head"><h2>Stage reached, by segment</h2><span class="spacer"></span>
+      <span class="seg" id="segby"><button type="button" data-v="persona" class="on">Persona</button><button type="button" data-v="device">Device</button><button type="button" data-v="channel">Channel</button><button type="button" data-v="country">Country</button></span></div>
+    <div class="q">% of the segment reaching each stage. Read across a row to see where that group stalls.</div>
+    <div id="seghm" style="overflow:auto"></div>
+  </section>
+  <section class="grid g2">
+    <div class="card">
+      <h2>After “doesn’t fit”, what did they do?</h2>
+      <div class="q">First action after each failed fit or rejected model, and how often that visit ended with everything fitting.</div>
+      <div id="recovery"></div>
+    </div>
+    <div class="card">
+      <h2>Last thing before leaving</h2>
+      <div class="q">Final step of engaged visits that ended without a fitting plan.</div>
+      <div id="lastStep"></div>
+    </div>
+  </section>
+  <section class="card">
+    <h2>Friction signals</h2>
+    <div class="q">Each row is a fixable problem, with examples you can open.</div>
+    <div style="overflow:auto"><table class="t" id="friction"></table></div>
+  </section>
+  <section class="grid g2">
+    <div class="card">
+      <h2>Most common paths</h2>
+      <div class="q">First six meaningful steps of engaged visits, repeats collapsed.</div>
+      <table class="t" id="paths"></table>
+    </div>
+    <div class="card">
+      <h2>Time to first model</h2>
+      <div class="q">From the start of a visit to the first model added. Long tails suggest the picker is hard to use.</div>
+      <svg id="ttfm" viewBox="0 0 560 200" style="width:100%;height:auto"></svg>
+    </div>
+  </section>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const { A, PERSONAS, PERSONA_ORDER, pchip, fmt, pct, flag, countryName, esc, shortModel, visible, filterBar, setCount, hbars, countBy, engaged, dur, ticks, emptyState } = UI;
+  const PEOPLE_URL = "{{ url_for('admin.people') }}";
+  let segBy = "persona";
+  document.querySelectorAll("#segby button").forEach((b) => b.addEventListener("click", () => {
+    segBy = b.dataset.v; document.querySelectorAll("#segby button").forEach((x) => x.classList.toggle("on", x === b)); render();
+  }));
+  filterBar(document.getElementById("filters"), render);
+
+  const fitsSomewhere = (v) => v.f.nModels > 0 && v.sessions.some((s) => (s.final && s.final.fit) || s.events.some((e) => e.type === "result" && e.fits));
+  const STAGES = [
+    ["Landed", "opened any page", () => true],
+    ["Changed anything", "any input edited", (v) => v.f.config > 0],
+    ["Picked hardware", "added or resized a GPU pool", (v) => Object.keys(v.f.gpus).length > 0],
+    ["Added a model", "at least one model placed", (v) => v.f.nModels > 0],
+    ["Got a plan that fits", "a fitting result at some point", fitsSomewhere],
+    ["Went deeper", "…then compare, economics, use-cases or tuning", (v) => fitsSomewhere(v) && v.f.compare + v.f.econ + v.f.useCases + v.f.dist > 0],
+    ["Took it away", "…then export / report copy, or came back", (v) => fitsSomewhere(v) && v.f.compare + v.f.econ + v.f.useCases + v.f.dist > 0 && (v.f.exports > 0 || v.sessions.length > 1)],
+  ];
+
+  function funnel(hs) {
+    if (!hs.length) { document.getElementById("funnel").innerHTML = emptyState(); return; }
+    const n0 = hs.length;
+    let prev = null;
+    document.getElementById("funnel").innerHTML = STAGES.map(([lab, sub, fn], i) => {
+      const n = hs.filter(fn).length;
+      const drop = prev == null ? "" : `−${pct(1 - n / Math.max(1, prev))} from previous`;
+      prev = n;
+      return `<div class="lab">${lab}<small>${sub}</small></div>
+        <div class="track" data-tip="<b>${lab}</b><div>${fmt(n)} of ${fmt(n0)} visitors (${pct(n / n0)})</div>"><div class="fill" style="width:${(n / n0) * 100}%;background:var(--seq-${Math.max(2, 6 - Math.floor(i * 0.75))})"></div></div>
+        <div><span class="num" style="font-weight:600">${pct(n / n0)}</span> <span class="muted num">${fmt(n)}</span><div class="drop">${drop}</div></div>`;
+    }).join("");
+  }
+
+  function segHeat(hs) {
+    const key = { persona: (v) => v.persona, device: (v) => v.device, channel: (v) => v.channel, country: (v) => v.country || "??" }[segBy];
+    let groups = countBy(hs, key);
+    if (segBy === "country") groups = groups.slice(0, 12);
+    if (segBy === "persona") groups = PERSONA_ORDER.map((k) => [k, hs.filter((v) => v.persona === k).length]).filter(([, n]) => n);
+    const plain = (g) => (segBy === "persona" ? PERSONAS[g].label : segBy === "country" ? (g === "??" ? "Unknown" : countryName(g)) : g);
+    const label = (g) => (segBy === "persona" ? pchip(g, PERSONAS[g].short) : segBy === "country" ? `${flag(g === "??" ? null : g)} ${esc(plain(g))}` : esc(g));
+    let html = `<div class="seghm" style="grid-template-columns:170px 60px repeat(${STAGES.length - 1}, minmax(70px, 1fr))"><div></div><div class="h">visitors</div>` +
+      STAGES.slice(1).map(([l]) => `<div class="h">${l}</div>`).join("");
+    for (const [g, n] of groups) {
+      const list = hs.filter((v) => key(v) === g);
+      html += `<div style="align-self:center">${label(g)}</div><div class="num muted" style="align-self:center;text-align:right;padding-right:8px">${fmt(n)}</div>`;
+      for (const [l, , fn] of STAGES.slice(1)) {
+        const r = list.filter(fn).length / Math.max(1, list.length);
+        const step = r === 0 ? "--seq-0" : `--seq-${Math.min(6, 1 + Math.floor(r * 6))}`;
+        html += `<div class="c" style="background:var(${step});color:${r >= 0.5 ? "var(--panel)" : "var(--text-2)"}" data-tip="<b>${esc(plain(g))}</b> · ${l}<div>${pct(r)} of ${fmt(list.length)}</div>">${Math.round(r * 100)}%</div>`;
+      }
+    }
+    document.getElementById("seghm").innerHTML = groups.length ? html + "</div>" : emptyState();
+  }
+
+  function recovery(hs) {
+    const out = new Map();
+    const bump = (k, ok) => { const r = out.get(k) || [0, 0]; r[0]++; if (ok) r[1]++; out.set(k, r); };
+    for (const v of hs) for (const s of v.sessions) {
+      const ev = s.events;
+      for (let i = 0; i < ev.length; i++) {
+        const failed = (ev[i].type === "result" && !ev[i].fits) || (ev[i].type === "model_rejected" && ev[i].reason === "fits_nowhere");
+        if (!failed) continue;
+        const nx = ev.slice(i + 1).find((e) => e.type !== "result");
+        const k = !nx ? "Left" : nx.type === "model_prec" ? "Changed precision" : nx.type === "gpu_qty" || nx.type === "gpu_add" ? "Added GPUs" :
+          nx.type === "model_count" ? "Gave the model more GPUs" : nx.type === "model_remove" ? "Removed the model" : nx.type === "session_reset" ? "Reset everything" :
+          nx.type === "model_add" ? "Tried another model" : "Something else";
+        bump(k, ev.slice(i + 1).some((e) => e.type === "result" && e.fits) || (s.final && s.final.fit));
+      }
+    }
+    const rows = [...out.entries()].sort((a, b) => b[1][0] - a[1][0]);
+    const tot = rows.reduce((s, [, [n]]) => s + n, 0) || 1;
+    document.getElementById("recovery").innerHTML = hbars(rows.map(([k, [n, ok]]) => ({
+      label: esc(k), plain: k, value: n, sub: `${pct(ok / Math.max(1, n))} → fit`,
+      tip: `<b>${esc(k)}</b><div>${fmt(n)} of ${fmt(tot)} doesn’t-fit moments (${pct(n / tot)})</div><div>${pct(ok / Math.max(1, n))} ended with everything fitting</div>`,
+      color: k === "Left" || k === "Reset everything" ? "var(--critical)" : "var(--accent)",
+    })), { labelW: "40%" });
+  }
+
+  function lastStep(hs) {
+    const names = { gpu_add: "Added a GPU", gpu_qty: "Changed GPU count", gpu_remove: "Removed a GPU", result: "Saw doesn’t-fit", model_add: "Added a model", model_rejected: "Model rejected (doesn’t fit)",
+      model_remove: "Removed a model", model_prec: "Changed precision", model_count: "Changed model GPUs", model_tune: "Tuned a model", session_reset: "Reset", mode: "Switched mode",
+      compare_gpu: "Set up compare", compare_duplicate: "Opened compare", econ_view: "Opened economics", settings: "Changed a setting", workload: "Changed the workload",
+      use_case_add: "Added a use-case", use_case_edit: "Edited a use-case", gpu_cost: "Entered $/hr", projection: "Changed projection", export_report: "Copied report",
+      scenario_export: "Exported scenario", use_case_export: "Exported use-cases", use_cases_view: "Opened use-case library", explainer_view: "Read the explainer" };
+    const ends = [];
+    for (const v of hs) if (engaged(v)) for (const s of v.sessions) {
+      if (s.final && s.final.fit) continue;
+      const last = [...s.events].reverse().find((e) => e.type !== "open");
+      if (last && !(last.type === "result" && last.fits)) ends.push(last.type);
+    }
+    const rows = countBy(ends, (x) => x).slice(0, 8);
+    document.getElementById("lastStep").innerHTML = hbars(rows.map(([k, n]) => ({ label: esc(names[k] || k), plain: names[k] || k, value: n, color: k === "result" || k === "model_rejected" ? "var(--critical)" : "var(--accent)" })), { labelW: "44%" });
+  }
+
+  function friction(vs) {
+    const sessions = vs.flatMap((v) => v.sessions.map((s) => ({ v, s })));
+    const rejected = (reason) => ({ s }) => s.events.some((e) => e.type === "model_rejected" && e.reason === reason);
+    const rejectedModels = (reason) => (ex) => countBy(ex.flatMap(({ s }) => s.events.filter((e) => e.type === "model_rejected" && e.reason === reason).map((e) => shortModel(e.model))), (x) => x).slice(0, 3).map(([m]) => esc(m)).join(", ");
+    const sig = [
+      ["✕", "Doesn’t fit, never recovered", "A failed fit and the visit ended without everything fitting",
+        ({ s }) => s.events.some((e) => e.type === "result" && !e.fits) && !(s.final && s.final.fit),
+        (ex) => countBy(ex.flatMap(({ s }) => s.events.filter((e) => e.type === "result" && !e.fits && e.model).map((e) => shortModel(e.model))), (x) => x).slice(0, 3).map(([m]) => esc(m)).join(", ")],
+      ["✕", "Model rejected outright", "Added a model that fits on no configured GPU pool at any precision",
+        rejected("fits_nowhere"), rejectedModels("fits_nowhere")],
+      ["?", "Model before hardware", "Picked a model while no GPU pool existed (usually right after a reset)",
+        rejected("no_gpu"), rejectedModels("no_gpu")],
+      ["↺", "Reset loop", "Reset the scenario twice or more in one visit",
+        ({ s }) => s.events.filter((e) => e.type === "session_reset").length >= 2, () => "the default scenario isn’t what they wanted"],
+      ["▯", "Mobile bounce", "Phone visitor who changed nothing",
+        ({ v }) => v.device === "mobile" && v.persona === "bouncer", () => "needs a phone-sized first answer"],
+      ["⌁", "Agent API error", "Agent call returned 4xx/5xx",
+        ({ s }) => s.events.some((e) => e.type === "api_call" && e.status >= 400),
+        (ex) => countBy(ex.flatMap(({ s }) => s.events.filter((e) => e.type === "api_call" && e.status >= 400).map((e) => (e.error || `HTTP ${e.status}`).slice(0, 60))), (x) => x).slice(0, 2).map(([m]) => esc(m)).join("; ")],
+    ];
+    const total = sessions.length || 1;
+    document.getElementById("friction").innerHTML = `<thead><tr><th></th><th>Signal</th><th class="r">Visits</th><th class="r">Share</th><th>Most common</th><th>Who</th><th>Examples</th></tr></thead><tbody>` +
+      sig.map(([ic, name, desc, fn, top]) => {
+        const ex = sessions.filter(fn);
+        const who = countBy(ex, ({ v }) => v.persona).slice(0, 2);
+        const exs = [...new Set(ex.map(({ v }) => v.id))].slice(0, 3);
+        return `<tr><td style="color:var(--critical);font-weight:600">${ic}</td><td><b>${name}</b><div class="muted" style="font-size:11px">${desc}</div></td>
+          <td class="r">${fmt(ex.length)}</td><td class="r">${pct(ex.length / total, 1)}</td><td>${ex.length ? top(ex) || "—" : "—"}</td>
+          <td>${who.map(([k]) => pchip(k, PERSONAS[k].short)).join("<br>")}</td>
+          <td>${exs.map((id) => `<a class="mono" href="${PEOPLE_URL}#v=${encodeURIComponent(id)}">${esc(id.slice(0, 8))}</a>`).join(" ")}</td></tr>`;
+      }).join("") + "</tbody>";
+  }
+
+  function paths(hs) {
+    const tok = (e) => ({ session_reset: ["reset"], scenario_import: ["import"], gpu_add: ["+GPU"], gpu_qty: ["#GPU"], gpu_remove: ["−GPU"], model_add: [e.auto ? "auto-pick" : "+model"],
+      model_rejected: ["rejected", "bad"], model_prec: ["precision"], model_count: ["#model GPUs"], model_remove: ["−model"], result: [e.fits ? "✓ fits" : "✕ no fit", e.fits ? "ok" : "bad"],
+      compare_duplicate: ["compare"], econ_view: ["econ"], use_case_add: ["use-case"], use_cases_view: ["library"], mode: [e.mode === "asrquality" ? "ASR" : e.mode === "embedquality" ? "embedding" : "mode"],
+      export_report: ["report"], scenario_export: ["export"], use_case_export: ["export"], workload: ["workload"], settings: ["settings"], model_tune: ["tune"], gpu_cost: ["$/hr"] }[e.type]);
+    const seqs = [];
+    for (const v of hs) if (engaged(v)) for (const s of v.sessions) {
+      const t = [];
+      for (const e of s.events) {
+        const k = tok(e);
+        if (!k) continue;
+        if (t.length && t[t.length - 1][0] === k[0]) continue;
+        t.push(k);
+        if (t.length >= 6) break;
+      }
+      if (t.length) seqs.push({ t, fit: s.final && s.final.fit });
+    }
+    const groups = new Map();
+    for (const q of seqs) {
+      const key = q.t.map((x) => x[0]).join(" › ");
+      if (!groups.has(key)) groups.set(key, { t: q.t, n: 0, fit: 0 });
+      const g = groups.get(key); g.n++; if (q.fit) g.fit++;
+    }
+    const rows = [...groups.values()].sort((a, b) => b.n - a.n).slice(0, 10);
+    const tot = seqs.length || 1;
+    document.getElementById("paths").innerHTML = rows.length ? `<thead><tr><th>Path</th><th class="r">Visits</th><th class="r">Ends fitting</th></tr></thead><tbody>` +
+      rows.map((g) => `<tr><td><div class="path">${g.t.map(([l, c]) => `<span class="s ${c || ""}">${esc(l)}</span>`).join('<span class="arr">›</span>')}</div></td>
+        <td class="r">${fmt(g.n)} <span class="muted">${pct(g.n / tot)}</span></td><td class="r">${pct(g.fit / g.n)}</td></tr>`).join("") + "</tbody>" : `<tbody><tr><td class="muted">No engaged visits yet.</td></tr></tbody>`;
+  }
+
+  function ttfm(hs) {
+    const xs = [];
+    for (const v of hs) for (const s of v.sessions) {
+      const m = s.events.find((e) => e.type === "model_add" && !e.auto);
+      if (m) xs.push((m.t - s.start) / 1000);
+    }
+    const edges = [0, 15, 30, 60, 90, 120, 180, 300, 600, Infinity];
+    const labels = ["<15s", "15–30s", "30–60s", "1–1.5m", "1.5–2m", "2–3m", "3–5m", "5–10m", "10m+"];
+    const bins = labels.map(() => 0);
+    for (const x of xs) for (let i = 0; i < labels.length; i++) if (x >= edges[i] && x < edges[i + 1]) { bins[i]++; break; }
+    const W = 560, H = 200, L = 34, R = 6, T = 10, B = 26;
+    const max = Math.max(1, ...bins);
+    const bw = (W - L - R) / bins.length;
+    const y = (n) => T + (1 - n / max) * (H - T - B);
+    const sorted = [...xs].sort((a, b) => a - b);
+    const med = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0;
+    document.getElementById("ttfm").innerHTML =
+      ticks(max, 3).map((t) => `<line class="gridline" x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}"/><text x="${L - 6}" y="${y(t) + 4}" text-anchor="end">${t}</text>`).join("") +
+      bins.map((n, i) => `<rect x="${L + i * bw + 2}" y="${y(n)}" width="${bw - 4}" height="${y(0) - y(n)}" rx="3" fill="var(--accent)" data-tip="<b>${labels[i]}</b><div>${fmt(n)} visits (${pct(n / Math.max(1, xs.length))})</div>"/>
+        <text x="${L + i * bw + bw / 2}" y="${H - 8}" text-anchor="middle">${labels[i]}</text>`).join("") +
+      `<line class="baseline" x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}"/>
+       <text x="${W - R}" y="${T + 4}" text-anchor="end" style="fill:var(--text-2)">${xs.length ? `median ${dur(med * 1000)} · ${fmt(xs.length)} visits` : "no manual model adds yet"}</text>`;
+  }
+
+  function render() {
+    const vs = visible();
+    setCount(vs.length);
+    const hs = vs.filter((v) => v.persona !== "agent");
+    funnel(hs); segHeat(hs); recovery(hs); lastStep(hs); friction(vs); paths(hs); ttfm(hs);
+  }
+  UI.start(render);
+})();
+</script>
+{% endblock %}

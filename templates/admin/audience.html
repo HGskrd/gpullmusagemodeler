@@ -1,0 +1,311 @@
+{% extends "admin/_layout.html" %}
+{% block styles %}
+  #map { width: 100%; height: auto; display: block; }
+  #map path.land { stroke: var(--panel); stroke-width: 0.5; }
+  #map path.land.has { cursor: pointer; }
+  #map path.land:hover { stroke: var(--text); stroke-width: 1; }
+  #map path.land.sel { stroke: var(--text); stroke-width: 1.5; }
+  .scale { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); margin-top: 6px; flex-wrap: wrap; }
+  .scale i { width: 26px; height: 9px; display: inline-block; }
+  .ctable { max-height: 430px; overflow: auto; }
+  .ctable tr.sel td { background: var(--accent-soft); }
+  .stack { display: flex; height: 14px; border-radius: 4px; overflow: hidden; gap: 2px; }
+  .stack span { display: block; height: 100%; }
+  .heat { display: grid; grid-template-columns: 34px repeat(24, minmax(0, 1fr)); gap: 2px; font-size: 10px; color: var(--muted); }
+  .heat div.c { aspect-ratio: 1.6; border-radius: 2px; }
+  .heat .hl { text-align: center; }
+  #cprofile:empty { display: none; }
+{% endblock %}
+{% block content %}
+  <section class="grid g4" id="kpis"></section>
+  <section class="grid g-73">
+    <div class="card">
+      <div class="card-head">
+        <h2>Where visitors are</h2>
+        <span class="spacer"></span>
+        <span class="seg" id="metric">
+          <button type="button" data-v="visitors" class="on">Visitors</button>
+          <button type="button" data-v="engaged">Engaged rate</button>
+          <button type="button" data-v="persona">Persona share</button>
+        </span>
+        <select id="persona-pick" style="display:none" aria-label="Persona"></select>
+      </div>
+      <div class="q">Click a country to profile it below. Grey = no visitors in range.</div>
+      <svg id="map" viewBox="0 0 960 470" role="img" aria-label="World map of visitors by country"></svg>
+      <div class="scale" id="scale"></div>
+    </div>
+    <div class="card">
+      <h2>Countries</h2>
+      <div class="q">Sorted by visitors. Engaged = changed anything at all.</div>
+      <div class="ctable"><table class="t" id="ctable"></table></div>
+    </div>
+  </section>
+  <section id="cprofile"></section>
+  <section class="grid g2">
+    <div class="card">
+      <h2>How they arrived</h2>
+      <div class="q">First-touch channel (referrer host or UTM), with how many went on to configure something.</div>
+      <div id="channels"></div>
+      <div class="needs" id="refs"></div>
+    </div>
+    <div class="card">
+      <h2>When they use it (visitor’s local time)</h2>
+      <div class="q">Office hours = evaluating for work. Late evenings = hobby projects.</div>
+      <div id="heat"></div>
+      <div class="legend" style="margin-top:8px" id="heat-legend"></div>
+    </div>
+  </section>
+  <section class="grid g2">
+    <div class="card">
+      <h2>Daily visits</h2>
+      <div class="q">Sessions per day. The busiest day is labelled with its main channel.</div>
+      <svg id="daily" viewBox="0 0 600 200" style="width:100%;height:auto"></svg>
+    </div>
+    <div class="card">
+      <h2>Device & language</h2>
+      <div class="q">How mobile visitors engage compared with desktop.</div>
+      <div class="grid g2" style="gap:18px"><div id="devices"></div><div id="langs"></div></div>
+    </div>
+  </section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='vendor/d3-array-3.2.4.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/d3-geo-3.1.1.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/topojson-client-3.1.0.min.js') }}"></script>
+<script src="{{ url_for('static', filename='admin/iso-numeric.js') }}"></script>
+<script>
+(function () {
+  const { A, PERSONAS, PERSONA_ORDER, pColor, pchip, fmt, pct, flag, countryName, esc, shortGpu, shortModel, gpuName, modelName, visible, filterBar, setCount, hbars, countBy, engaged, localParts, ticks, date, emptyState } = UI;
+  const WORLD_URL = "{{ url_for('static', filename='vendor/world-atlas-2.0.2-countries-110m.json') }}";
+  const PEOPLE_URL = "{{ url_for('admin.people') }}";
+  let metric = "visitors", selected = null, focusPersona = "buyer", world = null;
+  const pp = document.getElementById("persona-pick");
+  pp.innerHTML = PERSONA_ORDER.filter((k) => k !== "bouncer").map((k) => `<option value="${k}" ${k === focusPersona ? "selected" : ""}>${PERSONAS[k].label}</option>`).join("");
+  pp.addEventListener("change", () => { focusPersona = pp.value; render(); });
+  document.querySelectorAll("#metric button").forEach((b) => b.addEventListener("click", () => {
+    metric = b.dataset.v;
+    document.querySelectorAll("#metric button").forEach((x) => x.classList.toggle("on", x === b));
+    pp.style.display = metric === "persona" ? "" : "none";
+    render();
+  }));
+  filterBar(document.getElementById("filters"), render);
+  const ck = (v) => v.country || "??";
+  const cname = (iso) => (iso === "??" ? "Unknown" : countryName(iso));
+  const cflag = (iso) => (iso === "??" ? "🌐" : flag(iso));
+
+  function byCountry(vs) {
+    const m = new Map();
+    for (const v of vs) { if (!m.has(ck(v))) m.set(ck(v), []); m.get(ck(v)).push(v); }
+    return m;
+  }
+
+  function kpis(vs) {
+    const eng = vs.filter(engaged);
+    const ret = vs.filter((v) => v.sessions.length > 1);
+    const humans = vs.filter((v) => v.persona !== "agent");
+    const med = (a) => { const s = [...a].sort((x, y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : 0; };
+    const medT = med(eng.filter((v) => v.persona !== "agent").map((v) => v.f.durMs / v.sessions.length));
+    document.getElementById("kpis").innerHTML = [
+      ["Visitors", fmt(vs.length), `${fmt(humans.length)} humans · ${fmt(vs.length - humans.length)} agents`],
+      ["Engaged", vs.length ? pct(eng.length / vs.length) : "—", "changed at least one input"],
+      ["Returning", vs.length ? pct(ret.length / vs.length) : "—", `${fmt(ret.length)} came back at least once`],
+      ["Countries", fmt(new Set(vs.map((v) => v.country).filter(Boolean)).size), `median engaged visit ${UI.dur(medT)}`],
+    ].map(([l, v, d]) => `<div class="card kpi"><div class="label">${l}</div><div class="value num">${v}</div><div class="delta">${d}</div></div>`).join("");
+  }
+
+  const SEQ = ["--seq-1", "--seq-2", "--seq-3", "--seq-4", "--seq-5", "--seq-6"];
+  function valueFor(list) {
+    if (!list || !list.length) return null;
+    if (metric === "visitors") return list.length;
+    if (metric === "engaged") return list.filter(engaged).length / list.length;
+    const eng = list.filter(engaged);
+    return eng.length ? eng.filter((v) => v.persona === focusPersona).length / eng.length : 0;
+  }
+  function binner(values) {
+    const vals = values.filter((x) => x != null);
+    const max = Math.max(...vals, 1e-9);
+    if (metric === "visitors") {
+      // Six steps on a rough log scale up to the busiest country.
+      const edges = [1, 2, 3, 4, 5].map((i) => Math.max(i + 1, Math.round(Math.pow(max, i / 6))));
+      for (let i = 1; i < edges.length; i++) edges[i] = Math.max(edges[i], edges[i - 1] + 1);
+      const bin = (x) => { const i = edges.findIndex((e) => x < e); return i === -1 ? 5 : i; };
+      const range = (lo, hi) => (lo === hi ? `${lo}` : `${lo}–${hi}`);
+      const labels = [range(1, edges[0] - 1), ...edges.slice(0, 4).map((e, i) => range(e, edges[i + 1] - 1)), `${edges[4]}+`];
+      return { bin, labels };
+    }
+    const top = metric === "engaged" ? 1 : Math.min(1, Math.ceil(max * 10) / 10 || 0.1);
+    const step = top / SEQ.length;
+    return { bin: (x) => Math.min(SEQ.length - 1, Math.floor(x / step)), labels: SEQ.map((_, i) => `${Math.round(i * step * 100)}%`) };
+  }
+
+  function drawMap(groups) {
+    const svg = document.getElementById("map");
+    if (!world || !window.d3 || !d3.geoPath) { svg.innerHTML = `<text x="480" y="235" text-anchor="middle">Loading map…</text>`; return; }
+    const isoByNum = {};
+    for (const [iso, num] of Object.entries(window.ISO_NUMERIC || {})) isoByNum[num] = iso;
+    const vals = {};
+    for (const [iso, list] of groups) if (iso !== "??") vals[iso] = valueFor(list);
+    const { bin, labels } = binner(Object.values(vals));
+    const proj = d3.geoNaturalEarth1().fitExtent([[4, 4], [956, 466]], { type: "Sphere" });
+    const path = d3.geoPath(proj);
+    const feats = topojson.feature(world, world.objects.countries).features.filter((f) => f.id !== "010");
+    let html = `<path d="${path({ type: "Sphere" })}" fill="var(--panel-2)"/>`;
+    for (const d of feats) {
+      const iso = isoByNum[d.id];
+      const list = iso && groups.get(iso);
+      const v = iso ? vals[iso] : null;
+      let tipHtml = `<b>${esc(d.properties.name)}</b><div class='muted'>no visitors</div>`;
+      if (list) {
+        const eng = list.filter(engaged);
+        const top = countBy(eng, (x) => x.persona)[0];
+        tipHtml = `<b>${flag(iso)} ${esc(cname(iso))}</b><div class='row'><span>Visitors</span><span class='num'>${fmt(list.length)}</span></div>
+          <div class='row'><span>Engaged</span><span class='num'>${pct(eng.length / list.length)}</span></div>${top ? `<div class='row'><span>Top persona</span>${pchip(top[0], PERSONAS[top[0]].short)}</div>` : ""}`;
+      }
+      html += `<path class="land ${list ? "has" : ""} ${iso && iso === selected ? "sel" : ""}" data-iso="${iso || ""}" d="${path(d)}" style="fill:${v == null ? "var(--chip)" : `var(${SEQ[bin(v)]})`}" data-tip="${esc(tipHtml)}"/>`;
+    }
+    svg.innerHTML = html;
+    svg.querySelectorAll("path.land.has").forEach((p) => p.addEventListener("click", () => { selected = selected === p.dataset.iso ? null : p.dataset.iso; render(); }));
+    document.getElementById("scale").innerHTML =
+      `<span>${metric === "visitors" ? "Visitors" : metric === "engaged" ? "Engaged rate" : "Share of engaged: " + PERSONAS[focusPersona].short}</span>` +
+      labels.map((l, i) => `<i style="background:var(${SEQ[i]})" data-tip="${l}"></i>`).join("") + `<span>${labels[0]} → ${labels[labels.length - 1]}</span>`;
+  }
+
+  function countryTable(groups) {
+    const rows = [...groups.entries()].sort((a, b) => b[1].length - a[1].length);
+    document.getElementById("ctable").innerHTML = `<thead><tr><th>Country</th><th class="r">Visitors</th><th class="r">Engaged</th><th>Top persona</th></tr></thead><tbody>` +
+      rows.map(([iso, list]) => {
+        const eng = list.filter(engaged);
+        const top = countBy(eng, (v) => v.persona)[0];
+        return `<tr class="click ${iso === selected ? "sel" : ""}" data-iso="${iso}"><td><span class="flag">${cflag(iso)}</span> ${esc(cname(iso))}</td>
+          <td class="r">${fmt(list.length)}</td><td class="r">${pct(eng.length / list.length)}</td>
+          <td>${top ? pchip(top[0], PERSONAS[top[0]].short) : '<span class="muted">—</span>'}</td></tr>`;
+      }).join("") + `</tbody>`;
+    document.querySelectorAll("#ctable tr[data-iso]").forEach((tr) => tr.addEventListener("click", () => { selected = selected === tr.dataset.iso ? null : tr.dataset.iso; render(); }));
+  }
+
+  function personaStack(list) {
+    const counts = PERSONA_ORDER.map((k) => [k, list.filter((v) => v.persona === k).length]).filter(([, n]) => n);
+    const total = list.length || 1;
+    return `<div class="stack">${counts.map(([k, n]) => `<span style="width:${(n / total) * 100}%;background:${pColor(k)}" data-tip="<b>${PERSONAS[k].label}</b><div>${fmt(n)} visitors · ${pct(n / total)}</div>"></span>`).join("")}</div>
+      <div class="legend" style="margin-top:6px">${counts.map(([k, n]) => pchip(k, `${PERSONAS[k].short} <span class="muted num">${pct(n / total)}</span>`)).join("")}</div>`;
+  }
+
+  function countryProfile(groups) {
+    const el = document.getElementById("cprofile");
+    if (!selected || !groups.get(selected)) { el.innerHTML = ""; return; }
+    const list = groups.get(selected);
+    const eng = list.filter(engaged);
+    const cities = countBy(list, (v) => v.city || "Unknown city").slice(0, 5);
+    const gpus = countBy(eng.flatMap((v) => Object.keys(v.f.gpus)), (k) => k).slice(0, 6);
+    const models = countBy(eng.flatMap((v) => Object.keys(v.f.models)), (k) => k).slice(0, 6);
+    const ch = countBy(list, (v) => v.channel).slice(0, 5);
+    el.innerHTML = `<div class="card">
+      <div class="card-head"><h2>${cflag(selected)} ${esc(cname(selected))}: profile</h2><span class="muted">${fmt(list.length)} visitors · ${pct(eng.length / list.length)} engaged · ${fmt(list.filter((v) => v.sessions.length > 1).length)} returning</span><span class="spacer"></span><a href="${PEOPLE_URL}#country=${selected}">See these people →</a> <button class="btn" type="button" id="clear-c">Clear</button></div>
+      <div style="margin:10px 0 14px">${personaStack(list)}</div>
+      <div class="grid g4">
+        <div><div class="fl-label" style="margin-bottom:6px">Cities</div>${hbars(cities.map(([k, n]) => ({ label: esc(k), plain: k, value: n })))}</div>
+        <div><div class="fl-label" style="margin-bottom:6px">Channels</div>${hbars(ch.map(([k, n]) => ({ label: esc(k), plain: k, value: n })))}</div>
+        <div><div class="fl-label" style="margin-bottom:6px">Hardware planned</div>${hbars(gpus.map(([k, n]) => ({ label: esc(shortGpu(k)), plain: gpuName(k), value: n })))}</div>
+        <div><div class="fl-label" style="margin-bottom:6px">Models planned</div>${hbars(models.map(([k, n]) => ({ label: esc(shortModel(k)), plain: modelName(k), value: n })))}</div>
+      </div></div>`;
+    document.getElementById("clear-c").addEventListener("click", () => { selected = null; render(); });
+  }
+
+  function channels(vs) {
+    const rows = countBy(vs, (v) => v.channel).map(([ch, n]) => ({ ch, n, e: vs.filter((v) => v.channel === ch && engaged(v)).length }));
+    const max = Math.max(...rows.map((r) => r.n), 1);
+    document.getElementById("channels").innerHTML = rows.length ? `<div class="legend"><span class="pchip"><i style="background:var(--accent)"></i>Engaged</span><span class="pchip"><i style="background:var(--seq-2)"></i>Bounced</span></div>` +
+      `<div style="display:grid;grid-template-columns:150px 1fr 90px;gap:6px 10px;align-items:center">` +
+      rows.map((r) => `<div>${esc(r.ch)}</div>
+        <div style="display:flex;gap:2px;height:12px" data-tip="<b>${esc(r.ch)}</b><div class='row'><span>Visitors</span><span>${fmt(r.n)}</span></div><div class='row'><span>Engaged</span><span>${fmt(r.e)} (${pct(r.e / r.n)})</span></div>">
+          <span style="width:${(r.e / max) * 100}%;background:var(--accent);border-radius:${r.n - r.e ? "0" : "0 4px 4px 0"}"></span>
+          <span style="width:${((r.n - r.e) / max) * 100}%;background:var(--seq-2);border-radius:0 4px 4px 0"></span></div>
+        <div class="num" style="text-align:right">${fmt(r.n)} <span class="muted">${pct(r.e / r.n)}</span></div>`).join("") + `</div>` : emptyState();
+    const refs = countBy(vs.filter((v) => v.ref), (v) => v.ref).slice(0, 8);
+    document.getElementById("refs").innerHTML = refs.length ? `<b>Top referring sites:</b> ${refs.map(([h, n]) => `<span class="tag">${esc(h)} · ${n}</span>`).join(" ")}` : "No referring sites in this range.";
+  }
+
+  function heat(vs) {
+    const grid = Array.from({ length: 7 }, () => new Array(24).fill(0));
+    let work = 0, other = 0, guessed = 0, total = 0;
+    for (const v of vs) {
+      if (!engaged(v) || v.persona === "agent") continue;
+      for (const s of v.sessions) {
+        const { wd, h } = localParts(s.start, v);
+        if (wd < 0) continue;
+        grid[wd][h]++; total++;
+        if (!v.tz) guessed++;
+        if (wd < 5 && h >= 9 && h < 18) work++; else other++;
+      }
+    }
+    const max = Math.max(1, ...grid.flat());
+    const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    let html = `<div class="heat"><div></div>${Array.from({ length: 24 }, (_, h) => `<div class="hl">${h % 3 === 0 ? h : ""}</div>`).join("")}`;
+    grid.forEach((row, i) => {
+      html += `<div>${days[i]}</div>` + row.map((n, h) => {
+        const step = n === 0 ? "--seq-0" : `--seq-${Math.min(6, 1 + Math.floor((n / max) * 5.99))}`;
+        return `<div class="c" style="background:var(${step})" data-tip="<b>${days[i]} ${String(h).padStart(2, "0")}:00 local</b><div>${fmt(n)} visits</div>"></div>`;
+      }).join("");
+    });
+    document.getElementById("heat").innerHTML = html + `</div>`;
+    const tot = work + other || 1;
+    document.getElementById("heat-legend").innerHTML = `<span><b class="num">${pct(work / tot)}</b> weekday 9–18h</span><span><b class="num">${pct(other / tot)}</b> evenings & weekends</span>` +
+      (guessed ? `<span class="muted">${pct(guessed / Math.max(1, total))} use the country’s main timezone (no city header)</span>` : "");
+  }
+
+  function daily(vs) {
+    const DAY = 86400000, nDays = UI.filter.range;
+    const start = UI.now() - nDays * DAY;
+    const counts = new Array(nDays).fill(0);
+    const chan = Array.from({ length: nDays }, () => new Map());
+    for (const v of vs) for (const s of v.sessions) {
+      const i = Math.floor((s.start - start) / DAY);
+      if (i >= 0 && i < nDays) { counts[i]++; chan[i].set(v.channel, (chan[i].get(v.channel) || 0) + 1); }
+    }
+    const W = 600, H = 200, L = 30, R = 8, T = 22, B = 22;
+    const max = Math.max(4, ...counts);
+    const x = (i) => L + (i / nDays) * (W - L - R);
+    const bw = Math.max(1, (W - L - R) / nDays - 2);
+    const y = (n) => T + (1 - n / max) * (H - T - B);
+    let svg = ticks(max, 4).map((t) => `<line class="gridline" x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}"/><text x="${L - 6}" y="${y(t) + 4}" text-anchor="end">${t}</text>`).join("");
+    svg += counts.map((n, i) => `<rect x="${x(i)}" y="${y(n)}" width="${bw}" height="${Math.max(0, y(0) - y(n))}" rx="${Math.min(3, bw / 2)}" fill="var(--accent)" data-tip="<b>${date(start + i * DAY)}</b><div>${fmt(n)} visits</div>"/>`).join("");
+    svg += `<line class="baseline" x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}"/>`;
+    const step = Math.ceil(nDays / 6);
+    for (let i = 0; i < nDays; i += step) svg += `<text x="${x(i)}" y="${H - 6}">${date(start + i * DAY)}</text>`;
+    const peak = counts.indexOf(Math.max(...counts));
+    if (counts[peak] > 0) {
+      const top = [...chan[peak].entries()].sort((a, b) => b[1] - a[1])[0];
+      const anchor = x(peak) > W * 0.45 ? "end" : "start";
+      svg += `<text x="${x(peak) + (anchor === "end" ? -4 : bw + 4)}" y="12" text-anchor="${anchor}" style="fill:var(--text-2)">peak ${date(start + peak * DAY)}: ${counts[peak]} visits, mostly ${esc(top[0])}</text>`;
+    }
+    document.getElementById("daily").innerHTML = svg;
+  }
+
+  function devices(vs) {
+    const rows = countBy(vs, (v) => v.device).map(([d, n]) => {
+      const e = vs.filter((v) => v.device === d && engaged(v)).length;
+      return { label: d === "agent" ? "Agent (no UI)" : d[0].toUpperCase() + d.slice(1), plain: d, value: n, sub: `${pct(e / n)} eng.` };
+    });
+    document.getElementById("devices").innerHTML = `<div class="fl-label" style="margin-bottom:6px">Device</div>` + hbars(rows, { labelW: "40%" });
+    const langs = countBy(vs.filter((v) => v.device !== "agent" && v.lang), (v) => v.lang).slice(0, 7);
+    document.getElementById("langs").innerHTML = `<div class="fl-label" style="margin-bottom:6px">Accept-Language</div>` + hbars(langs.map(([l, n]) => ({ label: esc(l), plain: l, value: n })), { labelW: "40%" });
+  }
+
+  function render() {
+    const vs = visible();
+    setCount(vs.length);
+    const groups = byCountry(vs);
+    if (selected && !groups.get(selected)) selected = null;
+    kpis(vs);
+    drawMap(groups);
+    countryTable(groups);
+    countryProfile(groups);
+    const scoped = selected ? groups.get(selected) : vs;
+    channels(scoped); heat(scoped); daily(scoped); devices(scoped);
+  }
+
+  UI.start(render);
+  fetch(WORLD_URL).then((r) => r.json()).then((w) => { world = w; if (UI.A.visitors) render(); }).catch(() => {});
+})();
+</script>
+{% endblock %}

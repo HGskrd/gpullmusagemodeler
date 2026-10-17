@@ -72,6 +72,7 @@ from use_case_evidence import (
     USE_CASE_RESEARCH_CAPTURED_AT,
     USE_CASE_SOURCES,
 )
+from web.analytics import record_event
 from web.config import (
     MAX_IMPORT_BYTES,
 )
@@ -264,6 +265,9 @@ def _record_snapshot(
         state_a=state_a,
         state_b=state_b,
     )
+    record_event(
+        reason, state_a, state_b, extra={"path": path or request.path} if reason == "open" else None
+    )
 
 
 def _htmx_response(state_a=None):
@@ -271,6 +275,22 @@ def _htmx_response(state_a=None):
     # which is panel B for compare-side edits.
     sa = get_state(_scope_id())
     sb = get_compare_state(_scope_id())
+    resp = make_response(
+        render_template("partials/htmx_response.html", A=sa, B=sb, **_planner_view_context(sa, sb))
+    )
+    resp.headers["HX-Trigger"] = "refreshChart"
+    return resp
+
+
+def _event_htmx_response(reason: str, state_a: PlannerState | None = None):
+    """Render like _htmx_response and log a slim analytics event, no full snapshot.
+
+    For high-frequency edits (counts, precision, costs) where a full A/B
+    snapshot per keystroke would be wasteful; repeats coalesce in the store.
+    """
+    sa = get_state(_scope_id())
+    sb = get_compare_state(_scope_id())
+    record_event(reason, sa, sb)
     resp = make_response(
         render_template("partials/htmx_response.html", A=sa, B=sb, **_planner_view_context(sa, sb))
     )

@@ -1,4 +1,10 @@
-"""Anonymous visitor tracking backed by transactional SQLite storage."""
+"""Anonymous visitor tracking backed by transactional SQLite storage.
+
+Two layers share one database: full A/B planner snapshots (the legacy admin
+browser) and visitor analytics -- a ``visitors`` row with first-touch context
+(Cloudflare country/city, referrer host, UTM, device class; never an IP) plus
+slim per-action ``events`` that feed the /admin insight pages.
+"""
 
 from __future__ import annotations
 
@@ -180,6 +186,7 @@ class SnapshotStore:
         self.max_per_tab = _env_nonnegative_int("PLANNER_SNAPSHOT_MAX_PER_TAB", 250)
         self._lock = threading.RLock()
         self._initialized = False
+        self._event_writes = 0
 
     def _connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -227,6 +234,39 @@ class SnapshotStore:
                         ON snapshots(last_seen DESC);
                     CREATE INDEX IF NOT EXISTS snapshots_visitor_tab_idx
                         ON snapshots(visitor_id, tab_id, sequence DESC);
+                    CREATE TABLE IF NOT EXISTS visitors (
+                        visitor_id TEXT PRIMARY KEY,
+                        first_seen INTEGER NOT NULL,
+                        last_seen INTEGER NOT NULL,
+                        country TEXT,
+                        region TEXT,
+                        city TEXT,
+                        timezone TEXT,
+                        lang TEXT,
+                        device TEXT,
+                        os TEXT,
+                        agent TEXT,
+                        referrer_host TEXT,
+                        utm_source TEXT,
+                        utm_medium TEXT,
+                        utm_campaign TEXT,
+                        entry_path TEXT,
+                        internal INTEGER NOT NULL DEFAULT 0
+                    );
+                    CREATE INDEX IF NOT EXISTS visitors_last_seen_idx
+                        ON visitors(last_seen DESC);
+                    CREATE TABLE IF NOT EXISTS events (
+                        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                        visitor_id TEXT NOT NULL,
+                        tab_id TEXT NOT NULL,
+                        t INTEGER NOT NULL,
+                        type TEXT NOT NULL,
+                        coalesce_key TEXT,
+                        detail_json TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS events_t_idx ON events(t);
+                    CREATE INDEX IF NOT EXISTS events_visitor_tab_idx
+                        ON events(visitor_id, tab_id, sequence DESC);
                     """
                 )
                 self._migrate_legacy(connection)
@@ -459,12 +499,174 @@ class SnapshotStore:
         with self._connect() as connection:
             return int(connection.execute(sql, params).fetchone()[0])
 
+    # ---- Visitor analytics: one row per visitor plus slim per-action events ----
+
+    # Rapid repeats of the same edit (a stepper held down, a typed number)
+    # within this window update the previous event instead of adding rows.
+    EVENT_COALESCE_MS = 20_000
+    # Retention for events/visitors runs once per this many event writes.
+    EVENT_RETENTION_EVERY = 500
+
+    _VISITOR_CONTEXT_FIELDS = (
+        "country",
+        "region",
+        "city",
+        "timezone",
+        "lang",
+        "device",
+        "os",
+        "agent",
+        "referrer_host",
+        "utm_source",
+        "utm_medium",
+        "utm_campaign",
+        "entry_path",
+    )
+
+    def touch_visitor(
+        self, visitor_id: str, context: Optional[dict] = None, *, now_ms: Optional[int] = None
+    ) -> None:
+        """Create the visitor row with first-touch context, or bump last_seen.
+
+        Context is written only when the row is created, so the landing
+        request's referrer, country and device stay the visitor's first touch.
+        """
+        self._ensure_initialized()
+        now_ms = int(
+            now_ms if now_ms is not None else datetime.now(timezone.utc).timestamp() * 1000
+        )
+        context = context or {}
+        values = [context.get(field) for field in self._VISITOR_CONTEXT_FIELDS]
+        with self._connect() as connection:
+            connection.execute(
+                f"""
+                INSERT INTO visitors(visitor_id, first_seen, last_seen,
+                    {", ".join(self._VISITOR_CONTEXT_FIELDS)})
+                VALUES (?, ?, ?, {", ".join("?" for _ in self._VISITOR_CONTEXT_FIELDS)})
+                ON CONFLICT(visitor_id) DO UPDATE SET last_seen = MAX(last_seen, excluded.last_seen)
+                """,
+                (visitor_id, now_ms, now_ms, *values),
+            )
+
+    def mark_internal(self, visitor_id: str) -> None:
+        self._ensure_initialized()
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO visitors(visitor_id, first_seen, last_seen, internal)
+                VALUES (?, ?, ?, 1)
+                ON CONFLICT(visitor_id) DO UPDATE SET internal = 1
+                """,
+                (visitor_id, now_ms, now_ms),
+            )
+
+    def record_event(
+        self,
+        *,
+        visitor_id: str,
+        tab_id: str,
+        event_type: str,
+        detail: dict,
+        coalesce_key: Optional[str] = None,
+        now_ms: Optional[int] = None,
+    ) -> None:
+        self._ensure_initialized()
+        now_ms = int(
+            now_ms if now_ms is not None else datetime.now(timezone.utc).timestamp() * 1000
+        )
+        detail_json = _json_dump(detail)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                INSERT INTO visitors(visitor_id, first_seen, last_seen) VALUES (?, ?, ?)
+                ON CONFLICT(visitor_id) DO UPDATE SET last_seen = MAX(last_seen, excluded.last_seen)
+                """,
+                (visitor_id, now_ms, now_ms),
+            )
+            latest = None
+            if coalesce_key:
+                latest = connection.execute(
+                    """SELECT sequence, t, coalesce_key FROM events
+                       WHERE visitor_id = ? AND tab_id = ? ORDER BY sequence DESC LIMIT 1""",
+                    (visitor_id, tab_id),
+                ).fetchone()
+            if (
+                latest is not None
+                and latest["coalesce_key"] == coalesce_key
+                and now_ms - latest["t"] <= self.EVENT_COALESCE_MS
+            ):
+                connection.execute(
+                    "UPDATE events SET t = ?, detail_json = ? WHERE sequence = ?",
+                    (now_ms, detail_json, latest["sequence"]),
+                )
+            else:
+                connection.execute(
+                    """INSERT INTO events(visitor_id, tab_id, t, type, coalesce_key, detail_json)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (visitor_id, tab_id, now_ms, event_type, coalesce_key, detail_json),
+                )
+            self._event_writes += 1
+            if self.retention_days > 0 and self._event_writes % self.EVENT_RETENTION_EVERY == 1:
+                cutoff = now_ms - self.retention_days * 86_400_000
+                connection.execute("DELETE FROM events WHERE t < ?", (cutoff,))
+                connection.execute("DELETE FROM visitors WHERE last_seen < ?", (cutoff,))
+
+    def list_analytics(self, *, since_ms: int, max_events: int = 200_000) -> dict:
+        """Visitors seen since ``since_ms`` and their events, oldest event first."""
+        self._ensure_initialized()
+        with self._connect() as connection:
+            visitors = [
+                dict(row)
+                for row in connection.execute(
+                    "SELECT * FROM visitors WHERE last_seen >= ? ORDER BY last_seen DESC",
+                    (since_ms,),
+                ).fetchall()
+            ]
+            rows = connection.execute(
+                """SELECT visitor_id, tab_id, t, type, detail_json FROM events
+                   WHERE t >= ? ORDER BY sequence DESC LIMIT ?""",
+                (since_ms, max(1, int(max_events))),
+            ).fetchall()
+        events = [
+            {
+                "visitor_id": row["visitor_id"],
+                "tab_id": row["tab_id"],
+                "t": row["t"],
+                "type": row["type"],
+                "detail": json.loads(row["detail_json"]),
+            }
+            for row in reversed(rows)
+        ]
+        return {"visitors": visitors, "events": events, "truncated": len(rows) >= max_events}
+
+    def analytics_status(self) -> dict:
+        self._ensure_initialized()
+        with self._connect() as connection:
+            first_event = connection.execute(
+                "SELECT MIN(t), MAX(t), COUNT(*) FROM events"
+            ).fetchone()
+            visitors = connection.execute(
+                "SELECT COUNT(*), SUM(country IS NOT NULL), SUM(timezone IS NOT NULL) FROM visitors"
+            ).fetchone()
+        return {
+            "first_event_ms": first_event[0],
+            "last_event_ms": first_event[1],
+            "events": int(first_event[2] or 0),
+            "visitors": int(visitors[0] or 0),
+            "visitors_with_country": int(visitors[1] or 0),
+            "visitors_with_timezone": int(visitors[2] or 0),
+        }
+
     def delete_visitor(self, visitor_id: str) -> int:
         self._ensure_initialized()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             cursor = connection.execute("DELETE FROM snapshots WHERE visitor_id = ?", (visitor_id,))
             deleted = max(0, cursor.rowcount)
+            connection.execute("DELETE FROM events WHERE visitor_id = ?", (visitor_id,))
+            connection.execute("DELETE FROM visitors WHERE visitor_id = ?", (visitor_id,))
         with self._connect() as connection:
             connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         return deleted

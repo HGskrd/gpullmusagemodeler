@@ -39,6 +39,7 @@ from state import (
     PlannerState,
     get_use_case_defs,
 )
+from web.analytics import record_event
 from web.cache import ScopedRevisionCache, combined_revision
 from web.helpers import (
     _state,
@@ -165,6 +166,7 @@ def chart_data():
 def projection_report():
     sa = get_state(_scope_id())
     sb = get_compare_state(_scope_id())
+    record_event("export_report", sa, sb)
     return jsonify({"text": format_projection_report(sa, sb)})
 
 

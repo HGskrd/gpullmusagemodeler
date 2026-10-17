@@ -72,12 +72,14 @@ from state import (
     set_projection_pct,
     set_projection_toggle,
 )
+from web.analytics import record_event
 from web.config import (
     EFFICIENCY_SETTING_BOUNDS,
     INTEGER_SETTING_BOUNDS,
 )
 from web.helpers import (
     _bounded_int,
+    _event_htmx_response,
     _finite_float,
     _form_float,
     _form_int,
@@ -150,9 +152,8 @@ def gpu_qty(s):
         delta = _form_int("delta")
         change_gpu_qty(s, uid, delta)
     # GPU count edits can fire repeatedly while a user types or steps the
-    # control. Keep this hot path untracked to avoid a snapshot row for every
-    # transient keystroke; stable changes are captured by subsequent actions.
-    return _htmx_response(s)
+    # control: no full snapshot, and the analytics event coalesces repeats.
+    return _event_htmx_response("gpu_qty", s)
 
 
 @planner_bp.route("/gpu/remove", methods=["POST"])
@@ -170,7 +171,7 @@ def gpu_cost(s):
     cost = _form_float("value", 0.0)
     set_gpu_cost(s, uid, cost)
     # Like GPU quantity, cost edits are high-frequency numeric updates.
-    return _htmx_response(s)
+    return _event_htmx_response("gpu_cost", s)
 
 
 @planner_bp.route("/model/add", methods=["POST"])
@@ -180,8 +181,18 @@ def model_add(s):
     if model_key not in MODELS or MODELS[model_key].hidden:
         return jsonify({"error": "Invalid model key"}), 400
 
-    add_model(s, model_key)
-    return _htmx_response(s)
+    try:
+        add_model(s, model_key)
+    except ValueError as error:
+        # "Doesn't fit anywhere" is the clearest friction signal; log it.
+        record_event(
+            "model_add_rejected",
+            get_state(_scope_id()),
+            get_compare_state(_scope_id()),
+            extra={"model": model_key, "error": str(error)[:200]},
+        )
+        raise
+    return _event_htmx_response("model_add", s)
 
 
 @planner_bp.route("/model/add-many", methods=["POST"])
@@ -199,7 +210,7 @@ def model_add_many(s):
         return jsonify({"error": "Invalid model key"}), 400
 
     add_models(s, model_keys)
-    return _htmx_response(s)
+    return _event_htmx_response("model_add_many", s)
 
 
 @planner_bp.route("/model/auto", methods=["POST"])
@@ -219,7 +230,7 @@ def model_auto(s):
 def model_auto_exclude(s):
     uid = _form_int("uid")
     auto_exclude_model(s, uid)
-    return _htmx_response(s)
+    return _event_htmx_response("model_auto_exclude", s)
 
 
 @planner_bp.route("/model/auto-reallow", methods=["POST"])
@@ -227,7 +238,7 @@ def model_auto_exclude(s):
 def model_auto_reallow(s):
     model_key = request.form.get("key", "")
     auto_reallow_model(s, model_key)
-    return _htmx_response(s)
+    return _event_htmx_response("model_auto_reallow", s)
 
 
 @planner_bp.route("/model/remove", methods=["POST"])
@@ -235,7 +246,7 @@ def model_auto_reallow(s):
 def model_remove(s):
     uid = _form_int("uid")
     remove_model(s, uid)
-    return _htmx_response(s)
+    return _event_htmx_response("model_remove", s)
 
 
 @planner_bp.route("/model/prec", methods=["POST"])
@@ -247,7 +258,7 @@ def model_prec(s):
         return jsonify({"error": "Invalid precision"}), 400
 
     set_model_prec(s, uid, prec)
-    return _htmx_response(s)
+    return _event_htmx_response("model_prec", s)
 
 
 @planner_bp.route("/model/artifact", methods=["POST"])
@@ -315,7 +326,7 @@ def model_spec(s):
                     }
                 ), 400
     set_model_spec(s, uid, method, spec_k)
-    return _htmx_response(s)
+    return _event_htmx_response("model_spec", s)
 
 
 @planner_bp.route("/model/count", methods=["POST"])
@@ -327,7 +338,7 @@ def model_count(s):
         return jsonify({"error": "Count cannot be negative"}), 400
 
     set_model_gpu_count(s, uid, count)
-    return _htmx_response(s)
+    return _event_htmx_response("model_count", s)
 
 
 @planner_bp.route("/model/strat", methods=["POST"])
@@ -356,7 +367,7 @@ def model_strat(s):
         return jsonify({"error": "Invalid strategy for this model/GPU combination"}), 400
 
     set_model_strat(s, uid, tp, pp, dp, phase)
-    return _htmx_response(s)
+    return _event_htmx_response("model_strat", s)
 
 
 @planner_bp.route("/model/gpu_pool", methods=["POST"])
@@ -365,7 +376,7 @@ def model_gpu_pool(s):
     uid = _form_int("uid")
     gpu_uid = _form_int("gpu_uid")
     set_model_gpu_pool(s, uid, gpu_uid)
-    return _htmx_response(s)
+    return _event_htmx_response("model_gpu_pool", s)
 
 
 @planner_bp.route("/dist/preset", methods=["POST"])
@@ -566,6 +577,7 @@ def project_export():
     s = _request_state()
     if s is None:
         return jsonify({"error": "No state found"}), 404
+    record_event("use_case_export", s)
     payload = serialize_project_set(s)
     body = json.dumps(payload, indent=2, sort_keys=True) + "\n"
     resp = make_response(body)

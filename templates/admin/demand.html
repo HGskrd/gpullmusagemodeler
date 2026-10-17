@@ -1,0 +1,231 @@
+{% extends "admin/_layout.html" %}
+{% block styles %}
+  .hm { display: grid; gap: 2px; font-size: 11px; }
+  .hm .c { height: 26px; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums; }
+  .hm .h { color: var(--muted); font-size: 10px; text-align: center; align-self: end; padding-bottom: 3px; }
+  .mini { display: flex; height: 10px; gap: 1px; border-radius: 3px; overflow: hidden; width: 110px; }
+  .mini span { height: 100%; }
+  .pstack { display: flex; height: 18px; gap: 2px; border-radius: 4px; overflow: hidden; }
+  .pstack span { height: 100%; display: flex; align-items: center; justify-content: center; font-size: 10px; }
+  .prow { display: grid; grid-template-columns: 120px 1fr; gap: 10px; align-items: center; margin-bottom: 6px; font-size: 12px; }
+{% endblock %}
+{% block content %}
+  <section class="grid g4" id="kpis"></section>
+  <section class="card">
+    <div class="card-head"><h2>What size of model, on what hardware</h2><span class="spacer"></span>
+      <span class="seg" id="rows"><button type="button" data-v="gpu" class="on">By GPU</button><button type="button" data-v="cls">By class</button></span></div>
+    <div class="q">People who placed a model of that size on that hardware. Darker = more people.</div>
+    <div id="hm" style="overflow:auto"></div>
+  </section>
+  <section class="grid g2">
+    <div class="card">
+      <h2>Hardware people plan around</h2>
+      <div class="q">Per GPU: who plans with it, typical count, and how often their models fit.</div>
+      <div style="overflow:auto"><table class="t" id="gpus"></table></div>
+    </div>
+    <div class="card">
+      <h2>Models people try</h2>
+      <div class="q">Per model: reach, the precision people end on, and how often it fits.</div>
+      <div style="overflow:auto"><table class="t" id="models"></table></div>
+    </div>
+  </section>
+  <section class="grid g2">
+    <div class="card">
+      <h2>Wanted, but didn’t fit</h2>
+      <div class="q">Model × hardware combinations that most often ended in “doesn’t fit”. Candidates for presets that show the fix upfront.</div>
+      <table class="t" id="nofit"></table>
+    </div>
+    <div class="card">
+      <h2>Requests we couldn’t answer</h2>
+      <div class="q">Models rejected because they fit on no configured pool, and agent-API requests for keys the catalog doesn’t have.</div>
+      <table class="t" id="gaps"></table>
+    </div>
+  </section>
+  <section class="grid g2">
+    <div class="card">
+      <h2>Precision choices by persona</h2>
+      <div class="q">Final precision of LLM placements. Darker = more bytes per parameter.</div>
+      <div class="legend" id="plegend"></div>
+      <div id="prec"></div>
+    </div>
+    <div class="card">
+      <h2>What AI assistants ask on users’ behalf</h2>
+      <div class="q">Agent-API plan requests: the questions LLM answers are built on.</div>
+      <table class="t" id="agentq"></table>
+      <h2 style="margin-top:16px">$/GPU-hr people enter</h2>
+      <div class="q">Self-reported pricing from the GPU cost field: a free signal on market rates.</div>
+      <table class="t" id="price"></table>
+    </div>
+  </section>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const { A, PERSONAS, PERSONA_ORDER, pColor, pchip, fmt, pct, flag, esc, GPU, MODEL, shortGpu, shortModel, gpuName, modelName, visible, filterBar, setCount, countBy, engaged, sizeClass, SIZE_CLASSES, GPU_CLASS_LABEL } = UI;
+  let rowsBy = "gpu";
+  document.querySelectorAll("#rows button").forEach((b) => b.addEventListener("click", () => {
+    rowsBy = b.dataset.v; document.querySelectorAll("#rows button").forEach((x) => x.classList.toggle("on", x === b)); render();
+  }));
+  filterBar(document.getElementById("filters"), render);
+
+  // One placement per model in each visit's final plan (fits known), plus agent questions.
+  function placements(vs) {
+    const out = [];
+    for (const v of vs) for (const s of v.sessions) {
+      if (s.final && s.final.gpus.length) {
+        const g = s.final.gpus[0];
+        for (const m of s.final.models) out.push({ v, model: m.key, prec: m.prec, gpu: g.key, qty: g.qty, fits: m.fits });
+      }
+      for (const e of s.events) {
+        if (e.type === "api_call" && e.model && e.gpu) out.push({ v, model: e.model, prec: e.prec, gpu: e.gpu, qty: e.qty, fits: e.fits == null ? null : e.fits, api: true });
+      }
+    }
+    return out;
+  }
+
+  function kpis(vs, P) {
+    const fin = vs.flatMap((v) => v.sessions.map((s) => s.final).filter((f) => f && f.models.length));
+    const rejected = vs.reduce((n, v) => n + v.f.rejected.length, 0);
+    document.getElementById("kpis").innerHTML = [
+      ["Distinct GPUs planned", fmt(new Set(P.map((p) => p.gpu)).size), `of ${fmt(Object.keys(A.catalog.gpus).length)} in the catalog`],
+      ["Distinct models placed", fmt(new Set(P.map((p) => p.model)).size), `${fmt(P.length)} placements`],
+      ["Final plans that fit", fin.length ? pct(fin.filter((f) => f.fit).length / fin.length) : "—", `${fmt(fin.length)} visits ended with a model`],
+      ["Rejected model adds", fmt(rejected), "fit on no configured pool"],
+    ].map(([l, v, d]) => `<div class="card kpi"><div class="label">${l}</div><div class="value num">${v}</div><div class="delta">${d}</div></div>`).join("");
+  }
+
+  function heatmap(P) {
+    const rowKey = rowsBy === "gpu" ? (p) => p.gpu : (p) => GPU(p.gpu).cls;
+    const people = new Map();
+    for (const p of P) {
+      const k = rowKey(p) + "|" + sizeClass(MODEL(p.model).b);
+      if (!people.has(k)) people.set(k, new Set());
+      people.get(k).add(p.v.id);
+    }
+    let rows = countBy(P, rowKey).map(([k]) => k);
+    if (rowsBy === "gpu") rows = rows.slice(0, 14);
+    if (!rows.length) { document.getElementById("hm").innerHTML = `<div class="muted">No placements in this range yet.</div>`; return; }
+    const max = Math.max(1, ...[...people.values()].map((s) => s.size));
+    const rl = (k) => esc(rowsBy === "gpu" ? shortGpu(k) : GPU_CLASS_LABEL[k] || k);
+    let html = `<div class="hm" style="grid-template-columns:230px repeat(${SIZE_CLASSES.length}, minmax(80px, 1fr))"><div></div>` + SIZE_CLASSES.map((c) => `<div class="h">${c}</div>`).join("");
+    for (const r of rows) {
+      html += `<div style="align-self:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(rowsBy === "gpu" ? gpuName(r) : r)}">${rl(r)}</div>`;
+      for (const c of SIZE_CLASSES) {
+        const n = (people.get(r + "|" + c) || new Set()).size;
+        const step = n === 0 ? "--seq-0" : `--seq-${Math.min(6, 1 + Math.floor(Math.sqrt(n / max) * 5.99))}`;
+        const tries = P.filter((p) => rowKey(p) === r && sizeClass(MODEL(p.model).b) === c && p.fits != null);
+        const fr = tries.length ? tries.filter((p) => p.fits).length / tries.length : null;
+        html += `<div class="c" style="background:var(${step});color:${n / max > 0.35 ? "var(--panel)" : "var(--text-2)"}" data-tip="<b>${rl(r)} · ${c}</b><div>${fmt(n)} people</div>${fr == null ? "" : `<div>${pct(fr)} fit</div>`}">${n || ""}</div>`;
+      }
+    }
+    document.getElementById("hm").innerHTML = html + "</div>";
+  }
+
+  function mini(list) {
+    const c = PERSONA_ORDER.map((k) => [k, list.filter((v) => v.persona === k).length]).filter(([, n]) => n);
+    const t = list.length || 1;
+    return `<div class="mini" data-tip="${esc(c.map(([k, n]) => `${PERSONAS[k].short}: ${n}`).join("<br>"))}">${c.map(([k, n]) => `<span style="width:${(n / t) * 100}%;background:${pColor(k)}"></span>`).join("")}</div>`;
+  }
+
+  function gpuTable(P) {
+    const rows = countBy(P, (p) => p.gpu).slice(0, 12).map(([g]) => {
+      const ps = P.filter((p) => p.gpu === g);
+      const people = [...new Set(ps.map((p) => p.v))];
+      const qtys = ps.map((p) => p.qty || 0).sort((a, b) => a - b);
+      const f = ps.filter((p) => p.fits != null);
+      return { g, people, q: qtys[Math.floor(qtys.length / 2)], fr: f.length ? f.filter((p) => p.fits).length / f.length : null };
+    });
+    document.getElementById("gpus").innerHTML = rows.length ? `<thead><tr><th>GPU</th><th class="r">People</th><th class="r">Typical ×</th><th>Who</th><th class="r">Fits</th></tr></thead><tbody>` +
+      rows.map((r) => `<tr><td title="${esc(gpuName(r.g))}">${esc(shortGpu(r.g))} <span class="muted" style="font-size:11px">${GPU(r.g).vram} GB</span></td><td class="r">${fmt(r.people.length)}</td><td class="r">${r.q}×</td><td>${mini(r.people)}</td><td class="r">${r.fr == null ? "—" : pct(r.fr)}</td></tr>`).join("") + "</tbody>"
+      : `<tbody><tr><td class="muted">No placements yet.</td></tr></tbody>`;
+  }
+
+  function modelTable(P) {
+    const rows = countBy(P, (p) => p.model).slice(0, 12).map(([m]) => {
+      const ps = P.filter((p) => p.model === m);
+      const f = ps.filter((p) => p.fits != null);
+      return { m, people: new Set(ps.map((p) => p.v.id)).size, prec: countBy(ps, (p) => p.prec)[0][0], hw: countBy(ps, (p) => p.gpu)[0][0], fr: f.length ? f.filter((p) => p.fits).length / f.length : null };
+    });
+    document.getElementById("models").innerHTML = rows.length ? `<thead><tr><th>Model</th><th class="r">People</th><th>Usual precision</th><th>Usual GPU</th><th class="r">Fits</th></tr></thead><tbody>` +
+      rows.map((r) => `<tr><td title="${esc(modelName(r.m))}">${esc(shortModel(r.m))}</td><td class="r">${fmt(r.people)}</td><td><span class="tag">${esc(UI.precLabel(r.prec))}</span></td><td class="muted">${esc(shortGpu(r.hw))}</td>
+        <td class="r" style="${r.fr != null && r.fr < 0.5 ? "color:var(--critical);font-weight:600" : ""}">${r.fr == null ? "—" : pct(r.fr)}</td></tr>`).join("") + "</tbody>"
+      : `<tbody><tr><td class="muted">No placements yet.</td></tr></tbody>`;
+  }
+
+  function noFit(vs) {
+    const bad = vs.flatMap((v) => v.sessions.flatMap((s) => s.events.filter((e) => e.type === "result" && !e.fits && e.model && e.gpu)));
+    const rows = countBy(bad, (e) => [e.model, e.prec, e.gpu, e.qty].join("|")).slice(0, 8).map(([k, n]) => {
+      const [m, prec, g, q] = k.split("|");
+      const sample = bad.find((e) => e.model === m && e.gpu === g);
+      const per = GPU(g).vram * 0.9;
+      const minQ = per > 0 && sample.need_gb ? Math.ceil(sample.need_gb / per) : null;
+      return { m, prec, g, q: +q, n, minQ };
+    });
+    document.getElementById("nofit").innerHTML = rows.length ? `<thead><tr><th>Wanted</th><th>On</th><th class="r">Times</th><th>Weights alone need</th></tr></thead><tbody>` +
+      rows.map((r) => `<tr><td>${esc(shortModel(r.m))} <span class="tag">${esc(UI.precLabel(r.prec))}</span></td><td>${r.q ? `${r.q}× ${esc(shortGpu(r.g))}` : `${esc(shortGpu(r.g))} <span class="muted">(pool full, 0 GPUs)</span>`}</td><td class="r">${fmt(r.n)}</td>
+        <td>${r.minQ ? `<span class="tag acc" data-tip="Weights only at this precision; KV cache and runtime need more.">≥ ${r.minQ}× ${esc(shortGpu(r.g))}</span>` : "—"}</td></tr>`).join("") + "</tbody>"
+      : `<tbody><tr><td class="muted">No failed fits in this range.</td></tr></tbody>`;
+  }
+
+  function gaps(vs) {
+    const items = [];
+    for (const v of vs) for (const s of v.sessions) for (const e of s.events) {
+      if (e.type === "model_rejected" && e.reason === "fits_nowhere" && e.model) items.push({ v, key: e.model, kind: "fits nowhere", label: modelName(e.model) });
+      if (e.type === "api_call" && e.unknown) for (const k of e.unknown) items.push({ v, key: k, kind: "unknown key (API)", label: k });
+    }
+    const rows = countBy(items, (x) => x.kind + "|" + x.key).slice(0, 12);
+    document.getElementById("gaps").innerHTML = rows.length ? `<thead><tr><th>Asked for</th><th>Why</th><th class="r">Times</th><th>Mostly</th><th>From</th></tr></thead><tbody>` +
+      rows.map(([k, n]) => {
+        const who = items.filter((x) => x.kind + "|" + x.key === k);
+        const p = countBy(who, (x) => x.v.persona)[0][0];
+        const cs = countBy(who.filter((x) => x.v.country), (x) => x.v.country).slice(0, 3);
+        return `<tr><td><b>${esc(who[0].label)}</b></td><td><span class="tag">${esc(who[0].kind)}</span></td><td class="r">${fmt(n)}</td><td>${pchip(p, PERSONAS[p].short)}</td><td>${cs.map(([c]) => flag(c)).join(" ")}</td></tr>`;
+      }).join("") + "</tbody>"
+      : `<tbody><tr><td class="muted">Nothing unanswered in this range.</td></tr></tbody>`;
+  }
+
+  function precision(P) {
+    const G = [["BF16 (2 B/param)", ["bf16"], "--seq-6"], ["FP8", ["fp8"], "--seq-4"], ["4-bit (NVFP4/MXFP4)", ["nvfp4", "mxfp4"], "--seq-2"]];
+    document.getElementById("plegend").innerHTML = G.map(([l, , c]) => `<span class="pchip"><i style="background:var(${c})"></i>${l}</span>`).join("");
+    const llm = P.filter((p) => ["llm", "decision"].includes(MODEL(p.model).kind));
+    const rows = PERSONA_ORDER.filter((k) => k !== "bouncer" && k !== "speech").map((k) => {
+      const ps = llm.filter((p) => p.v.persona === k);
+      if (!ps.length) return "";
+      const t = ps.length;
+      return `<div class="prow">${pchip(k, PERSONAS[k].short)}<div class="pstack">${G.map(([l, ks, c]) => {
+        const n = ps.filter((p) => ks.includes(p.prec)).length;
+        return n ? `<span style="width:${(n / t) * 100}%;background:var(${c});color:${c === "--seq-2" ? "var(--text)" : "var(--panel)"}" data-tip="<b>${PERSONAS[k].short} · ${l}</b><div>${fmt(n)} of ${fmt(t)} (${pct(n / t)})</div>">${n / t > 0.12 ? pct(n / t) : ""}</span>` : "";
+      }).join("")}</div></div>`;
+    }).join("");
+    document.getElementById("prec").innerHTML = rows || `<div class="muted">No LLM placements yet.</div>`;
+  }
+
+  function agentQ(P, vs) {
+    const ap = P.filter((p) => p.api);
+    const rows = countBy(ap, (p) => p.model + "|" + p.gpu).slice(0, 6);
+    document.getElementById("agentq").innerHTML = rows.length ? `<thead><tr><th>“Can I run…”</th><th>“…on”</th><th class="r">Asks</th><th class="r">Runnable</th></tr></thead><tbody>` +
+      rows.map(([k, n]) => {
+        const [m, g] = k.split("|");
+        const ps = ap.filter((p) => p.model === m && p.gpu === g && p.fits != null);
+        return `<tr><td>${esc(shortModel(m))}</td><td>${esc(shortGpu(g))}</td><td class="r">${fmt(n)}</td><td class="r">${ps.length ? pct(ps.filter((p) => p.fits).length / ps.length) : "—"}</td></tr>`;
+      }).join("") + "</tbody>" : `<tbody><tr><td class="muted">No agent plan requests in this range.</td></tr></tbody>`;
+    const pr = vs.flatMap((v) => v.sessions.flatMap((s) => s.events.filter((e) => e.type === "gpu_cost" && e.usd_hr > 0)));
+    const byG = countBy(pr, (e) => e.gpu).slice(0, 6);
+    document.getElementById("price").innerHTML = byG.length ? `<thead><tr><th>GPU</th><th class="r">Entries</th><th class="r">Median $/hr</th><th class="r">Range</th></tr></thead><tbody>` +
+      byG.map(([g, n]) => {
+        const xs = pr.filter((e) => e.gpu === g).map((e) => e.usd_hr).sort((a, b) => a - b);
+        return `<tr><td>${esc(shortGpu(g))}</td><td class="r">${n}</td><td class="r">$${xs[Math.floor(xs.length / 2)].toFixed(2)}</td><td class="r muted">$${xs[0].toFixed(2)}–$${xs[xs.length - 1].toFixed(2)}</td></tr>`;
+      }).join("") + "</tbody>" : `<tbody><tr><td class="muted">Nobody entered a price in this range.</td></tr></tbody>`;
+  }
+
+  function render() {
+    const vs = visible();
+    setCount(vs.length);
+    const P = placements(vs);
+    const human = P.filter((p) => !p.api);
+    kpis(vs, P); heatmap(human); gpuTable(human); modelTable(human); noFit(vs); gaps(vs); precision(human); agentQ(P, vs);
+  }
+  UI.start(render);
+})();
+</script>
+{% endblock %}

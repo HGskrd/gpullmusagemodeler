@@ -8,6 +8,9 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Added visitor insight pages to `/admin`: overview with tracking health, audience & geography (world map, channels, local-time heatmap), rule-based personas, per-person profiles that read each visit as a story, journeys & friction (funnel, recovery after "doesn't fit", friction signals), and demand & gaps (model-size × hardware demand, fit rates, unanswered requests, self-reported $/GPU-hr, agent questions). The snapshot browser moved to `/admin/snapshots`.
+- Added visitor analytics storage: first-touch visitor context (Cloudflare country/city/timezone headers, referrer host, UTM, device class, language; never an IP) and slim per-action events with fit outcomes. Previously untracked edits (model add/remove/precision/GPU count, GPU quantity and cost) are now recorded as coalesced events, as are rejected model adds, exports, economics and use-case page views, and agent-API calls.
+
 - Added Perplexity Decider Flash v1.2 (4B), including its separate BF16 decision head, noncausal attention, and explicit long-context/fast-path caveats.
 
 - Add 12 source-pinned decision checkpoints, a Decision picker and throughput chart, single-forward capacity and reports with zero generated tokens; keep decision workloads outside generation economics.
@@ -26,6 +29,8 @@ All notable changes to this project will be documented in this file.
   checkpoint/GPU/host/expansion diagnostics, and matching API/report fields.
 
 ### Changed
+
+- "Delete my stored scenarios" also deletes the visitor's analytics rows, and the privacy note discloses the new fields.
 
 - Export scenarios as version 2; preserve version 1 precision, topology, speculation
   and calculation assumptions during migration.

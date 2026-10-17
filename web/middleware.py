@@ -144,7 +144,7 @@ def _protect_and_lock_request_scope():
     if (
         request.endpoint
         and request.endpoint not in _UNSCOPED_ENDPOINTS
-        and request.blueprint != "agent_api"
+        and request.blueprint not in {"agent_api", "admin"}
     ):
         visitor_id = _visitor_id()
         visitor_lock = get_scope_lock(f"visitor:{visitor_id}")

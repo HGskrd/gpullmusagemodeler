@@ -134,7 +134,7 @@ class EngineeringHardeningTests(unittest.TestCase):
         with patch.dict("os.environ", {"PLANNER_ADMIN_PASSWORD": "strong"}):
             with self.client.session_transaction() as session:
                 session[ADMIN_SESSION_KEY] = True
-            response = self.client.get("/admin?page=not-a-number")
+            response = self.client.get("/admin/snapshots?page=not-a-number")
         self.assertEqual(response.status_code, 400)
 
     def test_multi_worker_startup_is_refused(self):

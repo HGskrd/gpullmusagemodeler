@@ -125,7 +125,14 @@ def test_api_never_reads_browser_state_or_persists_snapshots(client):
             assert "Set-Cookie" not in response.headers
     assert session_store._states == before
     assert session_store._compare_states == before_b
-    assert not store.mock_calls
+    # Only cookie-free analytics: no snapshots, no browser visitor, api_call events.
+    assert not [c for c in store.mock_calls if c[0] == "record_snapshot"]
+    events = [c.kwargs for c in store.mock_calls if c[0] == "record_event"]
+    assert [e["event_type"] for e in events] == ["api_call", "api_call"]
+    assert all(e["visitor_id"].startswith("agent-") for e in events)
+    assert {c.args[0] for c in store.mock_calls if c[0] == "touch_visitor"} <= {
+        e["visitor_id"] for e in events
+    }
 
 
 @pytest.mark.parametrize(
