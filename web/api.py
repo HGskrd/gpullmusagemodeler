@@ -16,9 +16,9 @@ from calc import (
 from data import (
     GPUS,
     MODEL_KINDS,
-    gpu_cards_by_vendor,
     models_by_kind,
 )
+from data.hardware_picker import picker_vendors
 from placement import (
     resolve_deployment,
 )
@@ -173,7 +173,7 @@ def picker_gpu():
     return render_template(
         "partials/gpu_picker.html",
         panel=request.args.get("panel", "A"),
-        gpu_cards_by_vendor=gpu_cards_by_vendor(),
+        picker_vendors=picker_vendors(),
         GPUS=GPUS,
     )
 

@@ -35,6 +35,9 @@
              value="{{ "%.2f"|format(gp.cost_per_gpu_hour) }}"
              hx-post="/gpu/cost" hx-target="#main-content" hx-trigger="input changed delay:10ms"
              hx-vals='{"panel":"{{ panel }}","uid":"{{ gp.uid }}"}' />
+      {% if gp.cost_per_gpu_hour == 0 and gpu.default_tco_per_gpu_hour == 0 %}
+      <span class="T" title="{{ gpu.price_note }}">Quote required · cost excluded</span>
+      {% endif %}
       {% if gp.cost_per_gpu_hour > 0 %}
       <span class="T" style="font-family:var(--mono);">{{ "%.0f"|format(gp.pool_cost_day) }}/day for {{ gp.count }} GPUs</span>
       {% endif %}

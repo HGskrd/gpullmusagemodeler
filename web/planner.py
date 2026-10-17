@@ -21,12 +21,12 @@ from calc import (
 from data import (
     EMBEDDING_DOC_BUCKETS,
     EMBEDDING_DOC_PRESETS,
-    GPUS,
     MODELS,
     PRECISIONS,
     TASK_PRESETS,
     aa_intelligence_to_quality,
 )
+from data.hardware_picker import purchasable_gpu_keys
 from placement import (
     auto_select_models,
     retune_models,
@@ -125,7 +125,7 @@ def explainer():
 @with_planner_state
 def gpu_add(s):
     gpu_type = request.form.get("gpu_type")
-    if gpu_type not in GPUS:
+    if gpu_type not in purchasable_gpu_keys():
         return jsonify({"error": "Invalid GPU type"}), 400
 
     count = _form_int("count", 8)
