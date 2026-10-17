@@ -818,7 +818,7 @@ function togglePicker(btn, url) {
   pk.setAttribute('aria-label', `${btn.textContent.trim()} options`);
   fetch(withTabUrl(url), { headers: requestHeaders() }).then(r => r.text()).then(html => {
     replaceHtml(pk, html);
-    syncGpuCountSelector(pk);
+    initGpuPicker(pk);
   });
 }
 
@@ -1011,30 +1011,89 @@ function deleteStoredScenarios(button) {
   });
 }
 
-/* GPU count selector in picker */
+/* Vendor and quantity are remembered while the user adds pools. */
 window.selectedGpuCount = 8;
+const gpuPickerCounts = { Apple: 1 };
+let gpuPickerVendor = 'NVIDIA';
 function syncGpuCountSelector(root) {
-  const count = Number(window.selectedGpuCount ?? 8) || 8;
-  const scope = root || document;
-  const groups = [];
-  if (scope.classList && scope.classList.contains('gpu-count-sel')) groups.push(scope);
-  scope.querySelectorAll?.('.gpu-count-sel').forEach(group => groups.push(group));
-  groups.forEach(group => {
-    group.querySelectorAll('[data-gcnt]').forEach(button => {
-      const selected = Number(button.dataset.gcnt) === count;
-      button.classList.toggle('selected', selected);
-      button.setAttribute('aria-pressed', selected ? 'true' : 'false');
-    });
+  if (!root?.querySelector('[data-gpu-picker]')) return;
+  const count = gpuPickerCounts[gpuPickerVendor] ?? 8;
+  window.selectedGpuCount = count;
+  root.querySelectorAll('[data-gcnt]').forEach(button => {
+    const selected = Number(button.dataset.gcnt) === count;
+    button.classList.toggle('selected', selected);
+    button.setAttribute('aria-pressed', String(selected));
+  });
+  root.querySelectorAll('[data-gpu-key]').forEach(button => {
+    const actual = normalizedPickerGpuCount(button);
+    button.title = `Add ${actual} × ${button.dataset.gpuName}. ${button.dataset.hardwareDetail}`;
   });
 }
-
-document.addEventListener('click', e => {
-  const gcb = e.target.closest('[data-gcnt]');
-  if (gcb) {
-    window.selectedGpuCount = parseInt(gcb.dataset.gcnt, 10);
-    syncGpuCountSelector(gcb.closest('.gpu-count-sel'));
+function filterGpuPicker(root, allowSwitch = false) {
+  const query = root.querySelector('[data-hardware-search]').value.trim().toLocaleLowerCase();
+  const words = query.split(/\s+/).filter(Boolean);
+  const matches = new Map();
+  root.querySelectorAll('[data-gpu-vendor-panel]').forEach(panel => {
+    let total = 0;
+    panel.querySelectorAll('.gpu-picker-family').forEach(family => {
+      let visible = 0;
+      family.querySelectorAll('[data-gpu-key]').forEach(button => {
+        const match = words.every(word => button.dataset.hardwareMatch.toLocaleLowerCase().includes(word));
+        button.hidden = !match;
+        if (match) visible++;
+      });
+      family.hidden = visible === 0;
+      total += visible;
+    });
+    matches.set(panel.dataset.gpuVendorPanel, total);
+  });
+  if (allowSwitch && !matches.get(gpuPickerVendor)) {
+    const first = [...matches].find(([, count]) => count > 0);
+    if (first) gpuPickerVendor = first[0];
   }
-});
+  root.querySelectorAll('[data-gpu-vendor]').forEach(button => {
+    const selected = button.dataset.gpuVendor === gpuPickerVendor;
+    button.classList.toggle('acc', selected);
+    button.setAttribute('aria-selected', String(selected));
+    button.tabIndex = selected ? 0 : -1;
+  });
+  root.querySelectorAll('[data-gpu-vendor-panel]').forEach(panel => {
+    panel.hidden = panel.dataset.gpuVendorPanel !== gpuPickerVendor;
+  });
+  root.querySelector('[data-hardware-empty]').hidden = !!matches.get(gpuPickerVendor);
+  syncGpuCountSelector(root);
+}
+function initGpuPicker(root) {
+  if (!root.querySelector('[data-gpu-picker]')) return;
+  filterGpuPicker(root);
+  root.querySelector('[data-hardware-search]').addEventListener('input', () => filterGpuPicker(root, true));
+  root.addEventListener('click', event => {
+    const vendor = event.target.closest('[data-gpu-vendor]');
+    const quantity = event.target.closest('[data-gcnt]');
+    if (vendor) {
+      gpuPickerVendor = vendor.dataset.gpuVendor;
+      filterGpuPicker(root);
+    } else if (quantity) {
+      gpuPickerCounts[gpuPickerVendor] = Number(quantity.dataset.gcnt);
+      syncGpuCountSelector(root);
+    }
+  });
+  root.addEventListener('keydown', event => {
+    const vendor = event.target.closest('[data-gpu-vendor]');
+    if (event.key === 'Escape') {
+      const trigger = root.parentElement.querySelector('[data-picker]');
+      closePicker();
+      trigger?.focus();
+    } else if (vendor && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+      event.preventDefault();
+      const tabs = [...root.querySelectorAll('[data-gpu-vendor]')];
+      const offset = event.key === 'ArrowRight' ? 1 : -1;
+      const index = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (tabs.indexOf(vendor) + offset + tabs.length) % tabs.length;
+      tabs[index].click();
+      tabs[index].focus();
+    }
+  });
+}
 
 /* After HTMX swap, refresh chart */
 document.body.addEventListener('refreshChart', () => {
