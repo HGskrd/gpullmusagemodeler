@@ -687,6 +687,12 @@ MODEL_DOMAIN_QUALITY_ANCHORS = {
 # set quality_confidence=0; do not invent independent benchmark anchors.
 AA_QUALITY_PLACEHOLDER: frozenset[str] = frozenset(
     {
+        # LFM3 launch cards have vendor benchmarks but no comparable AA anchor.
+        "lfm3-1.7b",
+        "lfm3-1.7b-base",
+        "lfm3-vl-2b",
+        "lfm3-audio-2b",
+        "lfm3-omni-2b",
         "mimo-v2.6-distill-qwen-9b",
         "mimo-v2.6-pro-rl",
         "mellum2.1-12b-a2.5b-thinking",

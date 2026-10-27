@@ -20,6 +20,41 @@ class ModelArchitectureSource:
 # These entries cover every model added or materially corrected in the
 # September 2026 audit. Revisions are immutable official release snapshots.
 OPEN_MODEL_ARCHITECTURE_SOURCES: dict[str, ModelArchitectureSource] = {
+    "lfm3-1.7b": ModelArchitectureSource(
+        "https://huggingface.co/LiquidAI/LFM3-1.7B",
+        "40ebe0aa6662c9d40389c2f5d565b6a2c6aebacd",
+        "Captured 2026-10-27: card, config, modeling code and BF16 tensor headers; 256K context.",
+    ),
+    "lfm3-1.7b-base": ModelArchitectureSource(
+        "https://huggingface.co/LiquidAI/LFM3-1.7B-Base",
+        "545fc8f4c7b5fa9f405105274cd29c4f8f44b526",
+        "Captured 2026-10-27: pre-trained base checkpoint; same tri-hybrid geometry, no agent capability claim.",
+    ),
+    "lfm3-vl-2b": ModelArchitectureSource(
+        "https://huggingface.co/LiquidAI/LFM3-VL-2B",
+        "f83d2b0a2296aaa277f394990a9b8b949ddf9691",
+        "Captured 2026-10-27: 128000-position config, vision encoder and projector included in residency.",
+    ),
+    "lfm3-audio-2b": ModelArchitectureSource(
+        "https://huggingface.co/LiquidAI/LFM3-Audio-2B",
+        "9d49701c372d6011d900f6abb40c6b296fb706dd",
+        "Captured 2026-10-27: card limits use to 32K despite 128000-position config; separate LiquidCodec included.",
+    ),
+    "lfm3-omni-2b": ModelArchitectureSource(
+        "https://huggingface.co/LiquidAI/LFM3-Omni-2B",
+        "ce2458cbce4ad970f92032ed94e3d18d30b04f9c",
+        "Captured 2026-10-27: non-reasoning, card limits use to 32K; separate LiquidCodec included.",
+    ),
+    "d1-2b": ModelArchitectureSource(
+        "https://huggingface.co/LiquidAI/d1-2B",
+        "97c57047d5852d77e02dfac211f8768aff77a8b2",
+        "Captured 2026-10-27: single-forward typed decisions; noncausal set attention approximated conservatively.",
+    ),
+    "d1-omni-2b": ModelArchitectureSource(
+        "https://huggingface.co/LiquidAI/d1-Omni-2B",
+        "4cccbfd5ba3405ee0f973134bd03e0d9d60ef1d8",
+        "Captured 2026-10-27: single-forward decisions; complete released checkpoint, no speech codec required.",
+    ),
     "llama33-70b": ModelArchitectureSource(
         "https://huggingface.co/meta-llama/Llama-3.3-70B-Instruct",
         "6f6073b423013f6a7d4d9f39144961bfbfbc386b",
