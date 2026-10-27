@@ -14,13 +14,22 @@ from .model_class import Model
 from .models_asr import ASR_MODELS
 from .models_decision import DECISION_MODELS
 from .models_embedding import EMBEDDING_MODELS
+from .models_lfm3 import LFM3_MODELS
 from .models_text import TEXT_MODELS
 
-_ALL_MODEL_DEFINITIONS = {**EMBEDDING_MODELS, **TEXT_MODELS, **ASR_MODELS, **DECISION_MODELS}
+_ALL_MODEL_DEFINITIONS = {
+    **EMBEDDING_MODELS,
+    **TEXT_MODELS,
+    **ASR_MODELS,
+    **DECISION_MODELS,
+    **LFM3_MODELS,
+}
 _INITIAL_MODELS = {
     key: model for key, model in _ALL_MODEL_DEFINITIONS.items() if key not in ARCHIVED_MODELS
 }
 MODEL_ORDER = (
+    "d1-2b",
+    "d1-omni-2b",
     "d1-3b",
     "d1-omni-600m",
     "pplx-decider-v1.1-27b",
@@ -58,6 +67,11 @@ MODEL_ORDER = (
     "g12",
     "g26",
     "g31",
+    "lfm3-1.7b",
+    "lfm3-1.7b-base",
+    "lfm3-vl-2b",
+    "lfm3-audio-2b",
+    "lfm3-omni-2b",
     "lfm2.5-350m",
     "lfm2.5-1.2b-instruct",
     "lfm2.5-1.2b-thinking",

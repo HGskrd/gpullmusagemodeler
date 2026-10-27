@@ -327,6 +327,9 @@ class Model:
     linear_attention_k_heads: int = 0
     linear_attention_k_head_dim: int = 0
     linear_attention_conv_kernel: int = 0
+    # Per-sequence elements in standalone gated short-convolution caches. These
+    # have no recurrent matrix; storage follows convolution precision, not weights.
+    short_conv_state_elements: int = 0
     attention_query_heads: int = 0
     # Some MLA checkpoints expose a wider Q/K head than the value head. The
     # legacy ``head_dim`` remains the Q/K width; zero preserves equal QK/V.

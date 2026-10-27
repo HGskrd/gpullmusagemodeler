@@ -492,9 +492,10 @@ def _compressed_indexer_cache_bytes(m: Model, seq_len: float, prec: str) -> floa
 
 
 def linear_attention_state_bytes(m: Model, prec: str) -> float:
+    short_conv_bytes = m.short_conv_state_elements * m.convolution_bytes_per_elem(prec)
     layers = m.linear_attention_layer_count
     if layers <= 0:
-        return 0.0
+        return short_conv_bytes
 
     heads = m.linear_attention_head_count
     head_dim = m.linear_attention_head_size
@@ -504,7 +505,7 @@ def linear_attention_state_bytes(m: Model, prec: str) -> float:
 
     recurrent_elems = heads * head_dim * head_dim
     conv_elems = conv_len * ((heads * head_dim) + (2 * k_heads * k_head_dim))
-    return layers * (
+    return short_conv_bytes + layers * (
         recurrent_elems * m.recurrent_bytes_per_elem(prec)
         + conv_elems * m.convolution_bytes_per_elem(prec)
     )
@@ -534,9 +535,16 @@ def per_tp_linear_attention_state_bytes(m: Model, prec: str, tp: int) -> float:
 
 
 def _per_tp_linear_attention_state_bytes_uncached(m: Model, prec: str, tp: int) -> float:
+    # Match the planner's head-aligned TP convention; actual runtime convolution
+    # sharding and pipeline placement still require calibration.
+    short_conv_bytes = (
+        m.short_conv_state_elements
+        * m.convolution_bytes_per_elem(prec)
+        / _head_aligned_tp_shards(m.num_heads, tp)
+    )
     layers = m.linear_attention_layer_count
     if layers <= 0:
-        return 0.0
+        return short_conv_bytes
 
     heads = m.linear_attention_head_count
     head_dim = m.linear_attention_head_size
@@ -550,7 +558,7 @@ def _per_tp_linear_attention_state_bytes_uncached(m: Model, prec: str, tp: int) 
     conv_elems = conv_len * (
         (heads * head_dim / head_shards) + (2 * k_heads * k_head_dim / k_head_shards)
     )
-    return layers * (
+    return short_conv_bytes + layers * (
         recurrent_elems * m.recurrent_bytes_per_elem(prec)
         + conv_elems * m.convolution_bytes_per_elem(prec)
     )
