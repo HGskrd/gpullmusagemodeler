@@ -11,18 +11,18 @@
     <div class="tsc-g" style="grid-column:span 2">How fast for users</div>
     <div class="tsc-g" style="grid-column:span 2">How well it fits</div>
     <div class="tsc-h"></div><div class="tsc-h">Model</div>
-    <div class="tsc-h">Status</div><div class="tsc-h tsc-r" title="Tokens per day this deployment can serve at full load around the clock">Tokens/day</div><div class="tsc-h tsc-r">Peak req/s</div>
+    <div class="tsc-h">Status</div><div class="tsc-h tsc-r" title="LLM tokens, embedding/decision input tokens, or ASR audio seconds per day at full load. Hover each row for its unit.">Units/day</div><div class="tsc-h tsc-r">Peak req/s</div>
     <div class="tsc-h tsc-r" title="Prefill time for one user's typical prompt">First token</div>
     <div class="tsc-h">tok/s per user · alone ○ → full load ●</div>
-    <div class="tsc-h">Memory per GPU · weights · runtime · KV</div><div class="tsc-h tsc-r">Max users</div>
+    <div class="tsc-h">Memory per GPU · weights · runtime · KV/work</div><div class="tsc-h tsc-r">Users/batch</div>
     {% for panel, st, ep in [("A", A, ECON_A)] + ([("B", B, ECON_B)] if B else []) %}
       {% if B %}<div class="tsc-cfg">Config {{ panel }}</div>{% endif %}
       {% for r in tech_scorecard(st, ep) %}
       {% set m = r.info.model %}{% set am = r.info.am %}
       <div class="tsc-c"><span class="dot" style="background:{{ m.color }};"></span></div>
       <div class="tsc-c" title="{{ m.name }}"><b class="ell">{{ m.name }}</b><span class="tsc-sub M">{{ am.gpu_count }}× {{ short_gpu_label(r.info.gpu.name) }} · {{ layout_label(am.tp, am.pp, am.dp) }} · {{ PRECISION_LABELS[am.prec] }}</span></div>
-      <div class="tsc-c">{% if r.saturated %}<span class="tsc-pill sat" title="Fully booked in the busiest hours; demand beyond that goes to cloud or is lost. {{ (r.utilization * 100)|round|int }}% busy over the whole day.">SATURATED</span>{% elif r.capacity > 0 %}<span class="tsc-pill ok" title="Share of capacity used">{{ (r.utilization * 100)|round|int }}% used</span>{% else %}<span class="tsc-pill off">no capacity</span>{% endif %}</div>
-      <div class="tsc-c tsc-r M">{{ r.capacity|fmt_num }}</div>
+      <div class="tsc-c">{% if r.saturated %}<span class="tsc-pill sat" title="Fully booked in the busiest hours; demand beyond that goes to cloud or is lost. {{ (r.utilization * 100)|round|int }}% busy over the whole day.">SATURATED</span>{% elif r.native_label and r.capacity > 0 %}<span class="tsc-pill ok" title="Native workload capacity estimate; demand is configured through matching use cases.">{{ r.native_label }}</span>{% elif r.capacity > 0 %}<span class="tsc-pill ok" title="Share of capacity used">{{ (r.utilization * 100)|round|int }}% used</span>{% else %}<span class="tsc-pill off">no capacity</span>{% endif %}</div>
+      <div class="tsc-c tsc-r M" title="{{ r.capacity_unit }} per day">{{ r.capacity|fmt_num }}</div>
       <div class="tsc-c tsc-r M">{{ "%.1f"|format(r.peak_rps) }}</div>
       <div class="tsc-c tsc-r M" title="Prefill of a {{ r.probe_len|fmt_int }}-token prompt for one user">{% if r.ttft is not none %}{% if r.ttft < 1 %}{{ (r.ttft * 1000)|round|int }} ms{% else %}{{ "%.2f"|format(r.ttft) }} s{% endif %}{% else %}—{% endif %}</div>
       <div class="tsc-c">

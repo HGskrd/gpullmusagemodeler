@@ -45,6 +45,7 @@ from data import (
     quality_to_aa_intelligence,
     text_models_missing_quality_anchors,
 )
+from data.groups import models_by_category, models_by_kind
 from data.models_text import (
     DEEPSEEK_V4_FLASH_ARCH_CAPTURED_AT,
     DEEPSEEK_V4_FLASH_ARCH_SOURCES,
@@ -59,6 +60,48 @@ from data.models_text import (
 
 
 class ModelCatalogTests(unittest.TestCase):
+    def test_picker_retirement_preserves_saved_model_keys_and_visible_successors(self):
+        retired = {
+            "lfm2-700m",
+            "lfm2-24b-a2b",
+            "glm45",
+            "glm46",
+            "mimo-v2.5",
+            "mimo-v2.5-pro",
+            "pplx-embed-v1-late-0.6b",
+            "lfm3-1.7b-base",
+        } | {key for key in MODELS if key.startswith("rwkv")}
+        category_keys = {m.key for group in models_by_category().values() for m in group}
+        picker_keys = {
+            m.key
+            for categories in models_by_kind().values()
+            for group in categories.values()
+            for m in group
+        }
+        for key in retired:
+            with self.subTest(retired=key):
+                self.assertIn(key, MODELS)
+                self.assertTrue(MODELS[key].hidden)
+                self.assertNotIn(key, category_keys)
+                self.assertNotIn(key, picker_keys)
+        for key in (
+            "mi7",
+            "mx87",
+            "cs22",
+            "ms32",
+            "mm31",
+            "lfm2.5-24b-a2b",
+            "lfm3-1.7b",
+            "glm47",
+            "mimo-v2.6-flash-rl",
+            "mimo-v2.6-pro-rl",
+            "pplx-embed-v2-late-0.6b",
+        ):
+            with self.subTest(visible=key):
+                self.assertIn(key, picker_keys)
+        self.assertEqual(MODELS["ms32"].quality_confidence, 0.0)
+        self.assertIn("ms32", AA_QUALITY_PLACEHOLDER)
+
     def test_archived_releases_are_outside_live_catalog_and_have_recovery_metadata(self):
         self.assertTrue(set(ARCHIVED_MODELS).isdisjoint(MODELS))
         for key, archived in ARCHIVED_MODELS.items():
@@ -72,7 +115,14 @@ class ModelCatalogTests(unittest.TestCase):
         for key, source in OPEN_MODEL_ARCHITECTURE_SOURCES.items():
             with self.subTest(model=key):
                 self.assertIn(key, MODELS)
-                self.assertTrue(source.repository.startswith("https://huggingface.co/"))
+                self.assertTrue(
+                    source.repository.startswith(
+                        (
+                            "https://huggingface.co/",
+                            "https://github.com/facebookresearch/omnilingual-asr",
+                        )
+                    )
+                )
                 self.assertRegex(source.revision, r"^[0-9a-f]{40}$")
                 self.assertIn(source.revision, source.config_url)
 
@@ -1242,6 +1292,21 @@ class ModelCatalogTests(unittest.TestCase):
                     "embeddinggemma-2",
                 }
             ),
+        )
+        expected_quality.update(
+            {
+                "qwen3-embedding-0.6b": 0.6464,
+                "qwen3-embedding-4b": 0.6960,
+                "qwen3-embedding-8b": 0.7088,
+                "nomic-embed-text-v2-moe": 0.5286,
+                "jina-code-embeddings-0.5b": 0.7872,
+                "jina-code-embeddings-1.5b": 0.7894,
+                "qwen3-vl-embedding-2b": 0.6712,
+                "qwen3-vl-embedding-8b": 0.6941,
+                "vultronretrieverflash-qwen3.5-0.8b": 0.5616,
+                "vultronretrievercore-qwen3.5-4.5b": 0.6357,
+                "vultronretrieverprime-qwen3.5-8b": 0.6426,
+            }
         )
         self.assertEqual(set(PUBLISHED_EMBEDDING_QUALITY), set(expected_quality))
         self.assertEqual(set(EMBEDDING_QUALITY_SOURCES), set(expected_quality))

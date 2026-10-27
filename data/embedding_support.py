@@ -1,6 +1,7 @@
 """Embedding quality evidence and model factories."""
 
 from .model_class import EmbeddingProfile, Model
+from .release_quality_202610 import RELEASE_EMBEDDING_METRICS
 
 EMBEDDING_QUALITY_SOURCES: dict[str, str] = {
     "denseon": "LightOn DenseOn HF model card, BEIR average nDCG@10 table.",
@@ -46,6 +47,23 @@ EMBEDDING_QUALITY_PLACEHOLDER: frozenset[str] = frozenset(
         "nvidia-nemotron-3-embed-1b",
     }
 )
+
+# Publisher protocols differ: retain exact metric names and evidence rather
+# than treating percentage conversion as cross-benchmark normalization.
+for _key, _metric in RELEASE_EMBEDDING_METRICS.items():
+    if _metric["available"]:
+        PUBLISHED_EMBEDDING_QUALITY[_key] = _metric["value"]
+        EMBEDDING_QUALITY_SOURCES[_key] = (
+            _metric["source"]
+            + " — "
+            + _metric["protocol"]
+            + " Scores from different protocols are not directly comparable."
+            + (
+                " Text-only capacity proxy; visual throughput is not modeled."
+                if _key.startswith(("vultron", "qwen3-vl"))
+                else ""
+            )
+        )
 
 # Optional hover-detail metric. Keep separate from PUBLISHED_EMBEDDING_QUALITY
 # so models without decontaminated BEIR still remain visible in the plot.

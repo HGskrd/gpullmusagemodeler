@@ -20,6 +20,11 @@ class ModelArchitectureSource:
 # These entries cover every model added or materially corrected in the
 # September 2026 audit. Revisions are immutable official release snapshots.
 OPEN_MODEL_ARCHITECTURE_SOURCES: dict[str, ModelArchitectureSource] = {
+    "ms32": ModelArchitectureSource(
+        "https://huggingface.co/mistralai/Mistral-Small-3.2-24B-Instruct-2506",
+        "95a6d26c4bfb886c58daf9d3f7332c857cb27b43",
+        "Source identity retained from the 2026-09-02 archive snapshot; restored to the picker 2026-10-27.",
+    ),
     "lfm3-1.7b": ModelArchitectureSource(
         "https://huggingface.co/LiquidAI/LFM3-1.7B",
         "40ebe0aa6662c9d40389c2f5d565b6a2c6aebacd",

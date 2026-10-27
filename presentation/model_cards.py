@@ -24,6 +24,7 @@ from calc import (
     resolve_execution,
     resolve_spec_runtime,
     spec_optimization_for,
+    speech_chunk_work,
     strategy_label,
     valid_strategies,
 )
@@ -407,6 +408,9 @@ def _build_model_info(
             "profile": realtime_profile,
             "max_users": max_realtime_users,
             "sample": sample,
+            "chunk_work": speech_chunk_work(model, am.prec)
+            if realtime_profile.audio_chunk_seconds
+            else None,
         }
 
     decision: dict | None = None
@@ -733,13 +737,41 @@ def tech_scorecard(state: PlannerState, econ: dict) -> list[dict]:
             )
             ttft = prefill.service_time if prefill else None
         mem = info["decode_mem"] or info["prefill_mem"]
+        capacity = float(projected.get("daily_tokens_cap", 0.0) or 0.0)
+        peak_rps = float(projected.get("peak_rps", 0.0) or 0.0)
+        capacity_unit = "tokens"
+        native_label = ""
+        if not is_text:
+            # Economics omits modalities with no configured demand. The technical
+            # scorecard must still show their estimator capacity, with native units.
+            if model.is_asr_model and info["realtime"]:
+                streams = info["realtime"]["max_users"]
+                capacity = streams * 86400.0
+                chunk = model.realtime_profile.audio_chunk_seconds or 30.0
+                peak_rps = streams / chunk
+                slots = streams
+                capacity_unit = "audio seconds"
+                native_label = "ASR"
+            else:
+                native = info["embedding"] if model.is_embedding_model else info["decision"]
+                sample = native["sample"] if native else None
+                if sample:
+                    capacity = (
+                        sample.tps if model.is_embedding_model else sample.input_tps
+                    ) * 86400
+                    peak_rps = sample.rps
+                    slots = sample.max_batch
+                capacity_unit = "input tokens"
+                native_label = "Embedding" if model.is_embedding_model else "Decision"
         rows.append(
             {
                 "info": info,
                 "saturated": bool(projected.get("saturated")),
                 "utilization": float(projected.get("utilization", 0.0) or 0.0),
-                "capacity": float(projected.get("daily_tokens_cap", 0.0) or 0.0),
-                "peak_rps": float(projected.get("peak_rps", 0.0) or 0.0),
+                "capacity": capacity,
+                "capacity_unit": capacity_unit,
+                "native_label": native_label,
+                "peak_rps": peak_rps,
                 "ttft": ttft,
                 "probe_len": int(info["prefill_probe_len"] or 0),
                 "speed_alone": speed_alone,

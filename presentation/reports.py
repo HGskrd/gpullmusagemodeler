@@ -175,6 +175,24 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
                     f"{f' / late {ep.late_interaction_dim}d' if ep.late_interaction_dim else ''}; "
                     f"{gpu_name} x{am.gpu_count}; E {strategy_label(am.prefill_tp, am.prefill_pp, am.prefill_dp)}"
                 )
+                if model.architecture_note:
+                    lines.append(f"  Architecture assumptions: {model.architecture_note}")
+                continue
+            if model.is_asr_model and model.realtime_profile.audio_chunk_seconds:
+                profile = model.realtime_profile
+                realtime = get_model_info(state, am)["realtime"]
+                lines.append(
+                    f"- {model.name}: {prec}; {gpu_name} x{am.gpu_count}; "
+                    f"{profile.audio_chunk_seconds:g} s audio chunk; "
+                    f"{profile.tokens_per_second:g} {'transcript tokens/s' if profile.decoder_params else 'encoder frames/s'} assumed."
+                )
+                lines.append(
+                    f"  Architecture assumptions: {model.architecture_note} {profile.note}"
+                )
+                if realtime:
+                    lines.append(
+                        f"  Estimated {realtime['max_users']} real-time-equivalent audio streams; no text-generation revenue."
+                    )
                 continue
             moe = ""
             if model.is_moe:

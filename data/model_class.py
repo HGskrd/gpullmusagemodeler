@@ -32,6 +32,15 @@ class RealtimeProfile:
     audio_attention_head_dim: int = 0
     audio_attention_window: int = 0
     streaming: bool = True
+    # Explicit chunk roofline for encoder-only / encoder-decoder ASR. Zero keeps
+    # the legacy streaming-token estimator. Rates are positions per audio second.
+    audio_chunk_seconds: float = 0.0
+    audio_frame_rate: float = 0.0
+    audio_embedding_rate: float = 0.0
+    decoder_params: float = 0.0
+    cross_attention: bool = False
+    audio_replay_factor: float = 1.0
+    prefill_replay_factor: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -42,6 +51,9 @@ class DecisionProfile:
     source: str
     note: str
     causal_attention: bool = True
+    forward_per_question: bool = False
+    min_options: int = 2
+    max_options: int = 0
 
 
 DECISION_PROFILES: dict[str, DecisionProfile] = {}
@@ -61,6 +73,7 @@ class EmbeddingProfile:
     vector_bytes_per_elem: float = 4.0
     storage_format: str = "FP32"
     pooling: str = ""
+    causal_attention: bool = False
 
     @property
     def supports_single_vector(self) -> bool:
@@ -299,6 +312,12 @@ class Model:
     mla_rope_dim: int = 0
     mla_tp_supported: bool = False
     kv_layers: int = -1
+    # Unique local cache producers when later layers reuse earlier K/V. Reads
+    # and attention FLOPs still follow the complete attention stack.
+    local_kv_layers: int = -1
+    # Effective parameter passes for recurrent-depth inference. Attention/cache
+    # layer counts independently describe the executed/cached logical layers.
+    parameter_passes: float = 1.0
     bf16_weight_bytes_per_param: float = 2.0
     fp8_weight_bytes_per_param: float = 1.0
     hidden: bool = False
@@ -397,6 +416,12 @@ class Model:
     recurrent_precision: str = "legacy"
     serving_runtime: str = "generic"
     runtime_version: str = ""
+    # Reference loaders can cast native files to another resident dtype while
+    # using BF16 compute. Preserve file storage separately from runtime VRAM.
+    native_runtime_weight_bytes: float = 0.0
+    # Explicit text-path traffic for dense multimodal models and table-heavy
+    # backbones; zero preserves historical full-checkpoint read assumptions.
+    active_weight_params: float = 0.0
 
     @property
     def cache_key(self) -> str:
@@ -589,6 +614,9 @@ class Model:
 
     def weight_bytes(self, prec: str) -> float:
         """Complete checkpoint storage, including any host-resident tables."""
+        profile = self.quantization_profile(prec)
+        if profile is not None:
+            return profile.total_weight_bytes
         return self.total_params * self.weight_bytes_per_param(prec)
 
     @property
@@ -599,6 +627,11 @@ class Model:
     def gpu_weight_bytes(self, prec: str) -> float:
         """Resident GPU weights, excluding separately provisioned host tables."""
         resident = self.weight_bytes(prec) - self.system_ram_weight_bytes
+        if (
+            normalize_precision(prec) == self.native_precision_key
+            and self.native_runtime_weight_bytes
+        ):
+            resident = self.native_runtime_weight_bytes
         if self.execution_backend == "expanded":
             resident = max(
                 resident,
@@ -665,6 +698,15 @@ class Model:
 
     def active_weight_bytes(self, prec: str, phase: str = "decode") -> float:
         profile = self.quantization_profile(prec)
+        if self.active_weight_params > 0:
+            if self.execution_backend == "expanded":
+                return self.active_weight_params * 2.0
+            bpp = (
+                profile.active_weight_bytes_per_param(self.total_params)
+                if profile is not None
+                else self.weight_bytes_per_param(prec)
+            )
+            return self.active_weight_params * bpp
         if self.execution_backend != "legacy":
             if self.execution_backend == "expanded":
                 params = (

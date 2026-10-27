@@ -32,7 +32,8 @@ def test_pinned_family_geometry_storage_context_and_picker(
     key, params, weight_bytes, context, kind
 ):
     m = MODELS[key]
-    assert m.key == key and not m.hidden
+    assert m.key == key
+    assert m.hidden == (key == "lfm3-1.7b-base")
     assert m.total_params == m.active_params == params
     assert m.prefill_active_params == params
     assert not m.is_moe
@@ -45,7 +46,7 @@ def test_pinned_family_geometry_storage_context_and_picker(
     assert m.max_context_tokens == context
     assert m.quality_confidence == 0
     assert _model_kind(m) == kind
-    assert m in models_by_kind()[kind][m.cat]
+    assert (m in models_by_kind()[kind][m.cat]) == (not m.hidden)
     source = OPEN_MODEL_ARCHITECTURE_SOURCES[key]
     profile = m.quantization_profile("bf16")
     assert profile.source_revision == source.revision

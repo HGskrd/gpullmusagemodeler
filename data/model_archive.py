@@ -167,14 +167,6 @@ ARCHIVED_MODELS: dict[str, ArchivedModel] = {
             "Superseded Mistral Small release line; new footprint differs.",
         ),
         _retired(
-            "ms32",
-            "Mistral Small 3.2 24B",
-            "ms4",
-            "https://huggingface.co/mistralai/Mistral-Small-3.2-24B-Instruct-2506",
-            "95a6d26c4bfb886c58daf9d3f7332c857cb27b43",
-            "Superseded Mistral Small release line; new footprint differs.",
-        ),
-        _retired(
             "ml123",
             "Mistral Large 2 123B",
             "ml3",

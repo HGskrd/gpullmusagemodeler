@@ -602,7 +602,12 @@ def prefill_parameter_tokens(m: Model, seq_len: float, pp: int = 1) -> float:
     seq = max(seq_len, 0.0)
     layout = m.shared_sparse_attention
     if layout is None:
-        return (m.prefill_active_params or m.active_params) * seq * _pp_peak_fraction(m, pp)
+        return (
+            (m.prefill_active_params or m.active_params)
+            * seq
+            * _pp_peak_fraction(m, pp)
+            * max(m.parameter_passes, 1.0)
+        )
     encoder = layout.encoder_layers
     replay = min(seq, float(m.compressed_attention_window))
     work = [m.prefill_active_params / encoder * seq] * encoder
@@ -647,7 +652,10 @@ def kv_cache_bytes_for_sequence(m: Model, seq_len: float, prec: str) -> float:
             _compressed_attention_rows(m, seq, ratio) for ratio in compression_ratios
         ) * _kv_bytes_per_layer(m, prec, global_layer=True)
         return main_kv + _compressed_indexer_cache_bytes(m, seq, prec)
-    full_layers, local_layers = _split_attention_layers(m.kv_layer_count, m.local_attention_layers)
+    full_layers, local_layers = _split_attention_layers(
+        m.kv_layer_count,
+        m.local_kv_layers if m.local_kv_layers >= 0 else m.local_attention_layers,
+    )
     main_kv = full_layers * seq * _kv_bytes_per_layer(
         m, prec, global_layer=True
     ) + local_layers * _local_context_tokens(m, seq) * _kv_bytes_per_layer(
@@ -685,10 +693,20 @@ def attention_kv_read_bytes_for_sequence(m: Model, seq_len: float, prec: str) ->
             _compressed_attention_main_read_rows(m, seq_len, ratio) for ratio in compression_ratios
         ) * _kv_bytes_per_layer(m, prec, global_layer=True)
         return main_kv + _compressed_indexer_cache_bytes(m, seq_len, prec)
+    if m.local_kv_layers >= 0:
+        full, local = _split_attention_layers(m.attention_layer_count, m.local_attention_layers)
+        return (
+            full * _sparse_attention_context(m, seq_len) * _kv_bytes_per_layer(m, prec, True)
+            + local * _local_context_tokens(m, seq_len) * _kv_bytes_per_layer(m, prec)
+            + _compressed_indexer_cache_bytes(m, seq_len, prec)
+        )
     if m.sparse_attention_top_k <= 0:
         return kv_cache_bytes_for_sequence(m, seq_len, prec)
     seq = max(float(seq_len), 0.0)
-    full_layers, local_layers = _split_attention_layers(m.kv_layer_count, m.local_attention_layers)
+    full_layers, local_layers = _split_attention_layers(
+        m.kv_layer_count,
+        m.local_kv_layers if m.local_kv_layers >= 0 else m.local_attention_layers,
+    )
     selected_rows = min(seq, float(m.sparse_attention_top_k))
     main_kv = full_layers * selected_rows * _kv_bytes_per_layer(
         m, prec, global_layer=True
@@ -733,7 +751,8 @@ def per_replica_token_kv_cache_bytes(
         token_cache = kv_cache_bytes_for_sequence(m, seq_len, prec) / kv_shards(m, tp)
     else:
         full_layers, local_layers = _split_attention_layers(
-            m.kv_layer_count, m.local_attention_layers
+            m.kv_layer_count,
+            m.local_kv_layers if m.local_kv_layers >= 0 else m.local_attention_layers,
         )
         full_cache = (
             full_layers * max(float(seq_len), 0.0) * _kv_bytes_per_layer(m, prec, global_layer=True)
@@ -746,11 +765,25 @@ def per_replica_token_kv_cache_bytes(
         token_cache = full_cache / kv_shards_for_heads(
             _kv_heads_for_layer(m, global_layer=True), tp
         ) + local_cache / kv_shards_for_heads(_kv_heads_for_layer(m, global_layer=False), tp)
-    return token_cache * pp_fraction
+    # A KV producer and its consumers can lie on different pipeline stages.
+    # Without a runtime placement contract, reserve the shared pool on each
+    # stage rather than pretending it partitions evenly by layer count.
+    shared_producers = m.local_kv_layers >= 0 and m.kv_layer_count < m.attention_layer_count
+    return token_cache * (1.0 if shared_producers else pp_fraction)
 
 
 def per_replica_token_kv_read_bytes(m: Model, seq_len: float, prec: str, pp: int, tp: int) -> float:
     """Per-rank HBM reads for one sequence and one decode query position."""
+    if m.local_kv_layers >= 0 and not m.is_mla:
+        # Shared K/V reduces residency, not the number of attention consumers.
+        # Conservatively charge a read at every consumer (no inter-layer fusion).
+        full, local = _split_attention_layers(m.attention_layer_count, m.local_attention_layers)
+        full_bytes = full * max(seq_len, 0.0) * _kv_bytes_per_layer(m, prec, True)
+        local_bytes = local * _local_context_tokens(m, seq_len) * _kv_bytes_per_layer(m, prec)
+        return (
+            full_bytes / kv_shards_for_heads(_kv_heads_for_layer(m, True), tp)
+            + local_bytes / kv_shards_for_heads(_kv_heads_for_layer(m), tp)
+        ) * _pp_peak_fraction(m, max(pp, 1))
     if not _attention_compression_ratios(m):
         return per_replica_token_kv_cache_bytes(m, seq_len, prec, pp, tp)
     pp_fraction = _pp_peak_fraction(m, max(pp, 1))
@@ -1043,6 +1076,18 @@ def resolve_execution(g: GPU, m: Model, prec: str) -> ExecutionResolution:
             "expanded",
             "estimated",
             "BF16-expanded weights; loading workspace is additional and unmeasured.",
+        )
+    profile = m.quantization_profile(prec)
+    if (
+        profile
+        and profile.container == "gguf"
+        and profile.compute_precision_shares == {"bf16": 1.0}
+    ):
+        return result(
+            "w4a16",
+            "estimated",
+            f"{profile.format_scheme.encoding} compressed storage with BF16 compute proxy; "
+            "this artifact does not claim native MXFP4 matmul.",
         )
     if prec not in {"mxfp4", "nvfp4"}:
         if backend == "w4a16":
@@ -1477,7 +1522,7 @@ def _moe_tail_multiplier(m: Model, eff: EfficiencyParams) -> float:
 
 
 def _active_weight_bytes(m: Model, prec: str, phase: str = "decode") -> float:
-    return m.active_weight_bytes(prec, phase)
+    return m.active_weight_bytes(prec, phase) * max(m.parameter_passes, 1.0)
 
 
 def _decode_step_time(
@@ -1523,7 +1568,7 @@ def _decode_step_time(
     kv_time = kv_traffic_bytes / (g.effective_bw * eff.bw_eff)
     bt = wt + kv_time
 
-    wf = 2 * m.active_params * mb * pp_fraction
+    wf = 2 * m.active_params * mb * pp_fraction * max(m.parameter_passes, 1.0)
     af = _decode_attention_work(m, mb, avg_seq, pp)
     flops = wf + af
     if spec is not None:
@@ -2094,7 +2139,9 @@ def compute_embedding(
 
     pp_fraction = _pp_peak_fraction(m, pp)
     ffn = 2 * m.active_params * pr * seq * pp_fraction
-    att = _prefill_attention_work(m, pr, seq, pp, causal=False)
+    att = _prefill_attention_work(
+        m, pr, seq, pp, causal=bool(m.embedding_profile and m.embedding_profile.causal_attention)
+    )
     ct = operator_compute_seconds(g, m, prec, ffn, att, "prefill") / (max(tp, 1) * eff.comp_eff)
 
     aw = _active_weight_bytes(m, prec)
@@ -2164,7 +2211,14 @@ def compute_embedding_distribution(
     pp_fraction = _pp_peak_fraction(m, pp)
     ffn = 2 * m.active_params * pr * stats.mean_seq_len * pp_fraction
     att = sum(
-        share * _prefill_attention_work(m, pr, seq, pp, causal=False)
+        share
+        * _prefill_attention_work(
+            m,
+            pr,
+            seq,
+            pp,
+            causal=bool(m.embedding_profile and m.embedding_profile.causal_attention),
+        )
         for share, seq, _bucket in _embedding_weighted_sequences(m, doc_dist, buckets)
     )
     ct = operator_compute_seconds(g, m, prec, ffn, att, "prefill") / (max(tp, 1) * eff.comp_eff)
@@ -2455,6 +2509,130 @@ def compute_user_experience(
     )
 
 
+@dataclass(frozen=True)
+class SpeechChunkWork:
+    """One audio chunk's work; counts are global per request, before sharding."""
+
+    encoder_flops: float
+    prefill_flops: float
+    decode_flops: float
+    cross_attention_flops: float
+    scratch_bytes: float
+    weight_read_bytes: float
+
+
+def speech_chunk_work(m: Model, prec: str) -> SpeechChunkWork:
+    profile = m.realtime_profile
+    if profile is None or profile.audio_chunk_seconds <= 0:
+        raise ValueError("This model has no explicit speech chunk profile")
+    duration = profile.audio_chunk_seconds
+    frames = max(profile.audio_frame_rate * duration, 1.0)
+    acoustic = max(profile.audio_embedding_rate * duration, 0.0)
+    text = max(profile.tokens_per_second * duration, 1.0) if profile.decoder_params else 0.0
+    encoder_params = max(profile.audio_encoder_params, 0.0)
+    decoder_params = max(profile.decoder_params, 0.0)
+    window = min(frames, profile.audio_attention_window or frames)
+    encoder_width = profile.audio_attention_heads * profile.audio_attention_head_dim
+    encoder = (
+        2 * encoder_params * frames
+        + 4 * profile.audio_attention_layers * encoder_width * frames * window
+    ) * profile.audio_replay_factor
+    prefill = (
+        2 * decoder_params * acoustic + _prefill_attention_work(m, 1, math.ceil(acoustic), 1)
+    ) * profile.prefill_replay_factor
+    decode = 2 * decoder_params * text + text * _decode_attention_work(m, 1, acoustic + text / 2, 1)
+    cross = (
+        4 * m.attention_layer_count * m.num_heads * m.head_dim * frames * text
+        if profile.cross_attention
+        else 0.0
+    )
+    # Four BF16 activation planes, final self-KV, and cached cross-attention K/V.
+    # Keep work buffers unsharded as a conservative inference envelope.
+    scratch = 8 * (frames * max(encoder_width, 1) + acoustic * m.hidden_size)
+    scratch += kv_cache_bytes_for_sequence(m, acoustic + text, prec)
+    if profile.cross_attention:
+        scratch += (
+            2
+            * m.kv_layer_count
+            * m.kv_heads
+            * m.head_dim
+            * frames
+            * m.kv_cache_bytes_per_elem(prec)
+        )
+    decoder_share = min(decoder_params / max(m.total_params, 1.0), 1.0)
+    weights = m.gpu_weight_bytes(prec)
+    # Encoder rereads on accumulated-audio streaming; decoder weights once for
+    # audio prefill and once per generated position. Batched sequences reuse them.
+    reads = weights * (
+        (1 - decoder_share) * profile.audio_replay_factor
+        + decoder_share * ((profile.prefill_replay_factor if acoustic else 0) + text)
+    )
+    return SpeechChunkWork(encoder, prefill, decode, cross, scratch, reads)
+
+
+def _compute_speech_chunk_capacity(
+    m: Model,
+    strat: tuple[int, int, int],
+    users: int,
+    g: GPU,
+    mu: float,
+    profiled_non_kv_gb: float,
+    prec: str,
+    eff: EfficiencyParams,
+) -> RealtimeCapacityResult | None:
+    profile = m.realtime_profile
+    assert profile is not None
+    tp, pp, dp = strat
+    if min(tp, pp, dp) < 1:
+        return None
+    mem = compute_memory(m, tp, pp, g, mu, profiled_non_kv_gb, prec, eff)
+    if mem is None:
+        return None
+    work = speech_chunk_work(m, prec)
+    slots = int(mem.kv_budget / max(work.scratch_bytes, 1))
+    batch = math.ceil(users / dp)
+    if batch > slots:
+        return None
+    fraction = _pp_peak_fraction(m, pp)
+    compute_s = (
+        operator_compute_seconds(
+            g,
+            m,
+            prec,
+            batch * (work.encoder_flops + work.prefill_flops + work.decode_flops),
+            batch * work.cross_attention_flops,
+        )
+        * fraction
+        / (tp * eff.comp_eff)
+    )
+    bandwidth_s = work.weight_read_bytes * fraction / (tp * g.effective_bw * eff.bw_eff)
+    positions = max(
+        1,
+        math.ceil(
+            profile.audio_chunk_seconds * (profile.audio_embedding_rate + profile.tokens_per_second)
+        ),
+    )
+    comm = communication_breakdown(m, tp, pp, batch * positions, positions, g, eff)
+    service = (
+        (max(compute_s, bandwidth_s) + comm.total)
+        * (1 + eff.overhead * 1.2 + fixed_paged_oh(positions, eff, 0.20))
+        * _moe_tail_multiplier(m, eff)
+    )
+    if not math.isfinite(service) or service <= 0:
+        return None
+    factor = profile.audio_chunk_seconds / service
+    rate = profile.tokens_per_second
+    return RealtimeCapacityResult(
+        users=users,
+        realtime_factor=round(factor, 3),
+        per_user_tps=round(rate * factor, 2),
+        total_tps=round(users * rate * factor),
+        step_ms=round(1000 / max(rate * factor, 1e-9), 2),
+        max_slots=slots * dp,
+        required_tps=rate,
+    )
+
+
 def compute_realtime_capacity(
     m: Model,
     decode_strat: tuple[int, int, int],
@@ -2468,6 +2646,10 @@ def compute_realtime_capacity(
     profile = getattr(m, "realtime_profile", None)
     if profile is None or users <= 0:
         return None
+    if profile.audio_chunk_seconds > 0:
+        return _compute_speech_chunk_capacity(
+            m, decode_strat, users, g, mu, profiled_non_kv_gb, prec, eff
+        )
 
     tp, pp, dp = decode_strat
     state_tokens = max(float(profile.state_tokens), 1.0)
@@ -2888,6 +3070,10 @@ def compute_decision(
         or options_per_question < 2
     ):
         return None
+    if options_per_question < profile.min_options or (
+        profile.max_options and options_per_question > profile.max_options
+    ):
+        return None
     tp, pp, dp = strat
     if min(tp, pp, dp) < 1:
         return None
@@ -2918,7 +3104,8 @@ def compute_decision(
         / (g.effective_bw * eff.bw_eff)
     )
     comm = communication_breakdown(m, tp, pp, batch_per_replica * seq_len, seq_len, g, eff)
-    seconds = (max(compute_s, weight_s) + output_s + comm.total) * (
+    forwards = questions_per_request if profile.forward_per_question else 1
+    seconds = (forwards * (max(compute_s, weight_s) + comm.total) + output_s) * (
         1 + eff.overhead * 1.2 + fixed_paged_oh(seq_len, eff, 0.20)
     )
     if not math.isfinite(seconds) or seconds <= 0:

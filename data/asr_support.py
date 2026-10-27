@@ -3,6 +3,7 @@
 from dataclasses import replace
 
 from .model_class import RealtimeProfile
+from .release_quality_202610 import RELEASE_ASR_WER_ROWS
 
 RWKV7_G1_HEAD_DIM = 64
 RWKV7_G1_CONTEXT = 8192
@@ -475,7 +476,29 @@ ASR_WER_LANGUAGE_SOURCES["jais-asr"] = {
 }
 PUBLISHED_ASR_WER["jais-asr"] = {"ar_ifm_macro": 22.85}
 
-# Backward-compatible aliases for older chart/import names.
+# Keep new release protocols distinct from older English/French aggregates.
+
+for _row in RELEASE_ASR_WER_ROWS:
+    if _row["metric"] != "WER":
+        continue
+    _protocol = _row["protocol_id"]
+    _model_key = _row["model_key"]
+    if _protocol not in ASR_WER_LANGUAGES:
+        ASR_WER_LANGUAGES += (_protocol,)
+    ASR_WER_LANGUAGE_LABELS[_protocol] = _row["language"].upper() + " · " + _row["dataset"]
+    PUBLISHED_ASR_WER.setdefault(_model_key, {})[_protocol] = _row["score_percent"]
+    ASR_WER_LANGUAGE_SOURCES.setdefault(_model_key, {})[_protocol] = (
+        _row["source_url"]
+        + " — "
+        + _row["dataset"]
+        + "; "
+        + _row["inference_mode"]
+        + ". "
+        + _row["notes"]
+        + " Not cross-walked to other evaluation protocols."
+    )
+
+# Backward-compatible aliases include the same expanded protocol inventory.
 ASR_WER_BENCHMARKS = ASR_WER_LANGUAGES
 ASR_WER_BENCHMARK_LABELS = ASR_WER_LANGUAGE_LABELS
 ASR_WER_BENCHMARK_SOURCES = ASR_WER_LANGUAGE_SOURCES

@@ -22,6 +22,7 @@ from data.hardware_picker import picker_vendors
 from placement import (
     resolve_deployment,
 )
+from presentation.capacity_only import capacity_without_quality
 from presentation.charts import (
     DECISION_LENGTHS,
     chart_asr_quality,
@@ -113,9 +114,16 @@ def _build_chart_payload(sa: PlannerState, sb: PlannerState | None) -> dict:
 
     if mode == "asrquality":
         datasets = chart_asr_quality(sa)
+        capacity = capacity_without_quality(sa, mode)
         if sb:
             datasets += chart_asr_quality(sb, " (B)")
-        return {"type": "scatter", "datasets": datasets, "mode": mode}
+            capacity += capacity_without_quality(sb, mode, " (B)")
+        return {
+            "type": "scatter",
+            "datasets": datasets,
+            "mode": mode,
+            **({"capacity_only": capacity} if capacity else {}),
+        }
 
     if mode == "realtime":
         batch_sizes = get_realtime_bs(states, deployments=deployments)
@@ -126,13 +134,16 @@ def _build_chart_payload(sa: PlannerState, sb: PlannerState | None) -> dict:
 
     if mode == "embedquality":
         datasets = chart_embedding_quality(sa)
+        capacity = capacity_without_quality(sa, mode)
         if sb:
             datasets += chart_embedding_quality(sb, " (B)")
+            capacity += capacity_without_quality(sb, mode, " (B)")
         return {
             "type": "scatter",
             "datasets": datasets,
             "mode": mode,
             **embedding_quality_axis_range(datasets),
+            **({"capacity_only": capacity} if capacity else {}),
         }
 
     batch_sizes = get_decode_bs(states, deployments=deployments)

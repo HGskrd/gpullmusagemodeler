@@ -687,6 +687,22 @@ MODEL_DOMAIN_QUALITY_ANCHORS = {
 # set quality_confidence=0; do not invent independent benchmark anchors.
 AA_QUALITY_PLACEHOLDER: frozenset[str] = frozenset(
     {
+        # Restored picker entry has no retained comparable AA anchor; confidence is zero.
+        "ms32",
+        # Pinned October release batch; vendor protocols are not independent AA anchors.
+        "minimax-m3.1-flash",
+        "nanbeige43-33b",
+        "nemotron35-bolt-e4b",
+        "gpt-oss-20b",
+        "gpt-oss-120b",
+        "recursive-flint-40b-a2.5b",
+        "kolibri-1-78b-a3.46b",
+        "apertus15-8b",
+        "apertus15-70b",
+        "ling31-flash-560b-a25b",
+        "dory1-4b-2loop",
+        "granite-switch-4.1-8b",
+        "granite-switch-4.1-30b",
         # LFM3 launch cards have vendor benchmarks but no comparable AA anchor.
         "lfm3-1.7b",
         "lfm3-1.7b-base",
