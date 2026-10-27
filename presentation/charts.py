@@ -37,6 +37,7 @@ from data import (
     ASR_WER_LANGUAGES,
     ASR_WER_PLACEHOLDER,
     BATCH_SIZES,
+    DAY_SHAPES,
     DIST_PRESETS,
     EMBEDDING_DECONTAMINATED_BEIR_SOURCES,
     EMBEDDING_DOC_BUCKETS,
@@ -51,7 +52,8 @@ from data import (
     Model,
 )
 from deployment import Deployment
-from state import PlannerState
+from presentation.formatting import short_model_name
+from state import PlannerState, project_demand_multiplier
 
 
 def _style(model: Model, is_b: bool) -> dict:
@@ -972,6 +974,8 @@ def chart_user_pareto(
             datasets.append(
                 {
                     "label": _label(am, model, panel_suffix, spec_meta=spec_meta),
+                    # Short name for the label drawn at the line's end.
+                    "short_label": model.name + (" (B)" if is_b else ""),
                     "hardware": _hardware_label(am, gpu),
                     "data": pts,
                     **spec_meta,
@@ -1110,39 +1114,92 @@ def compute_user_exp_table(state) -> list[dict]:
     return rows
 
 
-def chart_decision_throughput(state: PlannerState, suffix: str = "") -> list[dict]:
-    """Single-question/four-option text workload; no cross-model quality ranking."""
+DECISION_LENGTHS = (128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768)
+
+
+def decision_use_cases(state: PlannerState) -> list[dict]:
+    """Decision use cases with their input length and peak-hour arrival rate.
+
+    Interactive rows peak at their day shape's busiest hour; batch rows are shown
+    at their mean rate, since they fill whatever hours are free.
+    """
+    rows = []
+    for project in state.projects:
+        if project.workload_kind != "decision":
+            continue
+        length = max(1, round(float(project.scale_kind.get("token_multiplier", 1) or 1)))
+        per_day = max(0.0, float(project.tokens_day)) * project_demand_multiplier(state, project)
+        per_day /= length
+        if project.batch_eligible:
+            peak_over_mean, when = 1.0, "Batch"
+        else:
+            shape = DAY_SHAPES.get(project.day_shape) or DAY_SHAPES["workday"]
+            weights = cast(list[float], shape["weights"])
+            total = sum(weights)
+            peak_over_mean = max(weights) * len(weights) / total if total else 1.0
+            when = str(shape["label"])
+        rows.append(
+            {
+                "name": project.name,
+                "len": length,
+                "per_day": round(per_day),
+                "peak_rps": per_day / 86400.0 * peak_over_mean,
+                "when": when,
+                "batch": bool(project.batch_eligible),
+            }
+        )
+    return rows
+
+
+def chart_decision_latency(
+    state: PlannerState, suffix: str = "", lengths: list[int] | None = None
+) -> list[dict]:
+    """Per decision model: capacity and single-request time at each input length.
+
+    The client draws mean response time against arrival rate from these two
+    numbers with a queue model. Decision models are compute-bound even one
+    request at a time, so batching adds little throughput; waiting in line is
+    what bends the curve near capacity.
+    """
     datasets = []
     for am, gpu in _iter_resolved_models(state):
         model = am.model
         if not model.is_decision_model:
             continue
+        strat = (am.prefill_tp, am.prefill_pp, am.prefill_dp)
         points = []
-        for bs in (1, 2, 4, 8, 16, 32, 64, 128, 256):
-            result = compute_decision(
-                model,
-                (am.prefill_tp, am.prefill_pp, am.prefill_dp),
-                bs,
-                state.task_il,
-                gpu,
-                state.mu,
-                state.profiled_non_kv_gb,
-                am.prec,
-                state.prefill_efficiency,
-            )
+        for length in lengths or DECISION_LENGTHS:
+            best = None
+            single = None
+            for bs in DATA_BATCH_SIZES:
+                result = compute_decision(
+                    model,
+                    strat,
+                    bs,
+                    length,
+                    gpu,
+                    state.mu,
+                    state.profiled_non_kv_gb,
+                    am.prec,
+                    state.prefill_efficiency,
+                )
+                if result is None:
+                    continue
+                if single is None:
+                    single = result
+                if best is None or result.decisions_per_second > best.decisions_per_second:
+                    best = result
             points.append(
                 {
-                    "x": bs,
-                    "y": result.decisions_per_second if result else None,
-                    "rps": result.rps if result else None,
-                    "latency_ms": result.service_time * 1000 if result else None,
-                    "input_tokens": state.task_il,
-                    "output_tokens": 0,
+                    "x": length,
+                    "y": best.decisions_per_second if best else None,
+                    "service_ms": single.service_time * 1000 if single else None,
                 }
             )
         datasets.append(
             {
                 "label": model.name + suffix,
+                "short_label": short_model_name(model.name) + suffix,
                 "hardware": _hardware_label(am, gpu),
                 "color": model.color,
                 "borderColor": model.color,

@@ -1,47 +1,65 @@
 {# Model picker dropdown - loaded via HTMX into picker element. One tab per
-   model kind (LLM / Embedding / ASR). Tab switches are HTMX GETs into the
-   existing picker so this partial stays declarative. #}
-<div class="model-picker-tabs tabs" role="tablist" aria-label="Model type">
-  {% for kind_key, kind_label in MODEL_KINDS %}
-    {% set count = models_by_kind.get(kind_key, {}).values() | map('length') | sum %}
-    <button type="button"
-            class="sm {% if kind_key == active_kind %}on{% endif %}"
-            role="tab" aria-selected="{{ 'true' if kind_key == active_kind else 'false' }}"
-            hx-get="/picker/model?panel={{ panel }}&kind={{ kind_key }}"
-            hx-target="closest .picker"
-            hx-swap="innerHTML"
-            {% if count == 0 %}disabled{% endif %}>
-      {{ kind_label }} <span class="T" style="margin-left:3px;">{{ count }}</span>
-    </button>
-  {% endfor %}
-</div>
-{% for cat, ms in models_by_kind.get(active_kind, {}).items() %}
-  <div class="cat cat-action">
-    <span>{{ cat }}</span>
-    <form class="picker-add-all-form"
-          hx-post="/model/add-many"
-          hx-target="#main-content"
-          hx-swap="innerHTML">
-      <input type="hidden" name="panel" value="{{ panel }}">
-      {% for m in ms %}
-      <input type="hidden" name="model_key" value="{{ m.key }}">
-      {% endfor %}
-      <button type="submit" class="ghost sm picker-add-all">
-        Add all
+   model kind (LLM / Embedding / ASR / Decision). Tab switches are HTMX GETs
+   into the existing picker. Fit and quality are precomputed per row by
+   presentation.model_picker; static/app.js (initModelPicker) only searches,
+   dims and sorts rows from the data attributes. #}
+<div class="model-picker-head" data-model-picker>
+  <input type="search" class="model-picker-search" placeholder="Search models…"
+         aria-label="Search models" autocomplete="off" data-model-search>
+  <div class="model-picker-tabs tabs" role="tablist" aria-label="Model type">
+    {% for kind_key, kind_label in MODEL_KINDS %}
+      {% set count = models_by_kind.get(kind_key, {}).values() | map('length') | sum %}
+      <button type="button"
+              class="sm {% if kind_key == active_kind %}on{% endif %}"
+              role="tab" aria-selected="{{ 'true' if kind_key == active_kind else 'false' }}"
+              hx-get="/picker/model?panel={{ panel }}&kind={{ kind_key }}"
+              hx-target="closest .picker"
+              hx-swap="innerHTML"
+              {% if count == 0 %}disabled{% endif %}>
+        {{ kind_label }} <span class="T" style="margin-left:3px;">{{ count }}</span>
       </button>
-    </form>
+    {% endfor %}
   </div>
-  {% for m in ms %}
-  <button type="button"
-          class="item"
-          hx-post="/model/add"
-          hx-target="#main-content"
-          hx-swap="innerHTML"
-          hx-vals='{"panel":"{{ panel }}","model_key":"{{ m.key }}"}'>
-    <span class="dot" style="background:{{ m.color }};"></span>
-    <span>{{ m.name }}</span>
-    {% if active_kind == "asr" %}<span class="T">{{ m.asr_mode_label }}</span>{% endif %}
-    <span class="T">{{ m.size_label }}</span>
-  </button>
-  {% endfor %}
+  <div class="model-picker-chips" role="group" aria-label="Filters">
+    <button type="button" class="sm model-picker-chip" data-model-filter="fit"
+            aria-pressed="{{ 'true' if has_free_gpus else 'false' }}"
+            {% if not has_gpus %}disabled title="Add a GPU first"{% else %}title="Dim models that do not fit on the free GPUs of the pool they would be added to"{% endif %}>
+      Fits free GPUs
+    </button>
+    {% if active_kind == "llm" %}
+    <button type="button" class="sm model-picker-chip" data-model-filter="quality"
+            aria-pressed="false"
+            {% if quality_floor is none %}disabled title="Add a use case to set a quality floor"{% else %}title="Dim models whose general quality is below {{ '%.2f'|format(quality_floor) }}, the least demanding use case's required quality"{% endif %}>
+      Meets quality floor{% if quality_floor is not none %} <span class="model-picker-floor">≥ {{ '%.2f'|format(quality_floor) }}</span>{% endif %}
+    </button>
+    {% endif %}
+  </div>
+</div>
+<div class="model-picker-list" data-model-list>
+{% for cat, rows in picker_rows.items() %}
+  <div class="model-picker-group" data-model-group>
+    <div class="cat">{{ cat }}</div>
+    {% for row in rows %}
+    {% set m = row.model %}
+    <button type="button"
+            class="item model-picker-row"
+            data-model-row
+            data-model-match="{{ row.search_text }}"
+            data-pass-fit="{{ 1 if row.passes_fit else 0 }}"
+            data-pass-quality="{{ 1 if row.passes_quality else 0 }}"
+            hx-post="/model/add"
+            hx-target="#main-content"
+            hx-swap="innerHTML"
+            hx-vals='{"panel":"{{ panel }}","model_key":"{{ m.key }}"}'>
+      <span class="dot" style="background:{{ m.color }};"></span>
+      <span class="model-picker-name">{{ m.name }}
+        <span class="model-picker-sub">{% if active_kind == "asr" %}{{ m.asr_mode_label }} · {% endif %}{{ m.size_label }}{% if row.weights_gb is not none %} · {{ '%.1f'|format(row.weights_gb) }} GB {{ row.precision_label }}{% endif %}</span>
+      </span>
+      <span class="model-picker-fit fit-{{ row.fit }}" title="{{ row.fit_title }}">{{ row.fit_label }}</span>
+      {% if row.quality is not none %}<span class="model-picker-q" title="General quality (effective)">q {{ '%.2f'|format(row.quality) }}</span>{% endif %}
+    </button>
+    {% endfor %}
+  </div>
 {% endfor %}
+</div>
+<div class="model-picker-empty" data-model-empty hidden role="status">No matching models</div>

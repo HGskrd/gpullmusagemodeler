@@ -1,22 +1,83 @@
-{# Use cases panel — parallels the Models panel #}
+{# Workload inputs for one config. Company size x tech-savviness scales every
+   unlocked use case (volumes are entered for a 100-person company); a locked use
+   case keeps the volume typed. Outcomes live in the result steps. #}
+{% set mult = demand_multiplier(state) %}
+{% set total_tok = namespace(v=0) %}
+{% set native = state.projects|rejectattr("workload_kind", "equalto", "llm")|list %}
+{% for proj in state.projects %}{% set total_tok.v = total_tok.v + proj.tokens_day * project_demand_multiplier(state, proj) %}{% endfor %}
 <div class="panel">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;">
-    <h2 style="margin:0;">Use cases</h2>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;gap:8px;">
+    <h2 style="margin:0;">Use cases{% if label %} · {{ label }}{% endif %}</h2>
     <div class="flex" style="gap:6px;">
-      <a href="{{ url_for('use_cases.use_cases') }}"
-         style="font-family:var(--sans);font-size:9px;font-weight:500;background:var(--bg2);border:1px solid var(--b1);border-radius:var(--r);padding:2px 5px;color:var(--fg0);text-decoration:none;white-space:nowrap;"
-         title="Edit use-case definitions">
-        Edit definitions
-      </a>
+      <a href="{{ url_for('use_cases.use_cases') }}" class="button-like sm" title="Edit use-case definitions: task mix, SLO, quality floor, prefix reuse">Edit definitions</a>
       <div class="picker-wrap">
         <button class="acc sm" data-picker="project" aria-expanded="false" onclick="togglePicker(this, '/picker/project?panel={{ panel }}')">+ Add use case</button>
       </div>
     </div>
   </div>
+  <div class="wl-knob">
+    <label class="T" for="company-{{ panel }}">Company</label>
+    <input id="company-{{ panel }}" class="wl-num" type="text" inputmode="numeric" name="value"
+           value="{{ state.company_size|fmt_int }}" aria-label="Company size in people"
+           hx-post="/workload/company" hx-target="#main-content" hx-trigger="change"
+           hx-vals='{"panel":"{{ panel }}"}'>
+    <span class="T">people · tech-savviness</span>
+    <span class="seg" role="group" aria-label="Tech-savviness">
+      {% for key, label_s in TECH_SAVVINESS_LABELS.items() %}
+      <button type="button" class="sm" aria-pressed="{{ 'true' if state.tech_savviness == key else 'false' }}"
+              title="×{{ TECH_SAVVINESS_MULTIPLIERS[key] }} demand"
+              hx-post="/workload/savviness" hx-target="#main-content"
+              hx-vals='{"panel":"{{ panel }}","value":"{{ key }}"}'>{{ label_s }}</button>
+      {% endfor %}
+    </span>
+    <span class="wl-mult M" title="Unlocked volumes are entered for a 100-person company and scale by company size ÷ 100 × savviness">×{{ "%.2f"|format(mult)|replace('.00', '') }}</span>
+    <span class="wl-total M">{{ total_tok.v|fmt_num }} {{ "work units/day" if native else "tok/day" }}</span>
+  </div>
+  {% if native %}<p class="T">Native stages estimate capacity only; accuracy and retries need calibration. Work units are audio seconds for ASR and input tokens for embedding/decision. Mixed totals are accounting units, not comparable tasks. Pipeline stages are sized independently.</p>{% endif %}
   {% if state.projects %}
-  <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(230px,1fr));">
+  <div class="wl-table" role="table" aria-label="Use cases">
+    <div class="wl-h">Use case</div><div class="wl-h wl-r">Scale / day</div><div class="wl-h wl-r">{{ "Work units" if native else "Tokens" }}</div><div class="wl-h" title="When the demand arrives. Batch work runs in whatever hours are free.">When</div><div class="wl-h wl-blank"></div><div class="wl-h wl-blank"></div>
     {% for proj in state.projects %}
-      {% include "partials/project_card.html" %}
+    {% set scale_cfg = project_scale_config(state, proj) %}
+    {% set q_floor = required_quality(proj.difficulty, proj.min_success_rate, quality_floor=proj.quality_floor) %}
+    {% set eff = effective_scale_value(state, proj) %}
+    <div class="wl-c wl-name" data-fast-card title="{{ proj.name }}{% if proj.workload_kind != 'llm' %}&#10;{{ proj.workload_kind|upper }} capacity only; task accuracy and retries are uncalibrated.{% else %}&#10;Task mix: {{ quality_weights_label(proj.quality_weights, proj.quality_domain) }}&#10;SLO {{ (proj.min_success_rate * 100)|round|int }}% · quality floor {{ '%.2f'|format(q_floor) }} (AA {{ '%.1f'|format(quality_to_aa_intelligence(proj.difficulty)) }})&#10;Prefix reuse {{ (proj.prefix_hit_rate * 100)|round|int }}% · profile {{ proj.in_pre }}/{{ proj.out_pre }}{% endif %}"><b>{{ proj.name }}</b>{% if proj.workload_kind != "llm" %} <span class="T">{{ proj.workload_kind|upper }} · capacity only</span>{% endif %}</div>
+    <div class="wl-c wl-r">
+      <input type="text" class="wl-num scale-val-input" inputmode="decimal"
+             id="proj-demand-val-{{ proj.uid }}-{{ panel }}"
+             value="{{ eff|fmt_int if scale_cfg.decimals == 0 else ('%.' ~ scale_cfg.decimals ~ 'f')|format(eff) }}"
+             aria-label="Scale for {{ proj.name }} in {{ scale_cfg.unit }}"
+             title="{{ scale_cfg.formula }}"
+             name="value" hx-post="/project/set" hx-target="#main-content" hx-trigger="change"
+             hx-vals='{"panel":"{{ panel }}","uid":"{{ proj.uid }}","field":"scale_value"}' />
+      <span class="wl-unit" title="{{ scale_cfg.unit }}">{{ scale_cfg.unit|replace('/day', '') }}</span>
+    </div>
+    <div class="wl-c wl-r M">{{ (proj.tokens_day * project_demand_multiplier(state, proj))|fmt_num }}</div>
+    <div class="wl-c">
+      <label class="pick" title="When {{ proj.name }}'s demand arrives">
+        <span class="lbl">{{ 'Batch' if proj.batch_eligible else DAY_SHAPE_SHORT.get(proj.day_shape, proj.day_shape) }}</span><span class="car">▾</span>
+        <select name="value" aria-label="When {{ proj.name }}'s demand arrives"
+                hx-post="/project/day-shape" hx-target="#main-content" hx-trigger="change"
+                hx-vals='{"panel":"{{ panel }}","uid":"{{ proj.uid }}"}'>
+          {% for key in DAY_SHAPE_CHOICES %}<option value="{{ key }}" {{ 'selected' if not proj.batch_eligible and proj.day_shape == key }}>{{ DAY_SHAPES[key].label }}</option>{% endfor %}
+          <option value="batch" {{ 'selected' if proj.batch_eligible }}>Batch · any free hour</option>
+        </select>
+      </label>
+    </div>
+    <div class="wl-c">
+      <button type="button" class="wl-lock" aria-pressed="{{ 'true' if proj.scale_locked else 'false' }}"
+              aria-label="{{ 'Unlock' if proj.scale_locked else 'Lock' }} the volume of {{ proj.name }}"
+              title="{{ 'Fixed: ignores company size and savviness. Click to scale again.' if proj.scale_locked else 'Scales with company size and savviness. Click to fix this volume.' }}"
+              hx-post="/project/lock" hx-target="#main-content"
+              hx-vals='{"panel":"{{ panel }}","uid":"{{ proj.uid }}","value":"{{ 'off' if proj.scale_locked else 'on' }}"}'>
+        <svg width="11" height="11" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="7" width="10" height="8" rx="1.5" fill="{{ 'currentColor' if proj.scale_locked else 'none' }}" stroke="currentColor" stroke-width="1.5"/><path d="{{ 'M5 7V5a3 3 0 0 1 6 0v2' if proj.scale_locked else 'M5 7V5a3 3 0 0 1 6 0' }}" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+      </button>
+    </div>
+    <div class="wl-c">
+      <button class="ghost sm uc-remove" aria-label="Remove use case {{ proj.name }}" title="Remove use case {{ proj.name }}"
+              hx-post="/project/remove" hx-target="#main-content" data-fast-remove
+              hx-vals='{"panel":"{{ panel }}","uid":"{{ proj.uid }}"}'>✕</button>
+    </div>
     {% endfor %}
   </div>
   {% else %}

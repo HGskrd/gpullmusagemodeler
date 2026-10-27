@@ -1,13 +1,13 @@
-<div class="econ-tabs" data-econ-panel="{{ panel }}">
-  <script type="application/json" class="econ-payload">{{ ep.charts_json | safe }}</script>
-  <div class="econ-tabbar" role="group" aria-label="Economic views{% if label %} — {{ label }}{% endif %}">
-    <button type="button" class="econ-tab-btn on" data-tab="flow">Flow</button>
-    <button type="button" class="econ-tab-btn" data-tab="dash">Dashboard</button>
-    <button type="button" class="econ-tab-btn" data-tab="brief">Brief</button>
-    <button type="button" class="econ-tab-btn" data-tab="fleet">Fleet</button>
+{# The brief is always visible; two detail tabs sit under it. The full-page
+   views (Flow, Dashboard, Fleet) keep their own templates. #}
+{# Chart data rides in an attribute: htmx drops <script> blocks inside the
+   out-of-band swap that re-renders this section after every edit. #}
+<div class="econ-tabs" data-econ-panel="{{ panel }}" data-econ-json="{{ ep.charts_json }}">
+  {% include "partials/econ/brief.html" %}
+  <div class="econ-tabbar" role="group" aria-label="Economic details{% if label %} — {{ label }}{% endif %}">
+    <button type="button" class="econ-tab-btn on" data-tab="usecases" aria-pressed="true">Use cases</button>
+    <button type="button" class="econ-tab-btn" data-tab="money" aria-pressed="false">Money</button>
   </div>
-  <div class="econ-tab-panel" data-tab="flow">{% include "partials/econ/flow.html" %}</div>
-  <div class="econ-tab-panel" data-tab="dash" hidden>{% include "partials/econ/dashboard.html" %}</div>
-  <div class="econ-tab-panel" data-tab="brief" hidden>{% include "partials/econ/brief.html" %}</div>
-  <div class="econ-tab-panel" data-tab="fleet" hidden>{% include "partials/econ/supply.html" %}</div>
+  <div class="econ-tab-panel" data-tab="usecases">{% include "partials/econ/usecases.html" %}</div>
+  <div class="econ-tab-panel" data-tab="money" hidden>{% include "partials/econ/money.html" %}</div>
 </div>

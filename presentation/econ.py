@@ -41,73 +41,85 @@ def _chart_payload(p: dict, model_tokens: list[dict]) -> dict:
 
     m_nodes = [
         {"name": "Total opportunity", "depth": 0, "c": "total"},
-        {"name": "Destroyed (shelved)", "depth": 1, "c": "destroyed"},
-        {"name": "Paid to cloud", "depth": 1, "c": "spilled"},
-        {"name": "Served on-prem", "depth": 1, "c": "served"},
+        {"name": "Lost", "depth": 1, "c": "destroyed"},
+        {"name": "Cloud spend", "depth": 1, "c": "spilled"},
+        {"name": "Served", "depth": 1, "c": "served"},
     ]
     m_links = [
-        {"source": "Total opportunity", "target": "Served on-prem", "value": p["value_served_day"]},
-        {"source": "Total opportunity", "target": "Paid to cloud", "value": p["value_cloud_day"]},
+        {"source": "Total opportunity", "target": "Served", "value": p["value_served_day"]},
+        {"source": "Total opportunity", "target": "Cloud spend", "value": p["value_cloud_day"]},
         {
             "source": "Total opportunity",
-            "target": "Destroyed (shelved)",
+            "target": "Lost",
             "value": p["value_destroyed_day"],
         },
     ]
     if p["value_spilled_day"] > 0:
-        m_nodes.append({"name": "Spilled (capacity)", "depth": 2, "c": "spilled"})
+        m_nodes.append({"name": "Sent to cloud", "depth": 2, "c": "spilled"})
         m_links.append(
             {
-                "source": "Paid to cloud",
-                "target": "Spilled (capacity)",
+                "source": "Cloud spend",
+                "target": "Sent to cloud",
                 "value": p["value_spilled_day"],
             }
         )
     if p["value_leaked_day"] > 0:
-        m_nodes.append({"name": "Leaked (fit/price)", "depth": 2, "c": "leaked"})
+        m_nodes.append({"name": "Wrong model", "depth": 2, "c": "leaked"})
         m_links.append(
             {
-                "source": "Paid to cloud",
-                "target": "Leaked (fit/price)",
+                "source": "Cloud spend",
+                "target": "Wrong model",
                 "value": p["value_leaked_day"],
             }
         )
     if p["cost_day"] > 0 and p["value_served_day"] > 0:
         if margin > 0:
             m_nodes.append({"name": "Net margin", "depth": 2, "c": "margin"})
-            m_links.append({"source": "Served on-prem", "target": "Net margin", "value": margin})
+            m_links.append({"source": "Served", "target": "Net margin", "value": margin})
         m_nodes.append({"name": "Covers cluster cost", "depth": 2, "c": "cost"})
         m_links.append(
             {
-                "source": "Served on-prem",
+                "source": "Served",
                 "target": "Covers cluster cost",
                 "value": p["value_served_day"] - margin if margin > 0 else p["value_served_day"],
             }
         )
 
+    # The sankey keeps input order within each column (layoutIterations 0), so
+    # list children in the same order as their parents: no crossing bands.
+    m_order = [
+        "Total opportunity",
+        "Served",
+        "Cloud spend",
+        "Lost",
+        "Net margin",
+        "Covers cluster cost",
+        "Sent to cloud",
+        "Wrong model",
+    ]
+    m_nodes.sort(key=lambda n: m_order.index(str(n["name"])))
+
     t_nodes = [
         {"name": "Active demand", "depth": 0, "c": "total"},
-        {"name": "Served on-prem", "depth": 1, "c": "served"},
-        {"name": "Spilled (capacity)", "depth": 1, "c": "spilled"},
-        {"name": "Leaked (fit/price)", "depth": 1, "c": "leaked"},
-        {"name": "Destroyed (shelved)", "depth": 1, "c": "destroyed"},
+        {"name": "Served", "depth": 1, "c": "served"},
+        {"name": "Sent to cloud", "depth": 1, "c": "spilled"},
+        {"name": "Wrong model", "depth": 1, "c": "leaked"},
+        {"name": "Lost", "depth": 1, "c": "destroyed"},
     ]
     t_links = [
-        {"source": "Active demand", "target": "Served on-prem", "value": f["served_tokens"]},
-        {"source": "Active demand", "target": "Spilled (capacity)", "value": f["spilled_tokens"]},
-        {"source": "Active demand", "target": "Leaked (fit/price)", "value": f["leaked_tokens"]},
+        {"source": "Active demand", "target": "Served", "value": f["served_tokens"]},
+        {"source": "Active demand", "target": "Sent to cloud", "value": f["spilled_tokens"]},
+        {"source": "Active demand", "target": "Wrong model", "value": f["leaked_tokens"]},
         {
             "source": "Active demand",
-            "target": "Destroyed (shelved)",
+            "target": "Lost",
             "value": f["destroyed_tokens"],
         },
     ]
     for mt in model_tokens:
         if mt["tokens"] > 0:
             t_nodes.append({"name": mt["name"], "depth": 2, "color": mt["color"]})
-            t_links.append(
-                {"source": "Served on-prem", "target": mt["name"], "value": mt["tokens"]}
-            )
+            t_links.append({"source": "Served", "target": mt["name"], "value": mt["tokens"]})
 
     a_nodes: list[dict] = []
     a_links: list[dict] = []

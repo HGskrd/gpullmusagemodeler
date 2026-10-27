@@ -58,8 +58,8 @@
 ## Local tooling recovery
 
 - On this Mac the legacy path
-  `/Users/ishanbaichoo/Documents/ProgrammingProjects/gpullmusagemodeler` is a
-  symlink to `/Users/ishanbaichoo/Documents/OngoingProjects/gpu-calculator`.
+  `~/Documents/ProgrammingProjects/gpullmusagemodeler` is a
+  symlink to `~/Documents/OngoingProjects/gpu-calculator`.
   Use the physical checkout for new project setup and command working directories.
 - If a tool reports a symlinked writable-root initialization failure, changing
   `cwd` alone may not repair the session's configured roots. Record the failure

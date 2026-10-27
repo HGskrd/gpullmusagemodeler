@@ -1191,8 +1191,207 @@
         "tokens_day": 1000000000.0,
         "unlock_price_per_m": 0.1,
         "wtp_per_m": 0.6
+      },
+      {
+        "key": "meeting_transcription",
+        "name": "Meeting & call transcription",
+        "workload_kind": "asr",
+        "difficulty": 0.0,
+        "tokens_day": 360000,
+        "scale_value": 100,
+        "scale_kind": {
+          "model": "linear",
+          "label": "Recorded audio",
+          "unit": "audio hours/day",
+          "token_multiplier": 3600,
+          "min": 0,
+          "max": 1000,
+          "step": 1,
+          "formula": "audio hours/day x 3600 audio seconds/hour"
+        },
+        "wtp_per_m": 200.0,
+        "requires": [],
+        "min_success_rate": 0.5,
+        "quality_floor": 0.0,
+        "batch_eligible": true,
+        "latent_jobs_day": 0.0,
+        "unlock_price_per_m": 0.0,
+        "in_pre": "Classify",
+        "out_pre": "Classify",
+        "scale_hint": "Pair with Meeting notes assistant or Contact-center QA at the same recorded hours/day.",
+        "prefix_hit_rate": 0.0,
+        "quality_domain": "general",
+        "quality_weights": {
+          "general": 1.0
+        }
+      },
+      {
+        "key": "live_captions",
+        "name": "Live captions & voice intake",
+        "workload_kind": "asr",
+        "difficulty": 0.0,
+        "tokens_day": 360000,
+        "scale_value": 100,
+        "scale_kind": {
+          "model": "linear",
+          "label": "Recorded audio",
+          "unit": "audio hours/day",
+          "token_multiplier": 3600,
+          "min": 0,
+          "max": 1000,
+          "step": 1,
+          "formula": "audio hours/day x 3600 audio seconds/hour"
+        },
+        "wtp_per_m": 200.0,
+        "requires": [],
+        "min_success_rate": 0.5,
+        "quality_floor": 0.0,
+        "batch_eligible": false,
+        "latent_jobs_day": 0.0,
+        "unlock_price_per_m": 0.0,
+        "in_pre": "Classify",
+        "out_pre": "Classify",
+        "scale_hint": "Concurrent live streams follow the selected arrival pattern; pair with Customer service agent for voice intake.",
+        "prefix_hit_rate": 0.0,
+        "quality_domain": "general",
+        "quality_weights": {
+          "general": 1.0
+        }
+      },
+      {
+        "key": "search_indexing",
+        "name": "Search corpus indexing",
+        "workload_kind": "embedding",
+        "difficulty": 0.0,
+        "tokens_day": 51200000,
+        "scale_value": 100000,
+        "scale_kind": {
+          "model": "linear",
+          "label": "Items processed",
+          "unit": "chunks/day",
+          "token_multiplier": 512,
+          "min": 0,
+          "max": 1000000,
+          "step": 100,
+          "formula": "chunks/day x 512 formatted input tokens/item"
+        },
+        "wtp_per_m": 0.5,
+        "requires": [],
+        "min_success_rate": 0.5,
+        "quality_floor": 0.0,
+        "batch_eligible": true,
+        "latent_jobs_day": 0.0,
+        "unlock_price_per_m": 0.0,
+        "in_pre": "Classify",
+        "out_pre": "Classify",
+        "scale_hint": "Pair with Enterprise search assistant or Decade inbox knowledge base; count overlap and re-indexing.",
+        "prefix_hit_rate": 0.0,
+        "quality_domain": "general",
+        "quality_weights": {
+          "general": 1.0
+        }
+      },
+      {
+        "key": "search_queries",
+        "name": "Search query embeddings",
+        "workload_kind": "embedding",
+        "difficulty": 0.0,
+        "tokens_day": 9600000,
+        "scale_value": 150000,
+        "scale_kind": {
+          "model": "linear",
+          "label": "Items processed",
+          "unit": "queries/day",
+          "token_multiplier": 64,
+          "min": 0,
+          "max": 1500000,
+          "step": 100,
+          "formula": "queries/day x 64 formatted input tokens/item"
+        },
+        "wtp_per_m": 0.5,
+        "requires": [],
+        "min_success_rate": 0.5,
+        "quality_floor": 0.0,
+        "batch_eligible": false,
+        "latent_jobs_day": 0.0,
+        "unlock_price_per_m": 0.0,
+        "in_pre": "Classify",
+        "out_pre": "Classify",
+        "scale_hint": "Pair with Enterprise search assistant at the same queries/day; vector database search is separate.",
+        "prefix_hit_rate": 0.0,
+        "quality_domain": "general",
+        "quality_weights": {
+          "general": 1.0
+        }
+      },
+      {
+        "key": "ticket_routing",
+        "name": "Ticket intent routing",
+        "workload_kind": "decision",
+        "difficulty": 0.0,
+        "tokens_day": 40960000,
+        "scale_value": 80000,
+        "scale_kind": {
+          "model": "linear",
+          "label": "Items processed",
+          "unit": "decisions/day",
+          "token_multiplier": 512,
+          "min": 0,
+          "max": 800000,
+          "step": 100,
+          "formula": "decisions/day x 512 formatted input tokens/item"
+        },
+        "wtp_per_m": 0.5,
+        "requires": [],
+        "min_success_rate": 0.5,
+        "quality_floor": 0.0,
+        "batch_eligible": false,
+        "latent_jobs_day": 0.0,
+        "unlock_price_per_m": 0.0,
+        "in_pre": "Classify",
+        "out_pre": "Classify",
+        "scale_hint": "Fixed-label intent and priority scoring before Customer service agent; one question with four options per request.",
+        "prefix_hit_rate": 0.0,
+        "quality_domain": "general",
+        "quality_weights": {
+          "general": 1.0
+        }
+      },
+      {
+        "key": "content_moderation",
+        "name": "Content moderation decisions",
+        "workload_kind": "decision",
+        "difficulty": 0.0,
+        "tokens_day": 102400000,
+        "scale_value": 100000,
+        "scale_kind": {
+          "model": "linear",
+          "label": "Items processed",
+          "unit": "decisions/day",
+          "token_multiplier": 1024,
+          "min": 0,
+          "max": 1000000,
+          "step": 100,
+          "formula": "decisions/day x 1024 formatted input tokens/item"
+        },
+        "wtp_per_m": 0.5,
+        "requires": [],
+        "min_success_rate": 0.5,
+        "quality_floor": 0.0,
+        "batch_eligible": true,
+        "latent_jobs_day": 0.0,
+        "unlock_price_per_m": 0.0,
+        "in_pre": "Classify",
+        "out_pre": "Classify",
+        "scale_hint": "Text-only allow/review/block/escalate scoring; one question with four options per request.",
+        "prefix_hit_rate": 0.0,
+        "quality_domain": "general",
+        "quality_weights": {
+          "general": 1.0
+        }
       }
-    ]
+    ],
+    "cloud_enabled": false
   },
   "panel_b": {
     "auto_excluded": [],
@@ -2386,8 +2585,207 @@
         "tokens_day": 1000000000.0,
         "unlock_price_per_m": 0.1,
         "wtp_per_m": 0.6
+      },
+      {
+        "key": "meeting_transcription",
+        "name": "Meeting & call transcription",
+        "workload_kind": "asr",
+        "difficulty": 0.0,
+        "tokens_day": 360000,
+        "scale_value": 100,
+        "scale_kind": {
+          "model": "linear",
+          "label": "Recorded audio",
+          "unit": "audio hours/day",
+          "token_multiplier": 3600,
+          "min": 0,
+          "max": 1000,
+          "step": 1,
+          "formula": "audio hours/day x 3600 audio seconds/hour"
+        },
+        "wtp_per_m": 200.0,
+        "requires": [],
+        "min_success_rate": 0.5,
+        "quality_floor": 0.0,
+        "batch_eligible": true,
+        "latent_jobs_day": 0.0,
+        "unlock_price_per_m": 0.0,
+        "in_pre": "Classify",
+        "out_pre": "Classify",
+        "scale_hint": "Pair with Meeting notes assistant or Contact-center QA at the same recorded hours/day.",
+        "prefix_hit_rate": 0.0,
+        "quality_domain": "general",
+        "quality_weights": {
+          "general": 1.0
+        }
+      },
+      {
+        "key": "live_captions",
+        "name": "Live captions & voice intake",
+        "workload_kind": "asr",
+        "difficulty": 0.0,
+        "tokens_day": 360000,
+        "scale_value": 100,
+        "scale_kind": {
+          "model": "linear",
+          "label": "Recorded audio",
+          "unit": "audio hours/day",
+          "token_multiplier": 3600,
+          "min": 0,
+          "max": 1000,
+          "step": 1,
+          "formula": "audio hours/day x 3600 audio seconds/hour"
+        },
+        "wtp_per_m": 200.0,
+        "requires": [],
+        "min_success_rate": 0.5,
+        "quality_floor": 0.0,
+        "batch_eligible": false,
+        "latent_jobs_day": 0.0,
+        "unlock_price_per_m": 0.0,
+        "in_pre": "Classify",
+        "out_pre": "Classify",
+        "scale_hint": "Concurrent live streams follow the selected arrival pattern; pair with Customer service agent for voice intake.",
+        "prefix_hit_rate": 0.0,
+        "quality_domain": "general",
+        "quality_weights": {
+          "general": 1.0
+        }
+      },
+      {
+        "key": "search_indexing",
+        "name": "Search corpus indexing",
+        "workload_kind": "embedding",
+        "difficulty": 0.0,
+        "tokens_day": 51200000,
+        "scale_value": 100000,
+        "scale_kind": {
+          "model": "linear",
+          "label": "Items processed",
+          "unit": "chunks/day",
+          "token_multiplier": 512,
+          "min": 0,
+          "max": 1000000,
+          "step": 100,
+          "formula": "chunks/day x 512 formatted input tokens/item"
+        },
+        "wtp_per_m": 0.5,
+        "requires": [],
+        "min_success_rate": 0.5,
+        "quality_floor": 0.0,
+        "batch_eligible": true,
+        "latent_jobs_day": 0.0,
+        "unlock_price_per_m": 0.0,
+        "in_pre": "Classify",
+        "out_pre": "Classify",
+        "scale_hint": "Pair with Enterprise search assistant or Decade inbox knowledge base; count overlap and re-indexing.",
+        "prefix_hit_rate": 0.0,
+        "quality_domain": "general",
+        "quality_weights": {
+          "general": 1.0
+        }
+      },
+      {
+        "key": "search_queries",
+        "name": "Search query embeddings",
+        "workload_kind": "embedding",
+        "difficulty": 0.0,
+        "tokens_day": 9600000,
+        "scale_value": 150000,
+        "scale_kind": {
+          "model": "linear",
+          "label": "Items processed",
+          "unit": "queries/day",
+          "token_multiplier": 64,
+          "min": 0,
+          "max": 1500000,
+          "step": 100,
+          "formula": "queries/day x 64 formatted input tokens/item"
+        },
+        "wtp_per_m": 0.5,
+        "requires": [],
+        "min_success_rate": 0.5,
+        "quality_floor": 0.0,
+        "batch_eligible": false,
+        "latent_jobs_day": 0.0,
+        "unlock_price_per_m": 0.0,
+        "in_pre": "Classify",
+        "out_pre": "Classify",
+        "scale_hint": "Pair with Enterprise search assistant at the same queries/day; vector database search is separate.",
+        "prefix_hit_rate": 0.0,
+        "quality_domain": "general",
+        "quality_weights": {
+          "general": 1.0
+        }
+      },
+      {
+        "key": "ticket_routing",
+        "name": "Ticket intent routing",
+        "workload_kind": "decision",
+        "difficulty": 0.0,
+        "tokens_day": 40960000,
+        "scale_value": 80000,
+        "scale_kind": {
+          "model": "linear",
+          "label": "Items processed",
+          "unit": "decisions/day",
+          "token_multiplier": 512,
+          "min": 0,
+          "max": 800000,
+          "step": 100,
+          "formula": "decisions/day x 512 formatted input tokens/item"
+        },
+        "wtp_per_m": 0.5,
+        "requires": [],
+        "min_success_rate": 0.5,
+        "quality_floor": 0.0,
+        "batch_eligible": false,
+        "latent_jobs_day": 0.0,
+        "unlock_price_per_m": 0.0,
+        "in_pre": "Classify",
+        "out_pre": "Classify",
+        "scale_hint": "Fixed-label intent and priority scoring before Customer service agent; one question with four options per request.",
+        "prefix_hit_rate": 0.0,
+        "quality_domain": "general",
+        "quality_weights": {
+          "general": 1.0
+        }
+      },
+      {
+        "key": "content_moderation",
+        "name": "Content moderation decisions",
+        "workload_kind": "decision",
+        "difficulty": 0.0,
+        "tokens_day": 102400000,
+        "scale_value": 100000,
+        "scale_kind": {
+          "model": "linear",
+          "label": "Items processed",
+          "unit": "decisions/day",
+          "token_multiplier": 1024,
+          "min": 0,
+          "max": 1000000,
+          "step": 100,
+          "formula": "decisions/day x 1024 formatted input tokens/item"
+        },
+        "wtp_per_m": 0.5,
+        "requires": [],
+        "min_success_rate": 0.5,
+        "quality_floor": 0.0,
+        "batch_eligible": true,
+        "latent_jobs_day": 0.0,
+        "unlock_price_per_m": 0.0,
+        "in_pre": "Classify",
+        "out_pre": "Classify",
+        "scale_hint": "Text-only allow/review/block/escalate scoring; one question with four options per request.",
+        "prefix_hit_rate": 0.0,
+        "quality_domain": "general",
+        "quality_weights": {
+          "general": 1.0
+        }
       }
-    ]
+    ],
+    "cloud_enabled": false
   },
   "type": "gpullm-scenario",
   "version": 1

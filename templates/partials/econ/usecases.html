@@ -1,0 +1,38 @@
+{% set p = ep.p %}
+{% set cloud_on = state.cloud_enabled %}
+{# One row per use case: where its day of demand lands. Sortable. #}
+{% if p.projects %}
+<table class="uc-table sortable-table">
+  <thead>
+    <tr>
+      <th data-col="0" data-type="text">Use case</th>
+      <th data-col="1" data-type="num" class="r">Demand</th>
+      <th data-col="2" data-type="num">Outcome</th>
+      <th data-col="3" data-type="num" class="r">Served</th>
+      {% if cloud_on %}<th data-col="4" data-type="num" class="r">To cloud</th>{% endif %}
+      <th data-col="{{ 5 if cloud_on else 4 }}" data-type="num" class="r">Lost</th>
+      <th data-col="{{ 6 if cloud_on else 5 }}" data-type="num" class="r">Value / day</th>
+      <th data-col="{{ 7 if cloud_on else 6 }}" data-type="num" class="r">Unmet / day</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in p.projects|sort(attribute='tokens_day', reverse=True) %}
+    {% set cloud_pct = row.spilled_pct + row.leaked_pct %}
+    {% set unmet = row.value_spilled + row.value_leaked + row.value_destroyed %}
+    <tr>
+      <td data-v="{{ row.name }}" title="{{ row.name }}">{{ row.name }}{% if row.get("workload_kind", "llm") != "llm" %} <span class="T">{{ row.workload_kind|upper }} · capacity only</span>{% endif %}</td>
+      <td data-v="{{ row.tokens_day }}" class="r">{{ row.tokens_day|fmt_num }}{% if row.get("workload_unit") %} {{ row.workload_unit }}{% endif %}</td>
+      <td data-v="{{ row.served_pct }}"><span class="uc-bar" title="served {{ row.served_pct|round|int }}%{% if cloud_on %} · cloud {{ row.spilled_pct|round|int }}% · wrong model {{ row.leaked_pct|round|int }}%{% endif %} · lost {{ row.destroyed_pct|round|int }}%"><i class="fate-seg served" style="width:{{ row.served_pct }}%;"></i><i class="fate-seg spilled" style="width:{{ row.spilled_pct }}%;"></i><i class="fate-seg leaked" style="width:{{ row.leaked_pct }}%;"></i><i class="fate-seg destroyed" style="width:{{ row.destroyed_pct }}%;"></i></span></td>
+      <td data-v="{{ row.served_pct }}" class="r {{ 'good' if row.served_pct >= 99.5 }}">{{ row.served_pct|round(0)|int }}%</td>
+      {% if cloud_on %}<td data-v="{{ cloud_pct }}" class="r {{ 'cl' if cloud_pct >= 0.5 else 'muted' }}">{{ cloud_pct|round(0)|int }}%</td>{% endif %}
+      <td data-v="{{ row.destroyed_pct }}" class="r {{ 'bad' if row.destroyed_pct >= 0.5 else 'muted' }}">{{ row.destroyed_pct|round(0)|int }}%</td>
+      <td data-v="{{ row.value_served }}" class="r">{{ row.value_served|fmt_money }}</td>
+      <td data-v="{{ unmet }}" class="r {{ 'bad' if unmet >= 1 else 'muted' }}">{{ unmet|fmt_money if unmet >= 1 else '—' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<div class="T uc-foot">Sorted by demand · click a column to sort</div>
+{% else %}
+<p class="T">No use cases yet.</p>
+{% endif %}

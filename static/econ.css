@@ -112,11 +112,6 @@
 .m-fill-cap { background: var(--acc); }
 .m-fill-demand { background: var(--amber); }
 
-/* Semantic fate colors on econ pages: green served → amber spill → red leak →
-   dark maroon destroyed. Scoped so the main planner page keeps its palette. */
-body.econ .fate-seg.destroyed { background: #7f1d1d; }
-body.econ .fate-legend i.sw.destroyed { background: #7f1d1d; }
-
 /* Fate bars (.fate-bar/.fate-seg/.fate-legend) come from style.css. */
 .chart-box { width: 100%; }
 
@@ -148,3 +143,74 @@ body.econ .fate-legend i.sw.destroyed { background: #7f1d1d; }
 }
 .econ-tab-btn:hover { background: var(--bg3); }
 .econ-tab-btn.on { background: var(--fg0); color: var(--bg0); border-color: var(--fg0); }
+
+/* ── Overview tab (the default economics view) ────────────────────────────
+   Headline, ranked next moves with Apply, then attention items grouped by
+   cause. Same density as the rest of the page; one line per item. */
+.brief.overview { max-width: none; padding: 0; margin-top: 8px; font-size: 11px; line-height: 1.45; background: none; border: 0; border-radius: 0; }
+.brief.overview h2 { font-size: 15px; text-transform: none; letter-spacing: -0.01em; color: var(--fg0); margin: 0 0 2px; }
+.brief.overview .b-kicker, .brief.overview .b-date { font-size: 10px; margin-bottom: 4px; }
+.brief.overview h3 { font-size: 10px; margin: 10px 0 3px; padding-bottom: 2px; }
+.moves { display: grid; gap: 0; }
+.move { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 2px 0; border-bottom: 1px solid var(--b0); }
+.move-ic { font-family: var(--mono); font-weight: 600; font-size: 11px; text-align: center; }
+.move-ic.swap { color: var(--acc); } .move-ic.grow { color: var(--o-cloud); }
+.move-body { display: flex; gap: 10px; align-items: baseline; min-width: 0; white-space: nowrap; overflow: hidden; }
+.move-body strong { font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+.move-body .T { font-size: 10px; overflow: hidden; text-overflow: ellipsis; }
+.move-gain { display: flex; gap: 8px; font-family: var(--mono); font-size: 10px; margin-left: auto; flex: none; }
+.move-gain .good { color: var(--acc2); } .move-gain .bad { color: var(--red); }
+.move button { font-size: 9px; padding: 1px 6px; }
+.ov-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 6px 18px; }
+.ov-group { display: grid; gap: 0; align-content: start; }
+.ov-group-head { display: flex; align-items: baseline; gap: 6px; white-space: nowrap; overflow: hidden; border-bottom: 1px solid var(--b1); padding-bottom: 1px; }
+.ov-group-head .sw { display: inline-block; width: 8px; height: 8px; align-self: center; }
+.ov-group-head strong { font-size: 11px; }
+.ov-group-head .T { font-size: 10px; overflow: hidden; text-overflow: ellipsis; }
+.ov-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 8px; align-items: baseline; padding: 1px 0; border-bottom: 1px solid var(--b0); font-size: 11px; white-space: nowrap; }
+.ov-row > span { overflow: hidden; text-overflow: ellipsis; }
+.ov-row .T { font-size: 10px; }
+.ov-row .fig { text-align: right; font-size: 10px; }
+.ov-full { margin-top: 8px; border-top: 1px solid var(--b1); padding-top: 4px; }
+.ov-full > summary { cursor: pointer; font-size: 10px; font-weight: 500; color: var(--fg1); }
+.brief h2 { text-transform: none; }
+
+/* Moves as an aligned table: change · margin · less cloud · recovered · Apply. */
+.mt { display: grid; grid-template-columns: 12px minmax(0, 1fr) 76px 68px 68px 46px; column-gap: 8px; align-items: center; font-size: 11px; }
+.mt.no-cloud { grid-template-columns: 12px minmax(0, 1fr) 76px 68px 46px; }
+.mt > * { height: 21px; display: flex; align-items: center; border-bottom: 1px solid var(--b0); white-space: nowrap; overflow: hidden; min-width: 0; }
+.mt > .mt-h { height: 16px; font-size: 10px; color: var(--fg2); border-bottom-color: var(--b2); }
+.mt > .r { justify-content: flex-end; font: 10.5px var(--mono); }
+.mt > .good { color: var(--acc2); } .mt > .bad { color: var(--red); }
+.mt-ic { font: 600 11px var(--mono); justify-content: center; }
+.mt-ic.swap { color: var(--acc); } .mt-ic.grow { color: var(--o-cloud); }
+.mt > .mt-t { display: block; line-height: 21px; text-overflow: ellipsis; }
+.mt-t b { font-weight: 600; }
+.mt-t .T { font-size: 10px; }
+.mt button { font-size: 10px; padding: 0 6px; height: 17px; }
+.ov-more > summary { cursor: pointer; font-size: 10px; color: var(--fg2); padding: 2px 0; list-style: none; }
+.ov-more > summary::-webkit-details-marker { display: none; }
+.ov-more > summary::after { content: " ▸"; }
+.ov-more[open] > summary::after { content: " ▾"; }
+.brief .fig.warn { background: none; border: 0; padding: 0; border-radius: 0; }
+
+/* Step 4 detail tabs: Use cases table and Money. */
+.econ-tabs > .econ-tabbar { margin-top: 10px; }
+.uc-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 11px; }
+.uc-table th { font-size: 10px; font-weight: 500; color: var(--fg2); text-align: left; padding: 2px 4px; border-bottom: 1px solid var(--b2); white-space: nowrap; cursor: pointer; }
+.uc-table td { padding: 0 4px; height: 19px; border-bottom: 1px solid var(--b0); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.uc-table .r { text-align: right; font-family: var(--mono); font-size: 10.5px; }
+.uc-table th.r { font-family: inherit; font-size: 10px; }
+.uc-table th:nth-child(1) { width: auto; }
+.uc-table th:nth-child(2) { width: 58px; }
+.uc-table th:nth-child(3) { width: 24%; }
+.uc-table th:nth-child(n+4) { width: 50px; }
+.uc-table th:nth-last-child(-n+2) { width: 70px; }
+.uc-table .good { color: var(--acc2); } .uc-table .bad { color: var(--red); } .uc-table .cl { color: var(--o-cloud); } .uc-table .muted { color: var(--fg2); }
+.uc-bar { display: flex; height: 8px; background: var(--bg2); }
+.uc-bar i { display: block; height: 100%; }
+.uc-foot { font-size: 10px; margin-top: 3px; }
+.mn-k { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--fg1); margin: 4px 0 3px; }
+.mn-k .T { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.mn-tariff { display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: 10.5px; color: var(--fg1); }
+.mn-tariff span { white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; }

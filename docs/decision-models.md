@@ -1,6 +1,6 @@
 # Decision models — 17 October 2026
 
-These checkpoints score choices in one forward pass. The planner has a separate Decision picker and Decision throughput chart. No autoregressive decode, generated-token revenue, prefix-cache discount or speculative speedup is credited. This does not connect to an inference service or download weights.
+These checkpoints score choices in one forward pass. The planner has a separate Decision picker and Decision response time chart. No autoregressive decode, generated-token revenue, prefix-cache discount or speculative speedup is credited. This does not connect to an inference service or download weights.
 
 The chart assumes one question with four options per request. Input positions include the complete formatted state, question and choices. The Python estimator also accepts multiple questions and reports decisions/s separately from requests/s; increasing question count must include its additional input tokens. Over-limit requests are rejected, never silently truncated.
 

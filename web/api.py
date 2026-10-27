@@ -23,17 +23,20 @@ from placement import (
     resolve_deployment,
 )
 from presentation.charts import (
+    DECISION_LENGTHS,
     chart_asr_quality,
-    chart_decision_throughput,
+    chart_decision_latency,
     chart_embedding_quality,
     chart_processing_pareto,
     chart_realtime_capacity,
     chart_user_pareto,
+    decision_use_cases,
     embedding_quality_axis_range,
 )
 from presentation.model_cards import (
     get_model_infos,
 )
+from presentation.model_picker import panel_quality_floor, picker_rows
 from presentation.reports import format_projection_report
 from state import (
     PlannerState,
@@ -101,10 +104,12 @@ def _build_chart_payload(sa: PlannerState, sb: PlannerState | None) -> dict:
         return {"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]}
 
     if mode == "decision":
-        datasets = chart_decision_throughput(sa)
+        use_cases = decision_use_cases(sa)
+        lengths = sorted(set(DECISION_LENGTHS) | {u["len"] for u in use_cases})
+        datasets = chart_decision_latency(sa, lengths=lengths)
         if sb:
-            datasets += chart_decision_throughput(sb, " (B)")
-        return {"type": "line", "datasets": datasets, "mode": mode, "x_max": 256}
+            datasets += chart_decision_latency(sb, " (B)", lengths)
+        return {"type": "line", "datasets": datasets, "mode": mode, "use_cases": use_cases}
 
     if mode == "asrquality":
         datasets = chart_asr_quality(sa)
@@ -189,12 +194,23 @@ def picker_model():
         active_kind = next(
             (kind_key for kind_key, _ in MODEL_KINDS if kind_groups.get(kind_key)), None
         )
+    panel = request.args.get("panel", "A")
+    state = _state(panel) or get_state(_scope_id())
+    # Fit/quality rows are computed only for the active tab (switching tabs
+    # re-requests this route), which keeps the open well under 150 ms.
+    rows = picker_rows(state, kind_groups.get(active_kind, {}), active_kind) if active_kind else {}
     return render_template(
         "partials/model_picker.html",
-        panel=request.args.get("panel", "A"),
+        panel=panel,
         models_by_kind=kind_groups,
         MODEL_KINDS=MODEL_KINDS,
         active_kind=active_kind,
+        picker_rows=rows,
+        has_gpus=bool(state.gpus),
+        # With every GPU already assigned, "fits free GPUs" would dim every row
+        # on open; start with the filter off in that case.
+        has_free_gpus=any(state.free_gpu_for_pool(pool.uid) > 0 for pool in state.gpus),
+        quality_floor=panel_quality_floor(state) if active_kind == "llm" else None,
     )
 
 

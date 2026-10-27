@@ -105,7 +105,8 @@ class RevenueProjectionTests(unittest.TestCase):
                     min_success_rate=0.5,
                     prefix_hit_rate=0.8,
                 ),
-            ]
+            ],
+            cloud_enabled=True,
         )
 
         projection = compute_revenue_projection(state, include_recommendations=False)
@@ -193,6 +194,7 @@ class RevenueProjectionTests(unittest.TestCase):
             ],
         )
 
+        state.price_driven_demand = True
         projection = compute_revenue_projection(state)
 
         self.assertEqual(projection["baseline_tokens_day"], 10_000_000)

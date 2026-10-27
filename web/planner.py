@@ -34,6 +34,8 @@ from placement import (
 from planner_service import (
     add_model,
     add_models,
+    apply_gpu_expansion,
+    apply_model_swap,
     change_gpu_qty,
     create_default_scenario,
     set_model_artifact,
@@ -47,6 +49,7 @@ from scenarios import (
     serialize_project_set,
 )
 from state import (
+    TECH_SAVVINESS_MULTIPLIERS,
     add_gpu,
     add_project,
     auto_exclude_model,
@@ -54,23 +57,28 @@ from state import (
     get_use_case_defs,
     normalize_auto_strategy,
     normalize_plot_mode,
+    project_demand_multiplier,
     remove_gpu,
     remove_model,
     remove_project,
+    set_company_size,
     set_dist_preset,
     set_dist_value,
     set_gpu_cost,
     set_model_strat,
     set_project_batch_eligible,
     set_project_capability,
+    set_project_day_shape,
     set_project_dist_preset,
     set_project_field,
     set_project_kind,
     set_project_name,
+    set_project_scale_locked,
     set_project_scale_value,
     set_projection_choice,
     set_projection_pct,
     set_projection_toggle,
+    set_tech_savviness,
 )
 from web.analytics import record_event
 from web.config import (
@@ -168,7 +176,9 @@ def gpu_remove(s):
 @with_planner_state
 def gpu_cost(s):
     uid = _form_int("uid")
-    cost = _form_float("value", 0.0)
+    # A cost has no thousands separator, so a comma can only be a locale decimal.
+    raw_cost = (request.form.get("value") or "").replace("$", "").replace(",", ".").strip()
+    cost = _finite_float(raw_cost or 0.0, name="value", lo=0.0, hi=1e6)
     set_gpu_cost(s, uid, cost)
     # Like GPU quantity, cost edits are high-frequency numeric updates.
     return _event_htmx_response("gpu_cost", s)
@@ -239,6 +249,27 @@ def model_auto_reallow(s):
     model_key = request.form.get("key", "")
     auto_reallow_model(s, model_key)
     return _event_htmx_response("model_auto_reallow", s)
+
+
+@planner_bp.route("/model/swap", methods=["POST"])
+@with_planner_state
+def model_swap(s):
+    model_key = request.form.get("model_key", "")
+    if model_key not in MODELS or MODELS[model_key].hidden:
+        return jsonify({"error": "Invalid model key"}), 400
+    precision = request.form.get("prec", "")
+    if precision not in PRECISIONS:
+        return jsonify({"error": "Invalid precision"}), 400
+    apply_model_swap(s, _form_int("uid"), model_key, precision)
+    return _tracked_htmx_response("model_swap", s)
+
+
+@planner_bp.route("/model/grow", methods=["POST"])
+@with_planner_state
+def model_grow(s):
+    added = _bounded_int(request.form.get("added", "1"), name="added", lo=1, hi=64)
+    apply_gpu_expansion(s, _form_int("uid"), added)
+    return _tracked_htmx_response("model_grow", s)
 
 
 @planner_bp.route("/model/remove", methods=["POST"])
@@ -477,6 +508,40 @@ def projection_toggle(s):
     return _tracked_htmx_response("projection_toggle", s)
 
 
+@planner_bp.route("/workload/company", methods=["POST"])
+@with_planner_state
+def workload_company(s):
+    raw = str(request.form.get("value", "")).replace(",", "").strip()
+    size = _bounded_int(raw or "0", name="company size", lo=1, hi=10_000_000)
+    set_company_size(s, size)
+    return _event_htmx_response("workload_company", s)
+
+
+@planner_bp.route("/workload/savviness", methods=["POST"])
+@with_planner_state
+def workload_savviness(s):
+    level = request.form.get("value", "")
+    if level not in TECH_SAVVINESS_MULTIPLIERS:
+        return jsonify({"error": "Invalid tech-savviness level"}), 400
+    set_tech_savviness(s, level)
+    return _tracked_htmx_response("workload_savviness", s)
+
+
+@planner_bp.route("/project/lock", methods=["POST"])
+@with_planner_state
+def project_lock(s):
+    locked = request.form.get("value") in ("on", "true", "1")
+    set_project_scale_locked(s, _form_int("uid"), locked)
+    return _tracked_htmx_response("project_lock", s)
+
+
+@planner_bp.route("/project/day-shape", methods=["POST"])
+@with_planner_state
+def project_day_shape(s):
+    set_project_day_shape(s, _form_int("uid"), request.form.get("value", ""))
+    return _tracked_htmx_response("project_day_shape", s)
+
+
 @planner_bp.route("/project/add", methods=["POST"])
 @with_planner_state
 def project_add(s):
@@ -522,7 +587,12 @@ def project_set(s):
         set_project_field(s, uid, "tokens_day", float(raw_value or 0.0) * 1e6)
         retune_models(s, preserve_existing=False)
     elif field_name == "scale_value":
-        set_project_scale_value(s, uid, float(raw_value or 0.0))
+        # The scale input shows grouped digits ("5,000,000") and, for unlocked use
+        # cases, the value at the current company size; store it at the reference size.
+        typed = float(str(raw_value or 0).replace(",", "").strip() or 0)
+        project = next((p for p in s.projects if p.uid == uid), None)
+        multiplier = project_demand_multiplier(s, project) if project is not None else 1.0
+        set_project_scale_value(s, uid, typed / multiplier if multiplier > 0 else typed)
         retune_models(s, preserve_existing=False)
     elif field_name == "wtp_per_m_cents":
         # slider gives cents per M tokens; persist as $/M tokens

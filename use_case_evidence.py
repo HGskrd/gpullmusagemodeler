@@ -8,6 +8,24 @@ published measurements of every seed value.
 USE_CASE_RESEARCH_CAPTURED_AT = "2026-07-22"
 
 USE_CASE_SOURCES = {
+    "voxtral_asr": {
+        "title": "Voxtral Mini Realtime model card",
+        "publisher": "Mistral AI",
+        "published": "model card; checked 2026-10-24",
+        "url": "https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602",
+    },
+    "bge_embeddings": {
+        "title": "BGE-M3 retrieval model card",
+        "publisher": "BAAI",
+        "published": "model card; checked 2026-10-24",
+        "url": "https://huggingface.co/BAAI/bge-m3",
+    },
+    "intern_decisions": {
+        "title": "Intern-Decision model card",
+        "publisher": "InternLM",
+        "published": "model card; checked 2026-10-24",
+        "url": "https://huggingface.co/internlm/Intern-Decision-0.8B",
+    },
     "openai_use_cases": {
         "title": "Identifying and scaling AI use cases",
         "publisher": "OpenAI",
@@ -356,9 +374,59 @@ USE_CASE_EVIDENCE = {
     },
 }
 
+# Native modality presets: sources support task shape, never scenario volume,
+# price, end-to-end quality, or measured deployment throughput.
+for _key, _source, _assumption in (
+    (
+        "meeting_transcription",
+        "voxtral_asr",
+        "100 audio hours/day; one accounting unit/audio second. Batch runs use conservative realtime capacity with no faster-than-realtime credit. Pair with notes or QA separately.",
+    ),
+    (
+        "live_captions",
+        "voxtral_asr",
+        "100 audio hours/day distributed over the selected day shape. Only streaming ASR profiles qualify; end-to-end caption latency and WER require measurement.",
+    ),
+    (
+        "search_indexing",
+        "bge_embeddings",
+        "100k chunks/day at 512 formatted input tokens/chunk. Count overlap and refreshed chunks; vector storage and database compute are excluded.",
+    ),
+    (
+        "search_queries",
+        "bge_embeddings",
+        "150k queries/day at 64 formatted input tokens/query. Retrieval recall and vector database latency are uncalibrated; answer generation is separate.",
+    ),
+    (
+        "ticket_routing",
+        "intern_decisions",
+        "80k decisions/day at 512 formatted input tokens, one question and four options/request. Label accuracy and abstention rates require task-specific evaluation.",
+    ),
+    (
+        "content_moderation",
+        "intern_decisions",
+        "100k text decisions/day at 1024 formatted input tokens, one question and four options/request. Policy accuracy and human escalation are outside the capacity estimate.",
+    ),
+):
+    USE_CASE_EVIDENCE[_key] = {
+        "confidence": "low",
+        "assumption": _assumption
+        + " Starting volume and WTP are illustrative planning inputs, not published benchmarks. Sources checked 2026-10-24.",
+        "source_ids": (_source,),
+    }
+
 # The workload-specific rates are planner priors, while this source documents
 # the token-query counters used to replace them with observed deployment data.
-for _evidence in USE_CASE_EVIDENCE.values():
+for _key, _evidence in USE_CASE_EVIDENCE.items():
+    if _key in {
+        "meeting_transcription",
+        "live_captions",
+        "search_indexing",
+        "search_queries",
+        "ticket_routing",
+        "content_moderation",
+    }:
+        continue
     _evidence["source_ids"] = tuple(
         dict.fromkeys((*_evidence["source_ids"], "vllm_prefix_metrics"))
     )
@@ -538,6 +606,49 @@ def enrich_use_case_details(details: dict) -> dict:
         merged[key] = dict(value)
     for key, evidence in USE_CASE_EVIDENCE.items():
         merged.setdefault(key, {}).update(evidence)
+    for key, summary, companions in (
+        (
+            "meeting_transcription",
+            "Transcribe recorded meetings and calls before downstream notes or QA analysis.",
+            ("meeting_notes", "contact_center_qa"),
+        ),
+        (
+            "live_captions",
+            "Streaming speech recognition for captions and voice intake; downstream dialogue is a separate LLM workload.",
+            ("chatbot",),
+        ),
+        (
+            "search_indexing",
+            "Encode document chunks for corpus backfills, refreshes, and semantic retrieval.",
+            ("enterprise_search", "inbox_archive"),
+        ),
+        (
+            "search_queries",
+            "Encode live search queries into vectors; answer generation and database search are separate stages.",
+            ("enterprise_search",),
+        ),
+        (
+            "ticket_routing",
+            "Score a fixed set of ticket intent or priority labels in one forward pass.",
+            ("chatbot", "classify"),
+        ),
+        (
+            "content_moderation",
+            "Score text against a fixed allow, review, block, or escalate policy; no generated explanation.",
+            ("classify",),
+        ),
+    ):
+        merged[key]["summary"] = summary
+        merged[key]["companions"] = companions
+    for key, related_stages in {
+        "meeting_notes": ("meeting_transcription",),
+        "contact_center_qa": ("meeting_transcription", "content_moderation"),
+        "chatbot": ("live_captions", "ticket_routing"),
+        "enterprise_search": ("search_indexing", "search_queries"),
+        "inbox_archive": ("search_indexing",),
+        "classify": ("ticket_routing", "content_moderation"),
+    }.items():
+        merged[key]["companions"] = related_stages
     return merged
 
 

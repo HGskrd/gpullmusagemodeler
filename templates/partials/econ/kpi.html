@@ -1,29 +1,51 @@
+{% set native = state.projects|rejectattr("workload_kind", "equalto", "llm")|list %}
+{% set unit = "work units" if native else "tokens" %}
 {% set p = ep.p %}
 {% set f = ep.f %}
-<div class="kpi-strip">
-  <div class="kpi hero">
-    <div class="k-label">Equivalent value served / day</div>
-    <div class="k-val good">{{ p.value_served_day|fmt_money }}</div>
-    <div class="k-sub">{% if p.cost_day > 0 %}margin {{ p.margin_day|fmt_money }}/day · {{ '%.2f'|format(p.revenue_multiple) }}× value/cost{% else %}gross; costs not included{% endif %}</div>
+{% set cloud_on = state.cloud_enabled if state is defined and state else true %}
+{# Six headline numbers, no cards, then the day's demand value split by fate. #}
+<div class="kpi-nums">
+  <div>
+    <div class="kn-k">Value served / day</div>
+    <div class="kn-v kn-good">{{ p.value_served_day|fmt_money }}</div>
+    <div class="kn-s">{% if p.cost_day > 0 %}margin {{ p.margin_day|fmt_money }} · {{ p.revenue_multiple|fmt_mult }} cost{% else %}gross; costs not included{% endif %}</div>
   </div>
-  <div class="kpi">
-    <div class="k-label">Cloud spend lost / day</div>
-    <div class="k-val {{ 'bad' if (f.spilled_pct + f.leaked_pct) >= 25 else ('warn' if (f.spilled_pct + f.leaked_pct) > 0 else '') }}">{{ p.value_cloud_day|fmt_money }}</div>
-    <div class="k-sub">{{ f.spilled_pct|round(0)|int }}% spill · {{ f.leaked_pct|round(0)|int }}% leak</div>
+  {% if cloud_on %}
+  <div>
+    <div class="kn-k">Cloud spend / day</div>
+    <div class="kn-v {{ 'kn-warn' if p.value_cloud_day > 0 }}">{{ p.value_cloud_day|fmt_money }}</div>
+    <div class="kn-s">{{ f.spilled_pct|round(0)|int }}% out of capacity · {{ f.leaked_pct|round(0)|int }}% wrong model</div>
   </div>
-  <div class="kpi">
-    <div class="k-label">Destroyed demand</div>
-    <div class="k-val {{ 'bad' if f.destroyed_pct >= 10 else ('warn' if f.destroyed_pct > 0 else '') }}">{{ f.destroyed_pct|round(0)|int }}%</div>
-    <div class="k-sub">{{ p.value_destroyed_day|fmt_money }}/day shelved</div>
+  {% else %}
+  <div>
+    <div class="kn-k">Served on your GPUs</div>
+    <div class="kn-v">{{ f.served_pct|round(0)|int }}%</div>
+    <div class="kn-s">of {{ f.total_tokens|fmt_num }} {{ unit }}/day · no cloud</div>
   </div>
-  <div class="kpi">
-    <div class="k-label">Fleet utilization</div>
-    <div class="k-val {{ 'good' if p.utilization >= 0.7 else ('warn' if p.utilization >= 0.3 else '') }}">{{ (p.utilization * 100)|round(0)|int }}%</div>
-    <div class="k-sub">{{ p.total_gpus_used }}/{{ p.total_gpus }} GPUs assigned</div>
+  {% endif %}
+  <div>
+    <div class="kn-k">Lost / day</div>
+    <div class="kn-v {{ 'kn-bad' if f.destroyed_pct >= 10 else ('kn-warn' if f.destroyed_pct > 0) }}">{{ p.value_destroyed_day|fmt_money }}</div>
+    <div class="kn-s">{{ f.destroyed_pct|round(0)|int }}% of {{ unit }}{% if not cloud_on %} · unserved demand is lost{% endif %}</div>
   </div>
-  <div class="kpi">
-    <div class="k-label">CO₂ / day</div>
-    <div class="k-val">{{ '%.1f'|format(p.co2_kg_day_total) }} kg</div>
-    <div class="k-sub">{{ '%.1f'|format(p.co2_g_per_task_avg * 1000) }} kg / M tasks avg</div>
+  <div>
+    <div class="kn-k">GPU cost / day</div>
+    <div class="kn-v sm">{{ p.cost_day|fmt_money }}</div>
+  </div>
+  <div>
+    <div class="kn-k">GPU utilization</div>
+    <div class="kn-v sm">{{ (p.utilization * 100)|round(0)|int }}% · {{ p.total_gpus_used }}/{{ p.total_gpus }} GPUs</div>
+  </div>
+  <div>
+    <div class="kn-k">CO₂ / day</div>
+    <div class="kn-v sm">{{ '%.1f'|format(p.co2_kg_day_total) }} kg</div>
   </div>
 </div>
+{% set opp = p.value_opportunity_day %}
+{% if opp > 0 %}
+<div class="kpi-fate" role="img" aria-label="Demand value per day by outcome">
+  {% for cls, v, name in [("served", p.value_served_day, "Served"), ("spilled", p.value_spilled_day, "Cloud"), ("leaked", p.value_leaked_day, "Wrong model"), ("destroyed", p.value_destroyed_day, "Lost")] %}
+  {% if v > 0 %}<span class="fate-seg {{ cls }}" style="flex:{{ v }};" title="{{ name }}: {{ v|fmt_money }}/day of {{ opp|fmt_money }}">{% if v / opp >= 0.12 %}{{ name }} {{ v|fmt_money }}{% endif %}</span>{% endif %}
+  {% endfor %}
+</div>
+{% endif %}

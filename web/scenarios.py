@@ -17,6 +17,12 @@ from planner_service import (
 from scenarios import (
     serialize_scenario,
 )
+from state import (
+    set_cloud_enabled,
+    set_price_driven_demand,
+    set_projection_choice,
+    set_projection_toggle,
+)
 from web.analytics import record_event
 from web.helpers import (
     _htmx_response,
@@ -60,7 +66,56 @@ def compare_duplicate():
 @scenarios_bp.route("/compare/close", methods=["POST"])
 def compare_close():
     clear_compare_state(_scope_id())
+    # Equal demand only means something next to a second config.
+    state = get_state(_scope_id())
+    if state is not None and not state.projection_include_latent:
+        set_projection_toggle(state, "projection_include_latent", True)
     return _tracked_htmx_response("compare_close")
+
+
+@scenarios_bp.route("/compare/equal-demand", methods=["POST"])
+def compare_equal_demand():
+    """Score A and B against the same demand (baseline only) or each against its own.
+
+    Latent demand activates with each deployment's internal price, so two configs
+    over identical use cases can report different total demand. Equal demand turns
+    latent activation off on both panels together.
+    """
+    equal = request.form.get("value") in ("on", "true", "1")
+    for state in (get_state(_scope_id()), get_compare_state(_scope_id())):
+        if state is not None:
+            set_projection_toggle(state, "projection_include_latent", not equal)
+    return _tracked_htmx_response("compare_equal_demand")
+
+
+@scenarios_bp.route("/cloud/toggle", methods=["POST"])
+def cloud_toggle():
+    """App-wide: with cloud off, demand the GPUs cannot serve is lost, in A and B."""
+    enabled = request.form.get("value") in ("on", "true", "1")
+    for state in (get_state(_scope_id()), get_compare_state(_scope_id())):
+        if state is not None:
+            set_cloud_enabled(state, enabled)
+    return _tracked_htmx_response("cloud_toggle")
+
+
+@scenarios_bp.route("/pricing/toggle", methods=["POST"])
+def pricing_toggle():
+    """Scenario-wide: demand reacts to internal prices (chargeback) or is the workload entered."""
+    enabled = request.form.get("value") in ("on", "true", "1")
+    for state in (get_state(_scope_id()), get_compare_state(_scope_id())):
+        if state is not None:
+            set_price_driven_demand(state, enabled)
+    return _tracked_htmx_response("pricing_toggle")
+
+
+@scenarios_bp.route("/gateway", methods=["POST"])
+def gateway_set():
+    """Scenario-wide: which cloud models take overflow, for A and B."""
+    value = request.form.get("value", "")
+    for state in (get_state(_scope_id()), get_compare_state(_scope_id())):
+        if state is not None:
+            set_projection_choice(state, "corpo_cloud", value)
+    return _tracked_htmx_response("gateway_set")
 
 
 @scenarios_bp.route("/session/reset", methods=["POST"])

@@ -119,6 +119,15 @@ def _mutations():
             lambda s: planner_service.set_model_artifact(s, model(s), s.models[0].artifact_id),
         ),
         ("state.set_model_spec", lambda s: S.set_model_spec(s, model(s), "ngram", 4)),
+        ("state.set_model_key", lambda s: S.set_model_key(s, model(s), "q35", "bf16")),
+        (
+            "planner_service.apply_model_swap",
+            lambda s: planner_service.apply_model_swap(s, model(s), "q35", "bf16"),
+        ),
+        (
+            "planner_service.apply_gpu_expansion",
+            lambda s: planner_service.apply_gpu_expansion(s, model(s), 1),
+        ),
         ("state.set_model_gpu_count", lambda s: S.set_model_gpu_count(s, model(s), 1)),
         ("state.set_model_gpu_pool", lambda s: S.set_model_gpu_pool(s, model(s), gpu(s))),
         ("state.set_model_strat", lambda s: S.set_model_strat(s, model(s), 2, 1, 1)),
@@ -129,6 +138,18 @@ def _mutations():
         ("state.add_project", lambda s: S.add_project(s)),
         ("state.set_project_name", lambda s: S.set_project_name(s, project(s), "Renamed")),
         ("state.set_project_kind", lambda s: S.set_project_kind(s, project(s), "coding")),
+        ("state.set_company_size", lambda s: S.set_company_size(s, 2500)),
+        ("state.set_tech_savviness", lambda s: S.set_tech_savviness(s, "high")),
+        ("state.set_cloud_enabled", lambda s: S.set_cloud_enabled(s, False)),
+        ("state.set_price_driven_demand", lambda s: S.set_price_driven_demand(s, True)),
+        (
+            "state.set_project_day_shape",
+            lambda s: S.set_project_day_shape(s, project(s), "flat"),
+        ),
+        (
+            "state.set_project_scale_locked",
+            lambda s: S.set_project_scale_locked(s, project(s), True),
+        ),
         (
             "state.set_project_field",
             lambda s: S.set_project_field(s, project(s), "difficulty", 0.8),

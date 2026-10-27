@@ -1,0 +1,21 @@
+{# Step 2 · Workload: use cases (each with when its demand arrives), then one
+   quiet line of derived figures. Scenario-wide switches live in the
+   Assumptions line. #}
+{% include "partials/use_cases_panel.html" %}
+
+{% if state.mode in ('data', 'embedding', 'embedquality', 'decision') %}
+  {% include "partials/task.html" %}
+{% endif %}
+
+{% set ep = ECON_B if panel == "B" else ECON_A %}
+{% set p = ep.p %}
+{# Same prefill basis as the model capacity probe: max(task_il, avg input). #}
+{% set prefix_basis = state.task_il if state.mode == 'data' else ([state.task_il, avg_dist(state.in_dist, INPUT_BUCKETS)]|max) %}
+{% if state.projects|selectattr("workload_kind", "equalto", "llm")|list %}
+<div class="wl-figs M" title="LLM prompt averages over generative use cases, weighted by demand. Prefix reuse: share of prompt tokens served from the prefix cache, so prefill only processes the rest. Interactive peak: the busiest hour of interactive demand against its daily average. Batch work runs in the hours interactive traffic leaves free.">
+  LLM prompt {{ p.workload_in_len|fmt_num }} in · {{ p.workload_out_len|fmt_num }} out
+  · prefix reuse {{ (state.prefix_hit_rate * 100)|round|int }}% → prefill {{ effective_prefill_length(prefix_basis|int, state.prefix_hit_rate)|fmt_int }} of {{ prefix_basis|int|fmt_int }} tok
+  · interactive peak {{ "%.2f"|format(p.peak_factor) }}× its average
+  · batch {{ (p.batch_share * 100)|round|int }}% fills quiet hours
+</div>
+{% endif %}

@@ -515,6 +515,114 @@ PROJECT_PRESETS = [
     },
 ]
 
+# Native stages are independent workloads: pair them with the corresponding LLM
+# stage when sizing a pipeline. Starting volumes and prices are scenario inputs.
+for _key, _name, _kind, _volume, _multiplier, _unit, _batch, _price, _hint in (
+    (
+        "meeting_transcription",
+        "Meeting & call transcription",
+        "asr",
+        100,
+        3600,
+        "audio hours/day",
+        True,
+        200.0,
+        "Pair with Meeting notes assistant or Contact-center QA at the same recorded hours/day.",
+    ),
+    (
+        "live_captions",
+        "Live captions & voice intake",
+        "asr",
+        100,
+        3600,
+        "audio hours/day",
+        False,
+        200.0,
+        "Concurrent live streams follow the selected arrival pattern; pair with Customer service agent for voice intake.",
+    ),
+    (
+        "search_indexing",
+        "Search corpus indexing",
+        "embedding",
+        100_000,
+        512,
+        "chunks/day",
+        True,
+        0.50,
+        "Pair with Enterprise search assistant or Decade inbox knowledge base; count overlap and re-indexing.",
+    ),
+    (
+        "search_queries",
+        "Search query embeddings",
+        "embedding",
+        150_000,
+        64,
+        "queries/day",
+        False,
+        0.50,
+        "Pair with Enterprise search assistant at the same queries/day; vector database search is separate.",
+    ),
+    (
+        "ticket_routing",
+        "Ticket intent routing",
+        "decision",
+        80_000,
+        512,
+        "decisions/day",
+        False,
+        0.50,
+        "Fixed-label intent and priority scoring before Customer service agent; one question with four options per request.",
+    ),
+    (
+        "content_moderation",
+        "Content moderation decisions",
+        "decision",
+        100_000,
+        1024,
+        "decisions/day",
+        True,
+        0.50,
+        "Text-only allow/review/block/escalate scoring; one question with four options per request.",
+    ),
+):
+    PROJECT_PRESETS.append(
+        {
+            "key": _key,
+            "name": _name,
+            "workload_kind": _kind,
+            "difficulty": 0.0,
+            "tokens_day": _volume * _multiplier,
+            "scale_value": _volume,
+            "scale_kind": {
+                "model": "linear",
+                "label": "Recorded audio" if _kind == "asr" else "Items processed",
+                "unit": _unit,
+                "token_multiplier": _multiplier,
+                "min": 0,
+                "max": _volume * 10,
+                "step": 1 if _kind == "asr" else 100,
+                "formula": (
+                    "audio hours/day x 3600 audio seconds/hour"
+                    if _kind == "asr"
+                    else f"{_unit} x {_multiplier} formatted input tokens/item"
+                ),
+            },
+            "wtp_per_m": _price,
+            "requires": (),
+            "min_success_rate": 0.50,
+            "quality_floor": 0.0,
+            "batch_eligible": _batch,
+            "latent_jobs_day": 0.0,
+            "unlock_price_per_m": 0.0,
+            "in_pre": "Classify",
+            "out_pre": "Classify",
+            "scale_hint": _hint,
+        }
+    )
+
+for _preset in PROJECT_PRESETS:
+    _preset.setdefault("workload_kind", "llm")
+
 # Empirical prefix-token reuse priors by workload archetype.  These are not a
 # request-level cache-hit guarantee: they estimate the share of prompt tokens
 # that Automatic Prefix Caching can avoid prefilling for a stable production

@@ -1,6 +1,7 @@
+{# Hardware for one config: GPU pools, memory budget, engine tuning, per-GPU memory. #}
 <div class="panel">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;">
-    <h2 style="margin:0;">{{ label or 'Cluster' }}</h2>
+    <h2 style="margin:0;">Hardware{% if label %} · {{ label }}{% endif %}</h2>
     <div class="picker-wrap">
       <button class="acc sm" data-picker="gpu" aria-expanded="false" onclick="togglePicker(this, '/picker/gpu?panel={{ panel }}')">+ Add GPU</button>
     </div>
@@ -30,10 +31,13 @@
     </div>
     <div style="display:flex;align-items:center;gap:4px;margin-top:4px;">
       <label class="T tip" for="gpu-cost-{{ panel }}-{{ gp.uid }}" style="white-space:nowrap;" title="Amortized total cost of ownership per GPU-hour: hardware capex spread over its useful life, plus power, cooling, datacenter, and ops. New pools are pre-filled from the researched catalog default; edit it to match your quote, or set 0 to suppress economics.">TCO $/GPU·hr</label>
-      <input id="gpu-cost-{{ panel }}-{{ gp.uid }}" type="number" min="0" max="100" step="0.01" name="value"
-             style="width:72px;font-size:11px;"
+      {# Text, not type=number: number inputs render the browser locale's decimal
+         comma ("1,32"). The route accepts either separator; posting on change
+         keeps a half-typed "1," from re-rendering under the cursor. #}
+      <input id="gpu-cost-{{ panel }}-{{ gp.uid }}" type="text" inputmode="decimal" name="value"
+             style="width:60px;font-size:11px;font-family:var(--mono);"
              value="{{ "%.2f"|format(gp.cost_per_gpu_hour) }}"
-             hx-post="/gpu/cost" hx-target="#main-content" hx-trigger="input changed delay:10ms"
+             hx-post="/gpu/cost" hx-target="#main-content" hx-trigger="change"
              hx-vals='{"panel":"{{ panel }}","uid":"{{ gp.uid }}"}' />
       {% if gp.cost_per_gpu_hour == 0 and gpu.default_tco_per_gpu_hour == 0 %}
       <span class="T" title="{{ gpu.price_note }}">Quote required · cost excluded</span>
@@ -150,70 +154,5 @@
       {% endfor %}
     </div>
   </details>
-</div>
-
-<div class="panel">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;">
-    <h2 style="margin:0;">Models</h2>
-    <div style="display:flex;align-items:center;gap:4px;">
-      <select id="auto-strategy-{{ panel }}" class="auto-strategy-select" name="strategy"
-              title="Automatic model-selection strategy"
-              {{ 'disabled' if state.gpus|length == 0 else '' }}>
-        {% for key, label, desc in AUTO_MODEL_STRATEGIES %}
-        <option value="{{ key }}"
-                title="{{ desc }}"
-                {{ 'selected' if state.auto_strategy == key else '' }}>{{ label }}</option>
-        {% endfor %}
-      </select>
-      <button class="ghost sm"
-              type="button"
-              hx-post="/model/auto"
-              hx-target="#main-content"
-              hx-include="#auto-strategy-{{ panel }}"
-              hx-vals='{"panel":"{{ panel }}"}'
-              title="Recommend and immediately replace this panel's model set using the selected strategy. Duplicate to Compare first if you want to preserve the current set."
-              aria-label="Recommend models and replace the current model set"
-              {{ 'disabled' if state.gpus|length == 0 else '' }}>Recommend models</button>
-      <div class="picker-wrap">
-        <button class="acc sm" data-picker="model" aria-expanded="false" onclick="togglePicker(this, '/picker/model?panel={{ panel }}')" {{ 'disabled' if state.gpus|length == 0 else '' }}>+ Add model</button>
-      </div>
-    </div>
-  </div>
-  <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(250px,1fr));">
-  {% for info in get_model_infos(state) %}
-    {% set am = info.am %}
-    {% set m = info.model %}
-    {% include "partials/model_card.html" %}
-  {% endfor %}
-  </div>
   {% include "partials/membar.html" %}
-  {% if state.auto_mode and state.auto_excluded %}
-  <div style="margin-top:8px;padding-top:6px;border-top:1px solid var(--border);">
-    <span class="T" style="display:block;margin-bottom:4px;color:var(--fg3);">Excluded from auto</span>
-    <div style="display:flex;flex-wrap:wrap;gap:4px;">
-      {% for key in state.auto_excluded %}
-        {% if key in MODELS %}
-        <div style="display:flex;align-items:center;gap:4px;padding:2px 6px;border:1px solid var(--border);border-radius:4px;opacity:0.5;">
-          <span class="T">{{ MODELS[key].name }}</span>
-          <button class="ghost sm" aria-label="Allow {{ MODELS[key].name }} in recommendations" title="Allow {{ MODELS[key].name }} in recommendations" style="padding:1px 7px;"
-                  hx-post="/model/auto-reallow"
-                  hx-target="#main-content"
-                  hx-vals='{"panel":"{{ panel }}","key":"{{ key }}"}'>✕</button>
-        </div>
-        {% endif %}
-      {% endfor %}
-    </div>
-  </div>
-  {% endif %}
 </div>
-
-{% include "partials/use_cases_panel.html" %}
-
-{% set prefix_basis = state.task_il if state.mode == 'data' else (state.task_il if state.task_il >= avg_dist(state.in_dist, INPUT_BUCKETS) else avg_dist(state.in_dist, INPUT_BUCKETS)) %}
-{% with input_len=prefix_basis %}
-  {% include "partials/prefix_reuse.html" %}
-{% endwith %}
-
-{% if state.mode in ('data', 'embedding', 'embedquality', 'decision') %}
-  {% include "partials/task.html" %}
-{% endif %}

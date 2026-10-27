@@ -29,6 +29,7 @@ from data import (
     model_profile_success_rate,
     required_quality,
 )
+from data.use_case_modalities import model_workload_kind
 from deployment import Deployment, ResolvedAssignment
 from state import (
     DEFAULT_AUTO_MODEL_STRATEGY,
@@ -363,12 +364,22 @@ def resolve_deployment(state: PlannerState) -> Deployment:
 
 
 def _model_serves_project(model: Model, project: Project) -> bool:
-    if (
-        getattr(model, "is_asr_model", False)
-        or model.is_decision_model
-        or getattr(model, "embedding_profile", None) is not None
-    ):
+    if model_workload_kind(model) != project.workload_kind:
         return False
+    if project.workload_kind != "llm":
+        if model.is_asr_model:
+            if model.realtime_profile is None or (
+                not project.batch_eligible and not model.realtime_profile.streaming
+            ):
+                return False
+        else:
+            profile = model.decision_profile if model.is_decision_model else model.embedding_profile
+            if (
+                profile is None
+                or float(project.scale_kind["token_multiplier"]) > profile.max_sequence_length
+            ):
+                return False
+        return project.requires <= model.capabilities
     domain = getattr(project, "quality_domain", "general")
     weights = getattr(project, "quality_weights", None)
     return (

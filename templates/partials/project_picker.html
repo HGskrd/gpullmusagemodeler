@@ -5,8 +5,8 @@
 <div class="item"
      hx-post="/project/add" hx-target="#main-content"
      hx-vals='{"panel":"{{ panel }}","preset":"{{ preset.key }}"}'>
-  <span>{{ preset.name }}</span>
-  <span class="T">AA {{ "%.1f"|format(quality_to_aa_intelligence(preset.difficulty)) }} · {{ format_scale_value(preset.scale_value, scale_kind) }} {{ scale_kind.unit }} start</span>
+  <span>{{ preset.name }} · {{ preset.get("workload_kind", "llm")|upper }}</span>
+  <span class="T">{% if preset.get("workload_kind", "llm") == "llm" %}AA {{ "%.1f"|format(quality_to_aa_intelligence(preset.difficulty)) }}{% else %}Capacity only{% endif %} · {{ format_scale_value(preset.scale_value, scale_kind) }} {{ scale_kind.unit }} start</span>
 </div>
 {% endfor %}
 <div class="cat">Bulk</div>

@@ -139,6 +139,7 @@ def use_case_definition_set():
         "scale_unit",
         "scale_formula",
         "quality_domain",
+        "workload_kind",
         "in_pre",
         "out_pre",
     }:

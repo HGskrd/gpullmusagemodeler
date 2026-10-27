@@ -143,7 +143,10 @@ class DomainQualityPlannerTests(unittest.TestCase):
         # project is served and the routing preference under test is never
         # exercised.  Six H100s at TP2xPP3 stopped being scarce once pipelined
         # decode throughput was corrected, so shrink the pool instead of
-        # weakening the assertion below.
+        # weakening the assertion below. Hour-by-hour serving lets lower-priority
+        # chat use the quiet hours coding leaves free, so scarcity now comes from a
+        # larger company (3x the reference demand) and the invariant is priority:
+        # coding is served well ahead of generic chat.
         state = create_default_state()
         state.gpus = [GpuPool(1, "H100", 4, cost_per_gpu_hour=1.32)]
         state.models = [ModelAssignment(2, "laguna-s-2-1", 1, 4, 2, 1, "bf16", pp=2)]
@@ -152,12 +155,14 @@ class DomainQualityPlannerTests(unittest.TestCase):
             for project in state.projects
             if project.kind_key in {"chatbot", "coding", "meeting_notes"}
         ]
+        state.company_size = 300
 
         projection = compute_revenue_projection(state, include_recommendations=False)
         rows = {row["project"].kind_key: row for row in projection["projects"]}
 
-        self.assertGreater(rows["coding"]["served_pct"], 0.0)
-        self.assertLess(rows["chatbot"]["served_pct"], 1e-9)
+        self.assertGreater(rows["coding"]["served_pct"], 80.0)
+        self.assertLess(rows["chatbot"]["served_pct"], 50.0)
+        self.assertGreater(rows["coding"]["served_pct"], rows["chatbot"]["served_pct"] + 30.0)
         self.assertEqual(
             rows["coding"]["quality_mix_label"],
             "Coding 70% · Reasoning 20% · Long context 10%",

@@ -23,6 +23,11 @@
     <div class="flex" id="compareControls" style="gap:6px;">
       {% include "partials/compare_controls.html" %}
     </div>
+    <span class="scenario-actions" aria-label="Scenario actions">
+      <button type="button" class="ghost sm" hx-post="/session/reset" hx-target="#main-content">Start blank</button>
+      <button type="button" class="ghost sm" onclick="exportScenario()">Export</button>
+      <button type="button" class="ghost sm" onclick="document.getElementById('scenarioImportInput').click()">Import</button>
+    </span>
     <nav class="app-tabs" aria-label="Primary">
       <a href="{{ url_for('planner.index') }}" class="on">Calculator</a>
       <a href="{{ url_for('planner.explainer') }}" title="What this calculator does and how to use it">User guide</a>
@@ -31,54 +36,38 @@
   </div>
 </div>
 
-<div class="workflow-bar" aria-label="Planner workflow">
-  <span class="T"><strong style="color:var(--fg0);">Starts with an example scenario.</strong> Replace the sample assumptions, or start from a blank planner.</span>
-  <nav class="workflow-links" aria-label="Jump to planner section">
-    <a href="#main-content">1. Configure</a>
-    <a href="#performance-results">2. Performance</a>
-    <a href="#projectionContent">3. Demand &amp; economics</a>
-  </nav>
-  <div class="workflow-actions" aria-label="Scenario actions">
-    <button type="button" class="ghost sm" hx-post="/session/reset" hx-target="#main-content">Start blank</button>
-    <button type="button" class="ghost sm" onclick="exportScenario()">Export scenario</button>
-    <button type="button" class="ghost sm" onclick="document.getElementById('scenarioImportInput').click()">Import scenario</button>
-    <input id="scenarioImportInput" type="file" accept="application/json,.json" hidden onchange="importScenario(this)" />
-  </div>
-</div>
+{% include "partials/assumptions_bar.html" %}
+<input id="scenarioImportInput" type="file" accept="application/json,.json" hidden onchange="importScenario(this)" />
 
 <div id="main-content" tabindex="-1" aria-label="Planner configuration">
   {% block content %}{% endblock %}
 </div>
 
-<h2 id="performance-results" class="section-heading">Performance results</h2>
-<div class="tabs" id="modeTabs" style="margin-top:6px;" role="group" aria-label="Performance chart view">
+<div class="step-head step-result" id="performance-results">
+  <span class="step-n">3</span><span class="step-title">Technical result</span>
+  <span class="step-sum">throughput, memory and capacity · no prices</span>
+</div>
+{% include "partials/tech_summary.html" %}
+<div class="tabs" id="modeTabs" style="margin-top:10px;" role="group" aria-label="Performance chart view">
   {% include "partials/mode_tabs.html" %}
 </div>
 
-<div style="position:relative;width:100%;height:370px;margin-top:4px;">
+<p id="chartCaption" class="T chart-caption" hidden></p>
+<div id="chartControls" class="dc-ctl" hidden></div>
+<div style="position:relative;width:100%;height:400px;margin-top:4px;">
   <div id="mc" role="img" aria-label="Performance estimate chart. A text summary follows for assistive technology."></div>
 </div>
+<div id="chartReadout" class="dc-readout" hidden></div>
 <div id="chartAccessibleSummary" class="sr-only" role="region" aria-label="Performance chart text summary"></div>
 
 {% include "partials/revenue_projection.html" %}
 
-<p class="T" style="margin-top:6px;">Roofline estimates · continuous-batching approximation · separate prefill, decode, and embedding encoder views · KV capacity anchored to requested per-accelerator memory minus weights minus profiled non-KV runtime memory · MoE uses activated params for core compute plus an adjustable expert-imbalance penalty · empirical per-use-case prefix reuse for prefill-sensitive views · explicit prefill/decode interference blend · paged-KV runtime overhead and residual KV slack modeled · cross-node TP warning.</p>
-
-<details class="method-note">
-  <summary class="T">Calibration note</summary>
-  <p class="T" style="max-width:96ch;">
-    For vLLM deployments, missing realism is visible in runtime metrics such as running requests, KV-cache usage, prefix-cache hits, prompt tokens, and generation tokens; async scheduling and CUDA-graph capture sizing also move real latency and throughput. For other runtimes, use the analogous scheduler and cache metrics. In practice, fit the planner's knobs against representative measurements instead of refining the closed-form model in isolation.
-  </p>
-</details>
-
-<details class="method-note privacy-note" id="scenario-privacy">
-  <summary class="T">Scenario storage and privacy</summary>
-  <p class="T" style="max-width:96ch;">
+<details class="foot-privacy T" id="scenario-privacy">
+  <summary>Privacy</summary>
+  <p>
     This planner stores your current scenario and change history under a random browser identifier so the service can maintain your session and understand how the calculator is used. Scenario snapshots can include hardware, model, cost, and use-case assumptions. With your first visit it also records your approximate country and city (from our CDN), the site that referred you, campaign tags, device type, and browser language; it never stores your IP address. Avoid entering confidential names or data you do not want stored by this service.
   </p>
-  <div class="privacy-actions">
-    <button type="button" class="ghost sm" onclick="deleteStoredScenarios(this)">Delete my stored scenarios</button>
-  </div>
+  <button type="button" class="ghost sm" onclick="deleteStoredScenarios(this)">Delete my stored scenarios</button>
 </details>
 
 <script src="{{ url_for('static', filename='app.js') }}" defer></script>

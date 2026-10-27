@@ -86,6 +86,7 @@ def swaps():
         gpu_recs=p["recommendations"],
         view=request.args.get("view", "table"),
         panel=panel,
+        cloud_on=bool(getattr(state, "cloud_enabled", True)),
     )
 
 
