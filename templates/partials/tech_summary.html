@@ -1,0 +1,52 @@
+{# Step 3 · technical result scorecard, one row per deployed model, grouped by
+   the three technical questions. Capacity and saturation come from the
+   projection; speeds from the same decode model as the chart below. No prices:
+   those belong to step 4. #}
+{% set speed_top = 1000 %}
+{% macro speed_pos(v) %}{{ ((([v, 10]|max)|log10 - 1) / 2 * 100)|round(1) }}{% endmacro %}
+<div id="techSummary" class="tech-summary" {% if oob %}hx-swap-oob="outerHTML"{% endif %}>
+  <div class="tsc" role="table" aria-label="Technical result per model">
+    <div></div><div></div>
+    <div class="tsc-g" style="grid-column:span 3">Can it keep up</div>
+    <div class="tsc-g" style="grid-column:span 2">How fast for users</div>
+    <div class="tsc-g" style="grid-column:span 2">How well it fits</div>
+    <div class="tsc-h"></div><div class="tsc-h">Model</div>
+    <div class="tsc-h">Status</div><div class="tsc-h tsc-r" title="Tokens per day this deployment can serve at full load around the clock">Tokens/day</div><div class="tsc-h tsc-r">Peak req/s</div>
+    <div class="tsc-h tsc-r" title="Prefill time for one user's typical prompt">First token</div>
+    <div class="tsc-h">tok/s per user · alone ○ → full load ●</div>
+    <div class="tsc-h">Memory per GPU · weights · runtime · KV</div><div class="tsc-h tsc-r">Max users</div>
+    {% for panel, st, ep in [("A", A, ECON_A)] + ([("B", B, ECON_B)] if B else []) %}
+      {% if B %}<div class="tsc-cfg">Config {{ panel }}</div>{% endif %}
+      {% for r in tech_scorecard(st, ep) %}
+      {% set m = r.info.model %}{% set am = r.info.am %}
+      <div class="tsc-c"><span class="dot" style="background:{{ m.color }};"></span></div>
+      <div class="tsc-c" title="{{ m.name }}"><b class="ell">{{ m.name }}</b><span class="tsc-sub M">{{ am.gpu_count }}× {{ short_gpu_label(r.info.gpu.name) }} · {{ layout_label(am.tp, am.pp, am.dp) }} · {{ PRECISION_LABELS[am.prec] }}</span></div>
+      <div class="tsc-c">{% if r.saturated %}<span class="tsc-pill sat" title="Fully booked in the busiest hours; demand beyond that goes to cloud or is lost. {{ (r.utilization * 100)|round|int }}% busy over the whole day.">SATURATED</span>{% elif r.capacity > 0 %}<span class="tsc-pill ok" title="Share of capacity used">{{ (r.utilization * 100)|round|int }}% used</span>{% else %}<span class="tsc-pill off">no capacity</span>{% endif %}</div>
+      <div class="tsc-c tsc-r M">{{ r.capacity|fmt_num }}</div>
+      <div class="tsc-c tsc-r M">{{ "%.1f"|format(r.peak_rps) }}</div>
+      <div class="tsc-c tsc-r M" title="Prefill of a {{ r.probe_len|fmt_int }}-token prompt for one user">{% if r.ttft is not none %}{% if r.ttft < 1 %}{{ (r.ttft * 1000)|round|int }} ms{% else %}{{ "%.2f"|format(r.ttft) }} s{% endif %}{% else %}—{% endif %}</div>
+      <div class="tsc-c">
+        {% if r.speed_alone and r.speed_full %}
+        <span class="tsc-rng" title="Decode tok/s each user sees: {{ r.speed_alone|round|int }} alone, {{ r.speed_full|round|int }} with all {{ r.slots }} KV slots busy">
+          <span class="ln" style="left:{{ speed_pos(r.speed_full) }}%;width:{{ (speed_pos(r.speed_alone)|float - speed_pos(r.speed_full)|float)|round(1) }}%;"></span>
+          <span class="d full" style="left:{{ speed_pos(r.speed_full) }}%;background:{{ m.color }};"></span>
+          <span class="d alone" style="left:{{ speed_pos(r.speed_alone) }}%;border-color:{{ m.color }};"></span>
+        </span>
+        <span class="tsc-v M">{{ r.speed_alone|round|int }} → {{ r.speed_full|round|int }}</span>
+        {% else %}<span class="T">—</span>{% endif %}
+      </div>
+      <div class="tsc-c">
+        <span class="tsc-mem" title="Per GPU of {{ r.gpu_mem_gb|round|int }} GB: weights {{ '%.1f'|format(r.weights_gb) }} · runtime {{ '%.1f'|format(r.runtime_gb) }} · KV {{ '%.1f'|format(r.kv_gb) }} · budget {{ (st.mu * 100)|round|int }}%">
+          <i style="width:{{ ([r.weights_gb / r.gpu_mem_gb * 100, 100]|min)|round(2) }}%;background:{{ m.color }};"></i>
+          <i style="width:{{ (r.runtime_gb / r.gpu_mem_gb * 100)|round(2) }}%;background:var(--amber);"></i>
+          <i style="width:{{ (r.kv_gb / r.gpu_mem_gb * 100)|round(2) }}%;background:{{ m.color }};opacity:.35;"></i>
+          <span class="bud" style="left:{{ st.mu * 100 }}%;"></span>
+        </span>
+        <span class="tsc-v M">{{ "%.1f"|format(r.weights_gb) }} · {{ "%.1f"|format(r.runtime_gb) }} · {{ r.kv_gb|round|int }} GB</span>
+      </div>
+      <div class="tsc-c tsc-r M">{{ r.slots|fmt_int if r.slots else '—' }}</div>
+      {% endfor %}
+    {% endfor %}
+  </div>
+  <div class="T tsc-foot">● full load = every KV slot busy · first token = prefill of one typical prompt · dashed lines in the chart = Config B</div>
+</div>

@@ -85,7 +85,7 @@
   bind("q", "q"); bind("f-persona", "persona"); bind("f-country", "country"); bind("f-eng", "eng", "checked"); bind("f-ret", "ret", "checked"); bind("f-sort", "sort");
   filterBar($("filters"), renderList);
 
-  const MODE_LABEL = { userpareto: "User Pareto", processingpareto: "Processing Pareto", embedquality: "Embedding", asrquality: "ASR" };
+  const MODE_LABEL = { userpareto: "User Pareto", usercapacity: "User Capacity", processingpareto: "Processing Pareto", embedquality: "Embedding", asrquality: "ASR" };
   const place = (v) => esc(v.city ? `${v.city}${v.country ? ", " + countryName(v.country) : ""}` : countryName(v.country));
 
   function lastPlan(v) { return [...v.sessions].reverse().find((s) => s.final && (s.final.gpus.length || s.final.models.length)); }

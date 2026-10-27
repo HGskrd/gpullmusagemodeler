@@ -15,6 +15,7 @@ from data import (
     effective_quality,
     quality_to_aa_intelligence,
 )
+from data.use_case_modalities import model_workload_kind, workload_unit
 from engine.economics import compute_revenue_projection
 from presentation.formatting import fmt_money, fmt_num
 from presentation.model_cards import get_model_info
@@ -60,6 +61,9 @@ def _projection_diagnostic(row: dict) -> str:
 
 def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
     p = compute_revenue_projection(state)
+    native = any(proj.workload_kind != "llm" for proj in state.projects)
+    unit = "work units" if native else "tokens"
+    short_unit = "units" if native else "tok"
     policy = cloud_policy.summary()
     f = p["fates"]
     lines = [
@@ -74,6 +78,10 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
         f"- Profiled non-KV runtime memory: {state.profiled_non_kv_gb:g} GB/GPU",
         f"- Empirical prefix-token reuse (portfolio average): {state.prefix_hit_rate * 100:.0f}%",
     ]
+    if native:
+        lines.append(
+            "- Native stages estimate capacity only; accuracy/retries are uncalibrated. ASR work units are audio seconds; embedding/decision units are input tokens. Mixed totals are accounting only, not comparable tasks. Pipeline dependencies are not simulated."
+        )
     if state.spec_acceptance > 0:
         lines.append(
             f"- Speculative acceptance override: {state.spec_acceptance * 100:.0f}% per-token alpha for all drafters"
@@ -81,6 +89,16 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
     gateway = cloud_policy.corpo_presets().get(getattr(state, "corpo_cloud", ""), {})
     lines.append(
         f"- Cloud gateway: {gateway.get('label', getattr(state, 'corpo_cloud', 'current'))}"
+        + ("" if getattr(state, "cloud_enabled", True) else " (cloud fallback off)")
+    )
+    lines.append(
+        "- Demand: "
+        + (
+            "price-driven (latent demand and willingness to pay apply)"
+            if getattr(state, "price_driven_demand", False)
+            else "workload as entered"
+        )
+        + "; served hour by hour, batch use cases fill free hours"
     )
     if state.auto_excluded:
         excluded = [MODELS[key].name if key in MODELS else key for key in state.auto_excluded]
@@ -206,13 +224,13 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
             f"- Owner margin: {fmt_money(p['margin_day'])}/day after {fmt_money(p['cost_day'])}/day cluster cost"
             if p["cost_day"] > 0
             else "- Owner margin: set TCO $/GPU-hr to see",
-            f"- Demand: {fmt_num(f['total_tokens'])} tokens/day across {len(state.projects)} use cases",
+            f"- Demand: {fmt_num(f['total_tokens'])} {unit}/day across {len(state.projects)} use cases",
             f"  baseline {fmt_num(p['baseline_tokens_day'])} + latent active {fmt_num(p['latent_active_tokens_day'])}",
-            f"- Served internally: {_fmt_pct(f['served_pct'])} ({fmt_num(f['served_tokens'])} tok)",
-            f"- Spilled to cloud: {_fmt_pct(f['spilled_pct'])} ({fmt_num(f['spilled_tokens'])} tok)",
-            f"- Leaked to cloud: {_fmt_pct(f['leaked_pct'])} ({fmt_num(f['leaked_tokens'])} tok)",
+            f"- Served internally: {_fmt_pct(f['served_pct'])} ({fmt_num(f['served_tokens'])} {short_unit})",
+            f"- Spilled to cloud: {_fmt_pct(f['spilled_pct'])} ({fmt_num(f['spilled_tokens'])} {short_unit})",
+            f"- Leaked to cloud: {_fmt_pct(f['leaked_pct'])} ({fmt_num(f['leaked_tokens'])} {short_unit})",
             f"- Cloud spend lost from on-prem: {fmt_money(p['value_cloud_day'])}/day",
-            f"- Destroyed: {_fmt_pct(f['destroyed_pct'])} ({fmt_num(f['destroyed_tokens'])} tok)",
+            f"- Destroyed: {_fmt_pct(f['destroyed_pct'])} ({fmt_num(f['destroyed_tokens'])} {short_unit})",
             f"- Token coverage: {_fmt_pct(p['token_coverage'] * 100)}",
             f"- Value capture: {_fmt_pct(p['value_capture_rate'] * 100)}",
             f"- Revenue multiple: {p['revenue_multiple']:.2f}x"
@@ -263,13 +281,21 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
                 f"{_fmt_pct(row['spilled_pct'] + row['leaked_pct'])} to cloud, "
                 f"{_fmt_pct(row['destroyed_pct'])} destroyed"
             )
-            lines.append(
-                f"- {proj.name}: {row.get('quality_mix_label', row.get('quality_domain_label', 'General'))} quality mix, "
-                f"AA difficulty index {quality_to_aa_intelligence(proj.difficulty):.1f}, SLO {round(row['min_success_rate'] * 100)}%, "
-                f"floor Q {row.get('quality_floor', 0.0):.2f}, "
-                f"empirical prefix reuse {row['prefix_hit_rate'] * 100:.0f}%, "
-                f"WTP ${proj.wtp_per_m:.2f}/M; {cloud}; {fate}."
-            )
+            if proj.workload_kind != "llm":
+                lines.append(
+                    f"- {proj.name}: {proj.workload_kind.upper()} capacity only; "
+                    f"task accuracy/retries uncalibrated, no LLM quality gate; "
+                    f"{row['tokens_day']:,.0f} {row['workload_unit']}/day, "
+                    f"WTP ${proj.wtp_per_m:.2f}/M {row['workload_unit']}; {cloud}; {fate}."
+                )
+            else:
+                lines.append(
+                    f"- {proj.name}: {row.get('quality_mix_label', row.get('quality_domain_label', 'General'))} quality mix, "
+                    f"AA difficulty index {quality_to_aa_intelligence(proj.difficulty):.1f}, SLO {round(row['min_success_rate'] * 100)}%, "
+                    f"floor Q {row.get('quality_floor', 0.0):.2f}, "
+                    f"empirical prefix reuse {row['prefix_hit_rate'] * 100:.0f}%, "
+                    f"WTP ${proj.wtp_per_m:.2f}/M; {cloud}; {fate}."
+                )
             parts = []
             if row["any_served"]:
                 parts.extend(
@@ -302,6 +328,14 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
                 else ("IDLE" if m["runnable"] and m["utilization"] < 0.05 else "OK")
             )
             price = f"${m['internal_pm']:.2f}/M" if m["runnable"] and m["internal_pm"] > 0 else "-"
+            kind = model_workload_kind(m["model"])
+            if kind != "llm":
+                lines.append(
+                    f"- {m['name']}: {kind.upper()} capacity only, {m['gpu_count']} GPUs, "
+                    f"placed {fmt_num(m['served_tokens'])} {workload_unit(kind)}/day, "
+                    f"util {m['utilization'] * 100:.0f}%, {status}; shape-specific capacity, quality uncalibrated"
+                )
+                continue
             lines.append(
                 f"- {m['name']}: Q {m['effective_quality'] * 100:.0f}% effective, {m['gpu_count']} GPUs, "
                 f"cap {fmt_num(m['daily_tokens_cap'])} tok/day, placed {fmt_num(m['served_tokens'])}, "

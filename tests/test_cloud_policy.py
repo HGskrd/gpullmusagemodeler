@@ -80,9 +80,28 @@ class CloudPolicyTests(unittest.TestCase):
         cloud_policy.configure(
             cloud_policy.validate_policy(
                 {
-                    "allowed_models": ["gemini-flash-lite"],
+                    "allowed_models": ["kimi-k3"],
                 }
             )
+        )
+
+        # Kimi K3 lists its capabilities, so a capability it lacks blocks it.
+        cloud, price_per_m = _cloud_price_per_m_in_preset(
+            difficulty=0,
+            min_success=0.5,
+            quality_floor=0,
+            profile={"in_len": 1000, "out_len": 100, "tokens_per_request": 1100},
+            prefix_hit_rate=0,
+            preset_name="with_kimi",
+            required_capabilities=frozenset({"capability-not-in-catalog"}),
+        )
+
+        self.assertIsNone(cloud)
+        self.assertTrue(math.isinf(price_per_m))
+
+    def test_cloud_entry_without_capability_data_is_unverified_not_excluded(self):
+        cloud_policy.configure(
+            cloud_policy.validate_policy({"allowed_models": ["gemini-flash-lite"]})
         )
 
         cloud, price_per_m = _cloud_price_per_m_in_preset(
@@ -92,11 +111,12 @@ class CloudPolicyTests(unittest.TestCase):
             profile={"in_len": 1000, "out_len": 100, "tokens_per_request": 1100},
             prefix_hit_rate=0,
             preset_name="current",
-            required_capabilities=frozenset({"capability-not-in-catalog"}),
+            required_capabilities=frozenset({"tools"}),
         )
 
-        self.assertIsNone(cloud)
-        self.assertTrue(math.isinf(price_per_m))
+        self.assertIsNotNone(cloud)
+        self.assertTrue(cloud["capabilities_unverified"])
+        self.assertFalse(math.isinf(price_per_m))
 
     def test_cloud_routing_enforces_combined_context_and_output_limits(self):
         cloud = {
@@ -264,7 +284,11 @@ class CloudPolicyTests(unittest.TestCase):
             )
         )
 
-        response = create_test_app().test_client().get("/")
+        client = create_test_app().test_client()
+        headers = {"X-Tab-ID": "gateway-render"}
+        # The gateway picker only shows with cloud fallback on (off by default).
+        client.post("/cloud/toggle", data={"value": "on"}, headers=headers)
+        response = client.get("/", headers=headers)
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Negotiated gateway", response.data)

@@ -46,6 +46,7 @@ from data import (
     validate_runtime,
     validate_settings,
 )
+from data.use_case_modalities import normalize_workload_kind
 
 _uid_counter = 0
 _uid_lock = threading.Lock()
@@ -67,10 +68,11 @@ ALLOWED_CAPABILITIES = frozenset(MODEL_CAPABILITIES)
 ALLOWED_PROJECT_KINDS = frozenset(p["key"] for p in PROJECT_PRESETS) | {"custom"}
 VISIBLE_PLOT_MODES = (
     ("userpareto", "User Pareto"),
+    ("usercapacity", "User Capacity"),
     ("processingpareto", "Processing Pareto"),
     ("embedquality", "Embedding Quality"),
     ("asrquality", "ASR Quality"),
-    ("decision", "Decision throughput"),
+    ("decision", "Decision response time"),
 )
 DEFAULT_PLOT_MODE = VISIBLE_PLOT_MODES[0][0]
 LEGACY_PLOT_MODE_REDIRECTS = {"realtime": "asrquality", "embedding": "embedquality"}
@@ -230,7 +232,14 @@ class Project:
     # Built-in use-case definition this instance follows. "custom" means the card owns
     # its definition directly. Scale remains on the instance either way.
     kind_key: str = "custom"
-    batch_eligible: bool = False  # if True, batch-shiftable off-peak (works with night batching)
+    # Routing family; native stages use their own capacity model and units.
+    workload_kind: str = "llm"
+    # Fixed volume: ignores the config's company size and tech-savviness multiplier.
+    scale_locked: bool = False
+    # Batch work runs whenever GPUs are free (it fills the troughs left by interactive
+    # traffic); interactive work arrives on `day_shape`.
+    batch_eligible: bool = False
+    day_shape: str = DEFAULT_DAY_SHAPE
     # Hard capability gates: a model must supply ALL listed capabilities to be eligible.
     requires: frozenset[str] = frozenset()
     # Quality SLO: project rejects any candidate whose success_rate(model.quality, difficulty)
@@ -239,8 +248,8 @@ class Project:
     # Absolute effective-quality floor. This prevents tiny/uncertain models from clearing very
     # easy tasks only because the sigmoid threshold is low.
     quality_floor: float = 0.0
-    # Latent demand — hidden workload that only materializes when on-prem $/M falls at or
-    # below unlock_price_per_m. Hard threshold: the pool is all-or-nothing per routing pass.
+    # Latent demand — hidden workload that activates smoothly as on-prem $/M falls toward
+    # unlock_price_per_m. Only modeled when the state's price_driven_demand is on.
     latent_jobs_day: float = 0.0
     unlock_price_per_m: float = 0.0
     # Catalog-owned empirical prior: share of prompt tokens expected to hit
@@ -264,6 +273,7 @@ class Project:
             self.kind_key = "custom"
         if not isinstance(self.requires, frozenset):
             self.requires = frozenset(c for c in (self.requires or ()) if c in ALLOWED_CAPABILITIES)
+        self.workload_kind = normalize_workload_kind(self.workload_kind)
         self.difficulty = min(max(float(self.difficulty), 0.0), 1.0)
         self.scale_kind = _normalize_scale_kind({"scale_kind": getattr(self, "scale_kind", {})})
         if getattr(self, "scale_value", None) is None:
@@ -272,6 +282,7 @@ class Project:
             self.scale_value = max(0.0, float(self.scale_value))
             self.tokens_day = scale_value_to_tokens(self.scale_value, self.scale_kind)
         self.quality_floor = min(max(float(getattr(self, "quality_floor", 0.0)), 0.0), 1.0)
+        self.day_shape = normalize_day_shape(getattr(self, "day_shape", DEFAULT_DAY_SHAPE))
         self.prefix_hit_rate = min(max(float(getattr(self, "prefix_hit_rate", 0.0)), 0.0), 1.0)
         self.quality_domain = normalize_quality_domain(getattr(self, "quality_domain", "general"))
         self.quality_weights = normalize_quality_weights(
@@ -434,6 +445,21 @@ class PlannerState:
     projection_demand_level: float = 0.65
     # Night-batching lever (the "tick the box in LiteLLM" scenario).
     projection_night_batching: bool = False
+    # False scores demand at baseline only, ignoring latent demand the deployment's
+    # prices would activate. Compare mode sets it on both configs so A and B are
+    # judged against identical demand ("equal demand").
+    projection_include_latent: bool = True
+    # Off (default, hardware sizing): demand is the workload entered; local GPUs serve
+    # whatever they can, and leftovers go to cloud when a qualifying model exists.
+    # On (internal chargeback): latent demand activates with the internal price and use
+    # cases are only served at prices within their willingness to pay.
+    price_driven_demand: bool = False
+    # Global demand knob. Use-case volumes are entered for a COMPANY_SIZE_REFERENCE-person
+    # company at typical tech-savviness; unlocked use cases scale by size and savviness.
+    company_size: int = 100
+    tech_savviness: str = "typical"
+    # False models a deployment with no cloud fallback: demand the GPUs cannot serve is lost.
+    cloud_enabled: bool = False
     projection_night_discount: float = 0.30
     projection_batch_eligible: float = 0.35
     projection_elasticity: float = 2.0
@@ -792,6 +818,7 @@ def _normalize_use_case_def(raw: dict[str, Any], fallback_key: str | None = None
         "scale_value": max(0.0, float(scale_value)),
         "scale_kind": scale_kind,
         "wtp_per_m": _bounded_def_value("wtp_per_m", _payload_float(raw, "wtp_per_m", 1.0)),
+        "workload_kind": normalize_workload_kind(raw.get("workload_kind", "llm")),
         "requires": _coerce_requires(raw.get("requires", ())),
         "min_success_rate": _bounded_def_value(
             "min_success_rate", _payload_float(raw, "min_success_rate", 0.85)
@@ -922,7 +949,13 @@ def _apply_preset_definition(proj: Project, preset: dict, preserve_scale: bool =
     proj.difficulty = float(preset["difficulty"])
     proj.wtp_per_m = float(preset["wtp_per_m"])
     proj.scale_kind = copy.deepcopy(scale_kind)
-    proj.batch_eligible = bool(preset.get("batch_eligible", False))
+    proj.workload_kind = normalize_workload_kind(preset.get("workload_kind"))
+    # When the demand arrives is the row's own choice (the "When" column). The
+    # definition only seeds it when the row takes this kind, so re-syncing
+    # definitions on every request does not undo the user's pick.
+    if old_kind != preset["key"]:
+        proj.batch_eligible = bool(preset.get("batch_eligible", False))
+        proj.day_shape = normalize_day_shape(preset.get("day_shape", DEFAULT_DAY_SHAPE))
     proj.requires = frozenset(preset.get("requires", ()))
     proj.min_success_rate = float(preset.get("min_success_rate", 0.85))
     proj.quality_floor = float(preset.get("quality_floor", 0.0))
@@ -973,6 +1006,7 @@ def _add_project_from_preset(state: PlannerState, preset_key: str) -> Optional[P
         scale_value=scale_value,
         scale_kind=copy.deepcopy(scale_kind),
         kind_key=str(preset["key"]),
+        workload_kind=normalize_workload_kind(preset.get("workload_kind")),
         batch_eligible=bool(preset.get("batch_eligible", False)),
         requires=frozenset(preset.get("requires", ())),
         min_success_rate=float(preset.get("min_success_rate", 0.85)),
@@ -1110,6 +1144,8 @@ def _sync_aggregate_distribution(state: "PlannerState"):
     prefix_weighted = 0.0
     prompt_tokens = 0.0
     for p in state.projects:
+        if p.workload_kind != "llm":
+            continue
         w = max(float(p.tokens_day), 0.0)
         if w <= 0.0:
             continue
@@ -1276,6 +1312,12 @@ def set_use_case_def_field(state: PlannerState, key: str, field_name: str, value
         _set_use_case_scale_kind_field(item, field_name, value)
     elif field_name == "batch_eligible":
         item["batch_eligible"] = bool(value)
+        # An explicit library edit is pushed to the rows of that kind.
+        for proj in state.projects:
+            if getattr(proj, "kind_key", "custom") == key:
+                proj.batch_eligible = bool(value)
+    elif field_name == "workload_kind":
+        item["workload_kind"] = normalize_workload_kind(value)
     elif field_name == "quality_domain":
         item["quality_domain"] = normalize_quality_domain(value)
         item["quality_weights"] = {item["quality_domain"]: 1.0}
@@ -1533,6 +1575,109 @@ def set_model_artifact(
     return am
 
 
+COMPANY_SIZE_REFERENCE = 100
+COMPANY_SIZE_BOUNDS = (1, 10_000_000)
+TECH_SAVVINESS_MULTIPLIERS = {"low": 0.5, "typical": 1.0, "high": 1.6}
+TECH_SAVVINESS_LABELS = {"low": "Low", "typical": "Typical", "high": "High"}
+
+
+def demand_multiplier(state: PlannerState) -> float:
+    """Company size relative to the reference, times tech-savviness."""
+    size = max(
+        1, int(getattr(state, "company_size", COMPANY_SIZE_REFERENCE) or COMPANY_SIZE_REFERENCE)
+    )
+    savviness = TECH_SAVVINESS_MULTIPLIERS.get(getattr(state, "tech_savviness", "typical"), 1.0)
+    return size / COMPANY_SIZE_REFERENCE * savviness
+
+
+def project_demand_multiplier(state: PlannerState, project: Project) -> float:
+    """1.0 for a locked (fixed-volume) use case, else the config's demand multiplier."""
+    return 1.0 if getattr(project, "scale_locked", False) else demand_multiplier(state)
+
+
+def effective_scale_value(state: PlannerState, project: Project) -> float:
+    return float(project.scale_value or 0.0) * project_demand_multiplier(state, project)
+
+
+@bumps_revision
+def set_company_size(state: PlannerState, size: int):
+    lo, hi = COMPANY_SIZE_BOUNDS
+    state.company_size = min(max(int(size), lo), hi)
+
+
+@bumps_revision
+def set_tech_savviness(state: PlannerState, level: str):
+    if level in TECH_SAVVINESS_MULTIPLIERS:
+        state.tech_savviness = level
+
+
+@bumps_revision
+def set_cloud_enabled(state: PlannerState, enabled: bool):
+    state.cloud_enabled = bool(enabled)
+
+
+@bumps_revision
+def set_price_driven_demand(state: PlannerState, enabled: bool):
+    state.price_driven_demand = bool(enabled)
+
+
+BATCH_PATTERN = "batch"
+
+
+@bumps_revision
+def set_project_day_shape(state: PlannerState, project_uid: int, value: str):
+    """Set when a use case's demand arrives: a day shape, or "batch" (any free hour)."""
+    proj = state.find_project(project_uid)
+    if proj is None:
+        return
+    if value == BATCH_PATTERN:
+        proj.batch_eligible = True
+    elif value in ALLOWED_DAY_SHAPES:
+        proj.batch_eligible = False
+        proj.day_shape = value
+
+
+@bumps_revision
+def set_project_scale_locked(state: PlannerState, project_uid: int, locked: bool):
+    """Lock or unlock a use case's volume without changing the number shown.
+
+    Unlocked volumes are stored at the reference company size; the effective value is
+    stored x multiplier. Converting on toggle keeps what the user sees continuous.
+    """
+    project = next((p for p in state.projects if p.uid == project_uid), None)
+    if project is None or bool(locked) == project.scale_locked:
+        return
+    multiplier = demand_multiplier(state)
+    if multiplier <= 0:
+        return
+    shown = float(project.scale_value or 0.0) * (1.0 if project.scale_locked else multiplier)
+    project.scale_locked = bool(locked)
+    base = shown if project.scale_locked else shown / multiplier
+    project.scale_value = base
+    project.tokens_day = scale_value_to_tokens(base, project.scale_kind)
+
+
+@bumps_revision
+def set_model_key(state: PlannerState, model_uid: int, model_key: str, precision: str):
+    """Replace the model on an existing assignment, keeping its pool and GPU count.
+
+    Mirrors the simulation behind the "best model swap" recommendation so applying
+    a recommendation reproduces what was scored: same pool, same GPUs, the
+    recommended precision and that precision's default artifact.
+    """
+    am = state.find_model(model_uid)
+    if am is None:
+        raise ValueError("Model assignment not found.")
+    model = MODELS.get(model_key)
+    if model is None or model.hidden:
+        raise ValueError("Invalid model key.")
+    precision = normalize_precision(precision)
+    am.model_key = model_key
+    am.prec = precision
+    am.artifact_id = default_artifact_id(model, precision)
+    return am
+
+
 @bumps_revision
 def set_model_spec(state: PlannerState, model_uid: int, method: str, spec_k: int):
     am = state.find_model(model_uid)
@@ -1745,6 +1890,8 @@ def set_projection_pct(state: PlannerState, key: str, value: float):
 def set_projection_toggle(state: PlannerState, key: str, value: bool):
     if key == "projection_night_batching":
         state.projection_night_batching = bool(value)
+    elif key == "projection_include_latent":
+        state.projection_include_latent = bool(value)
 
 
 @bumps_revision

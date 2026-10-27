@@ -19,13 +19,14 @@ from data.groups import _model_kind, models_by_kind
 from engine.economics import compute_revenue_projection
 from placement import _model_serves_project, resolve_deployment, retune_models
 from presentation.charts import (
-    chart_decision_throughput,
+    chart_decision_latency,
     chart_processing_pareto,
     chart_user_pareto,
+    decision_use_cases,
 )
 from presentation.model_cards import get_model_info
 from scenarios import deserialize_scenario, serialize_scenario
-from state import GpuPool, ModelAssignment, PlannerState, Project, set_model_spec
+from state import GpuPool, ModelAssignment, PlannerState, Project, add_project, set_model_spec
 from web.agent_contract import EXAMPLE_REQUEST
 from web.api import _build_chart_payload
 
@@ -190,11 +191,15 @@ def test_decision_chart_card_and_spec_guard_survive_scenario_round_trip():
     assert info["spec_options"] == ()
     payload = _build_chart_payload(restored, None)
     assert payload["mode"] == "decision"
-    assert payload["datasets"] == chart_decision_throughput(restored)
-    assert payload["datasets"][0]["data"][0]["y"] > 0
+    points = {p["x"]: p for p in payload["datasets"][0]["data"]}
+    assert points[512]["y"] > points[1024]["y"] > 0
+    assert 0 < points[512]["service_ms"] < points[1024]["service_ms"]
+    # Lengths past the model's context are reported as unavailable, not truncated.
+    assert all(
+        p["y"] is None for p in chart_decision_latency(restored, lengths=[1 << 20])[0]["data"]
+    )
     restored.task_il = 16384
     assert not get_model_info(restored, restored.models[0])["runnable"]
-    assert all(p["y"] is None for p in chart_decision_throughput(restored)[0]["data"])
 
 
 @pytest.mark.parametrize("key,params,weight_bytes,cap", EXPECTED)
@@ -280,3 +285,16 @@ def test_perplexity_flash_v12_geometry_joint_readout_and_long_context_envelope()
     result = estimate(model, seq=32768)
     assert result is not None and result.output_tokens == 0
     assert estimate(model, seq=2048).rps > result.rps
+
+
+def test_decision_use_cases_report_peak_rate_from_day_shape():
+    state = state_for("intern-decision-2b")
+    routing = add_project(state, "ticket_routing")
+    moderation = add_project(state, "content_moderation")
+    rows = {row["name"]: row for row in decision_use_cases(state)}
+    route = rows[routing.name]
+    assert route["len"] == 512 and not route["batch"]
+    mean_rps = route["per_day"] / 86400
+    assert route["peak_rps"] > mean_rps  # office hours peak above the daily mean
+    batch = rows[moderation.name]
+    assert batch["batch"] and batch["peak_rps"] == pytest.approx(batch["per_day"] / 86400, rel=1e-3)

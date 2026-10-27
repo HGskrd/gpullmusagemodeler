@@ -58,6 +58,7 @@ PROJECT_FIELDS = {
     "requires": array(choices(ALLOWED_CAPABILITIES), len(ALLOWED_CAPABILITIES)),
     "min_success_rate": number(0.5, 1),
     "quality_floor": number(0, 1),
+    "workload_kind": choices(("llm", "asr", "embedding", "decision")),
     "quality_domain": choices(QUALITY_DOMAIN_LABELS),
     "quality_weights": {
         "type": "object",
@@ -65,6 +66,8 @@ PROJECT_FIELDS = {
         "additionalProperties": False,
     },
     "batch_eligible": {"type": "boolean"},
+    "day_shape": choices(DAY_SHAPES),
+    "scale_locked": {"type": "boolean"},
     "prefix_hit_rate": number(0, 1),
     "latent_jobs_day": number(),
     "unlock_price_per_m": number(0, 200),
@@ -78,7 +81,14 @@ PROJECT = obj(
         "kind_key": TEXT,
         "kind": TEXT,
         "definition": obj(PROJECT_FIELDS),
-        "scale": obj({"value": number(), "tokens_day": number(), "latent_jobs_day": number()}),
+        "scale": obj(
+            {
+                "value": number(),
+                "tokens_day": number(),
+                "latent_jobs_day": number(),
+                "locked": {"type": "boolean"},
+            }
+        ),
     }
 )
 GPU_POOL = obj(
@@ -133,6 +143,11 @@ PANEL_FIELDS = {
     "projection_day_shape": choices(DAY_SHAPES),
     "corpo_cloud": choices(cloud_policy.corpo_presets()),
     "projection_night_batching": {"type": "boolean"},
+    "projection_include_latent": {"type": "boolean"},
+    "company_size": number(1, 10_000_000, integer=True),
+    "tech_savviness": choices(("low", "typical", "high")),
+    "cloud_enabled": {"type": "boolean"},
+    "price_driven_demand": {"type": "boolean"},
     "decode_sched_budget": number(1, 10_000_000, integer=True),
     "task_il": number(1, 10_000_000, integer=True),
     "task_ol": number(0, 10_000_000, integer=True),

@@ -1,6 +1,7 @@
 """Flask application for the GPU/LLM Usage Modeler."""
 
 import json
+import math
 import os
 import secrets
 
@@ -13,7 +14,15 @@ from flask import (
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from presentation.formatting import fmt_money, fmt_num, log2int
+from presentation.formatting import (
+    fmt_int,
+    fmt_money,
+    fmt_mult,
+    fmt_num,
+    fmt_price_pm,
+    log2int,
+    short_model_name,
+)
 from web.admin import admin_bp
 from web.agent_api import agent_api_bp
 from web.analytics import register_analytics
@@ -137,6 +146,11 @@ def create_app(config: dict | None = None) -> Flask:
     application.register_error_handler(Exception, _handle_internal_error)
     application.add_template_filter(fmt_num)
     application.add_template_filter(fmt_money)
+    application.add_template_filter(fmt_int)
+    application.add_template_filter(fmt_price_pm)
+    application.add_template_filter(fmt_mult)
+    application.add_template_filter(short_model_name)
+    application.add_template_filter(math.log10, "log10")
     application.add_template_filter(log2int)
     return application
 

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import math
+from dataclasses import dataclass
 from typing import Any, Optional
 
-from data import MODELS, PRECISION_LABELS, PRECISIONS
+from data import MODELS, PRECISION_LABELS, PRECISIONS, Model
 from placement import (
     _best_precision_need,
     _finite_gpu_need,
@@ -33,6 +34,9 @@ from state import (
 )
 from state import (
     set_model_gpu_pool as _set_model_gpu_pool,
+)
+from state import (
+    set_model_key as _set_model_key,
 )
 from state import (
     set_model_prec as _set_model_prec,
@@ -65,42 +69,53 @@ def change_gpu_qty(state: PlannerState, gpu_uid: int, delta: int) -> None:
         _retune_model(state, assignment)
 
 
-def add_model(state: PlannerState, model_key: str) -> None:
-    if not state.gpus:
-        raise ValueError("Add a GPU pool before adding a model.")
-    if model_key not in MODELS or MODELS[model_key].hidden:
-        raise ValueError("Invalid model key.")
-    model = MODELS[model_key]
+@dataclass(frozen=True)
+class ModelAddPlan:
+    """Where and how ``add_model`` would place a model, without mutating state.
 
-    def fit_needs(pool: GpuPool) -> tuple[dict[str, float], dict[str, float]]:
-        available = state.free_gpu_for_pool(pool.uid)
-        needs_now = {
+    ``gpu_count`` and ``precision`` are exactly what ``add_model`` assigns.
+    ``fits_now`` is True when that placement fits inside the pool's currently
+    free GPUs; otherwise ``gpus_needed`` is the smallest GPU count (at the best
+    precision) that would fit if the whole pool were available.
+    """
+
+    pool: GpuPool
+    precision: str
+    gpu_count: int
+    fits_now: bool
+    gpus_needed: int
+
+
+def plan_model_add(state: PlannerState, model: Model) -> Optional[ModelAddPlan]:
+    """Pick the pool, precision and GPU count ``add_model`` would use.
+
+    Returns None when there are no GPU pools or the model fits no pool under
+    the current memory cap even with every GPU of the pool free.
+    """
+    if not state.gpus:
+        return None
+
+    def needs_for(pool: GpuPool, max_gpu_count: int) -> dict[str, float]:
+        return {
             precision: _min_gpu_count_for_pool(
                 model,
                 pool.gpu,
                 state.mu,
                 state.profiled_non_kv_gb,
                 precision,
-                available,
+                max_gpu_count,
             )
             for precision in PRECISIONS
         }
-        needs_full = {
-            precision: _min_gpu_count_for_pool(
-                model,
-                pool.gpu,
-                state.mu,
-                state.profiled_non_kv_gb,
-                precision,
-                pool.count,
-            )
-            for precision in PRECISIONS
-        }
-        return needs_now, needs_full
+
+    needs: dict[int, tuple[dict[str, float], dict[str, float]]] = {
+        pool.uid: (needs_for(pool, state.free_gpu_for_pool(pool.uid)), needs_for(pool, pool.count))
+        for pool in state.gpus
+    }
 
     def sort_key(pool: GpuPool) -> tuple[bool, float, bool, float, bool, float, int, int]:
         available = state.free_gpu_for_pool(pool.uid)
-        needs_now, needs_full = fit_needs(pool)
+        needs_now, needs_full = needs[pool.uid]
         best_now = _finite_gpu_need(*needs_now.values())
         best_full = _finite_gpu_need(*needs_full.values())
         native_now = needs_now[model.native_precision_key]
@@ -117,19 +132,17 @@ def add_model(state: PlannerState, model_key: str) -> None:
 
     pool = min(state.gpus, key=sort_key)
     available = state.free_gpu_for_pool(pool.uid)
-    needs_now, needs_full = fit_needs(pool)
+    needs_now, needs_full = needs[pool.uid]
     best_full = _finite_gpu_need(*needs_full.values())
     if math.isinf(best_full):
-        labels = ", ".join(PRECISION_LABELS[precision] for precision in PRECISIONS)
-        raise ValueError(
-            f"{model.name} does not fit on any configured GPU pool under the current memory cap in {labels}."
-        )
+        return None
 
     native_precision = model.native_precision_key
     native_now = needs_now[native_precision]
     # _best_precision_need returns None when nothing fits; the fallback below
     # resolves it, so the binding is optional until then.
     selected_precision: Optional[str]
+    fits_now = True
     if not math.isinf(native_now):
         selected_precision = native_precision
         gpu_count = int(native_now)
@@ -138,16 +151,38 @@ def add_model(state: PlannerState, model_key: str) -> None:
         if selected_precision is not None and not math.isinf(best_now):
             gpu_count = int(best_now)
         else:
+            fits_now = False
             selected_precision, _ = _best_precision_need(needs_full)
             selected_precision = selected_precision or native_precision
             gpu_count = available
+    return ModelAddPlan(
+        pool=pool,
+        precision=selected_precision,
+        gpu_count=gpu_count,
+        fits_now=fits_now,
+        gpus_needed=gpu_count if fits_now else int(best_full),
+    )
+
+
+def add_model(state: PlannerState, model_key: str) -> None:
+    if not state.gpus:
+        raise ValueError("Add a GPU pool before adding a model.")
+    if model_key not in MODELS or MODELS[model_key].hidden:
+        raise ValueError("Invalid model key.")
+    model = MODELS[model_key]
+    plan = plan_model_add(state, model)
+    if plan is None:
+        labels = ", ".join(PRECISION_LABELS[precision] for precision in PRECISIONS)
+        raise ValueError(
+            f"{model.name} does not fit on any configured GPU pool under the current memory cap in {labels}."
+        )
 
     assignment = add_model_assignment(
         state,
         model_key,
-        pool.uid,
-        gpu_count,
-        selected_precision,
+        plan.pool.uid,
+        plan.gpu_count,
+        plan.precision,
     )
     assignment.execution_backend = "auto"
     assignment.kv_precision = "auto"
@@ -199,6 +234,23 @@ def set_model_gpu_count(state: PlannerState, model_uid: int, count: int) -> None
     assignment = _set_model_gpu_count(state, model_uid, count)
     if assignment is not None:
         _retune_model(state, assignment)
+
+
+def apply_model_swap(state: PlannerState, model_uid: int, model_key: str, precision: str) -> None:
+    """Apply a "best model swap" recommendation to the live scenario."""
+    assignment = _set_model_key(state, model_uid, model_key, precision)
+    _retune_model(state, assignment)
+
+
+def apply_gpu_expansion(state: PlannerState, model_uid: int, added_gpus: int = 1) -> None:
+    """Apply an "add GPUs" recommendation: grow the pool and the assignment together."""
+    assignment = state.find_model(model_uid)
+    if assignment is None:
+        raise ValueError("Model assignment not found.")
+    added_gpus = max(1, int(added_gpus))
+    target = assignment.gpu_count + added_gpus
+    change_gpu_qty(state, assignment.gpu_uid, added_gpus)
+    set_model_gpu_count(state, model_uid, target)
 
 
 def set_model_gpu_pool(state: PlannerState, model_uid: int, gpu_uid: int) -> None:

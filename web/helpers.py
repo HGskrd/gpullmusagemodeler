@@ -53,17 +53,29 @@ from data import (
     quality_weights_label,
     required_quality,
 )
+from presentation.compare import compare_summary
 from presentation.econ import econ_payload
+from presentation.formatting import layout_label
 from presentation.model_cards import (
     get_model_info,
     get_model_infos,
+    short_artifact_label,
+    short_gpu_label,
+    short_note,
+    short_spec_label,
+    tech_scorecard,
 )
 from state import (
     AUTO_MODEL_STRATEGIES,
+    TECH_SAVVINESS_LABELS,
+    TECH_SAVVINESS_MULTIPLIERS,
     VISIBLE_PLOT_MODES,
     PlannerState,
     _normalize_use_case_def,
+    demand_multiplier,
+    effective_scale_value,
     format_scale_value,
+    project_demand_multiplier,
     project_scale_config,
     scale_decimals,
 )
@@ -193,6 +205,30 @@ def with_planner_state(view):
     return wrapped
 
 
+# Short labels for the use-case "When" column; the open dropdown shows full names.
+# "nightbatch" is an arrival curve for interactive traffic at night; batch work is
+# its own choice ("any free hour"), so the curve is not offered here.
+DAY_SHAPE_SHORT = {
+    "workday": "Office",
+    "flat": "24/7",
+    "consumer": "Evening",
+    "globalsaas": "Global",
+    "nightbatch": "Night",
+}
+DAY_SHAPE_CHOICES = ("workday", "flat", "consumer", "globalsaas")
+
+
+def gateway_short_label(key: str) -> str:
+    """Compressed cloud-gateway name for the Assumptions line."""
+    return {
+        "current": "Gemini + Mistral",
+        "advocated": "+ Anthropic (Vertex EU)",
+        "with_cohere": "+ Cohere",
+        "with_kimi": "+ Kimi K3",
+        "october_2026": "Oct 2026 releases",
+    }.get(key, key)
+
+
 def _template_context() -> dict:
     return {
         "GPUS": GPUS,
@@ -202,6 +238,9 @@ def _template_context() -> dict:
         "EMBEDDING_DOC_PRESETS": EMBEDDING_DOC_PRESETS,
         "TASK_PRESETS": TASK_PRESETS,
         "DAY_SHAPES": DAY_SHAPES,
+        "DAY_SHAPE_SHORT": DAY_SHAPE_SHORT,
+        "DAY_SHAPE_CHOICES": DAY_SHAPE_CHOICES,
+        "gateway_short_label": gateway_short_label,
         "CLOUD_MODELS": cloud_policy.effective_catalog(),
         "CORPO_CLOUD_PRESETS": cloud_policy.corpo_presets(),
         "CLOUD_POLICY": cloud_policy.summary(),
@@ -234,6 +273,17 @@ def _template_context() -> dict:
         "get_model_infos": get_model_infos,
         "effective_prefill_length": effective_prefill_length,
         "strategy_label": strategy_label,
+        "layout_label": layout_label,
+        "short_artifact_label": short_artifact_label,
+        "short_spec_label": short_spec_label,
+        "short_note": short_note,
+        "tech_scorecard": tech_scorecard,
+        "demand_multiplier": demand_multiplier,
+        "effective_scale_value": effective_scale_value,
+        "project_demand_multiplier": project_demand_multiplier,
+        "TECH_SAVVINESS_LABELS": TECH_SAVVINESS_LABELS,
+        "TECH_SAVVINESS_MULTIPLIERS": TECH_SAVVINESS_MULTIPLIERS,
+        "short_gpu_label": short_gpu_label,
         "required_quality": required_quality,
         "effective_quality": effective_quality,
         "quality_to_aa_intelligence": quality_to_aa_intelligence,
@@ -246,9 +296,16 @@ def _template_context() -> dict:
 
 def _planner_view_context(state_a: PlannerState, state_b: PlannerState | None) -> dict:
     """Build controller-owned view models before rendering planner templates."""
+    econ_a = econ_payload(state_a)
+    econ_b = econ_payload(state_b) if state_b is not None else None
     return _template_context() | {
-        "ECON_A": econ_payload(state_a),
-        "ECON_B": econ_payload(state_b) if state_b is not None else None,
+        "ECON_A": econ_a,
+        "ECON_B": econ_b,
+        "COMPARE": (
+            compare_summary(state_a, state_b, econ_a, econ_b)
+            if state_b is not None and econ_b is not None
+            else None
+        ),
     }
 
 

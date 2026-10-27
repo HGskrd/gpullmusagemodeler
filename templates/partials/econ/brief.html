@@ -4,19 +4,119 @@
 {% set opp = p.value_opportunity_day %}
 {% set lost = p.value_lost_day %}
 
-<div class="brief">
-  <div class="b-kicker">Demand &amp; economics brief{% if label %} · {{ label }}{% endif %}</div>
+<div class="brief overview">
   <h2>
     {% if f.total_tokens <= 0 %}
       No demand routed yet
     {% elif lost <= 0 %}
-      Every token of demand is served on-prem — {{ p.value_served_day|fmt_money }}/day of equivalent value captured
+      All demand is served on your GPUs: {{ p.value_served_day|fmt_money }}/day of equivalent value
     {% else %}
-      {{ f.served_pct|round(0)|int }}% of demand stays on-prem; {{ lost|fmt_money }}/day escapes to cloud or is destroyed
+      {{ f.served_pct|round(0)|int }}% of demand is served on your GPUs. {{ lost|fmt_money }}/day {{ 'goes to cloud or is lost' if state.cloud_enabled else 'is lost (no cloud)' }}.
     {% endif %}
   </h2>
-  <div class="b-date">{{ p.day_shape_label }} day shape · gateway preset “{{ p.corpo_cloud_label }}”</div>
+  <div class="b-date">{{ p.day_shape_label }} day shape · {% if state.cloud_enabled %}gateway preset “{{ p.corpo_cloud_label }}”{% else %}no cloud: only your GPUs serve{% endif %}</div>
 
+  {% if f.total_tokens > 0 %}
+  <div class="ov-moves" hx-get="/econ/swaps" hx-vals='{"panel":"{{ panel }}","view":"moves"}'
+       hx-trigger="intersect once" hx-swap="innerHTML">
+    <h3>Next best moves</h3>
+    <p class="T">Scoring…</p>
+  </div>
+
+  {% set capacity = p.projects|selectattr('spilled_pct', 'ge', 15)|sort(attribute='value_spilled', reverse=True)|list %}
+  {% set wrong = p.projects|selectattr('leaked_pct', 'ge', 15)|sort(attribute='value_leaked', reverse=True)|list %}
+  {% set lost_rows = p.projects|selectattr('destroyed_pct', 'ge', 50)|sort(attribute='value_destroyed', reverse=True)|list %}
+  {% if state.cloud_enabled %}
+  {% set no_model = lost_rows|selectattr('cloud_blocked')|list %}
+  {% set priced_out = lost_rows|rejectattr('cloud_blocked')|list %}
+  {% set lost_capacity = [] %}{% set no_local = [] %}
+  {% else %}
+  {# No cloud: everything unserved is lost, so split by why the GPUs did not serve it. #}
+  {% set no_model = [] %}{% set priced_out = [] %}
+  {% set lost_any = p.projects|selectattr('destroyed_pct', 'ge', 15)|sort(attribute='value_destroyed', reverse=True)|list %}
+  {% set lost_capacity = lost_any|selectattr('has_compatible')|list %}
+  {% set no_local = lost_any|rejectattr('has_compatible')|list %}
+  {% endif %}
+  {% set near_unlock = p.projects|selectattr('latent_close_to_unlock')|list %}
+  {% if capacity or wrong or no_model or priced_out or near_unlock or lost_capacity or no_local %}
+  <h3>What needs attention</h3>
+  <div class="ov-groups">
+    {% if capacity %}
+    <div class="ov-group">
+      <div class="ov-group-head"><i class="sw o-cloud"></i><strong>Out of capacity</strong><span class="T">add GPUs to the serving model</span></div>
+      {% for row in capacity %}
+      {% if loop.index == 4 %}<details class="ov-more"><summary>+{{ capacity|length - 3 }} more · {{ capacity[3:]|sum(attribute='value_spilled')|fmt_money }}/day</summary>{% endif %}
+      <div class="ov-row"><span>{{ row.name }}</span><span class="T">{{ row.spilled_pct|round(0)|int }}% sent to cloud</span><span class="fig warn">{{ row.value_spilled|fmt_money }}/day</span></div>
+      {% if loop.last and loop.length > 3 %}</details>{% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if wrong %}
+    <div class="ov-group">
+      <div class="ov-group-head"><i class="sw o-wrong"></i><strong>Wrong model</strong><span class="T">change the model, not capacity</span></div>
+      {% for row in wrong %}
+      {% if loop.index == 4 %}<details class="ov-more"><summary>+{{ wrong|length - 3 }} more · {{ wrong[3:]|sum(attribute='value_leaked')|fmt_money }}/day</summary>{% endif %}
+      <div class="ov-row"><span>{{ row.name }}</span><span class="T">{% if not row.has_compatible %}no compatible model deployed{% else %}deployed options above its price ceiling{% endif %}</span><span class="fig warn">{{ row.value_leaked|fmt_money }}/day</span></div>
+      {% if loop.last and loop.length > 3 %}</details>{% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if lost_capacity %}
+    <div class="ov-group">
+      <div class="ov-group-head"><i class="sw o-lost"></i><strong>Out of capacity</strong><span class="T">add GPUs to the serving model</span></div>
+      {% for row in lost_capacity %}
+      {% if loop.index == 4 %}<details class="ov-more"><summary>+{{ lost_capacity|length - 3 }} more · {{ lost_capacity[3:]|sum(attribute='value_destroyed')|fmt_money }}/day</summary>{% endif %}
+      <div class="ov-row"><span>{{ row.name }}</span><span class="T">{{ row.destroyed_pct|round(0)|int }}% unserved</span><span class="fig bad">{{ row.value_destroyed|fmt_money }}/day</span></div>
+      {% if loop.last and loop.length > 3 %}</details>{% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if no_local %}
+    <div class="ov-group">
+      <div class="ov-group-head"><i class="sw o-lost"></i><strong>No deployed model qualifies</strong><span class="T">deploy one that meets the SLO</span></div>
+      {% for row in no_local %}
+      {% if loop.index == 4 %}<details class="ov-more"><summary>+{{ no_local|length - 3 }} more · {{ no_local[3:]|sum(attribute='value_destroyed')|fmt_money }}/day</summary>{% endif %}
+      <div class="ov-row"><span>{{ row.name }}</span><span class="T">{% if row.get('workload_kind', 'llm') != 'llm' %}{{ row.workload_kind|upper }} · capacity only{% else %}needs AA {{ '%.1f'|format(aa(row.difficulty)) }} at {{ (row.min_success_rate * 100)|round|int }}% SLO{% endif %}</span><span class="fig bad">{{ row.value_destroyed|fmt_money }}/day</span></div>
+      {% if loop.last and loop.length > 3 %}</details>{% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if no_model %}
+    <div class="ov-group">
+      <div class="ov-group-head"><i class="sw o-lost"></i><strong>No model meets the bar</strong><span class="T">nothing deployed or in the cloud gateway meets the SLO</span></div>
+      {% for row in no_model %}
+      {% if loop.index == 4 %}<details class="ov-more"><summary>+{{ no_model|length - 3 }} more · {{ no_model[3:]|sum(attribute='value_destroyed')|fmt_money }}/day</summary>{% endif %}
+      <div class="ov-row"><span>{{ row.name }}</span><span class="T">{% if row.get('workload_kind', 'llm') != 'llm' %}{{ row.workload_kind|upper }} · capacity only{% else %}needs AA {{ '%.1f'|format(aa(row.difficulty)) }} at {{ (row.min_success_rate * 100)|round|int }}% SLO{% endif %}</span><span class="fig bad">{{ row.value_destroyed|fmt_money }}/day</span></div>
+      {% if loop.last and loop.length > 3 %}</details>{% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if priced_out %}
+    <div class="ov-group">
+      <div class="ov-group-head"><i class="sw o-lost"></i><strong>Priced out</strong><span class="T">cloud price above willingness to pay</span></div>
+      {% for row in priced_out %}
+      {% if loop.index == 4 %}<details class="ov-more"><summary>+{{ priced_out|length - 3 }} more · {{ priced_out[3:]|sum(attribute='value_destroyed')|fmt_money }}/day</summary>{% endif %}
+      <div class="ov-row"><span>{{ row.name }}</span><span class="T">{{ row.cloud_label }} {{ row.cloud_pm|fmt_price_pm }}/M vs {{ row.wtp_per_m|fmt_price_pm }}/M ceiling</span><span class="fig bad">{{ row.value_destroyed|fmt_money }}/day</span></div>
+      {% if loop.last and loop.length > 3 %}</details>{% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if near_unlock %}
+    <div class="ov-group">
+      <div class="ov-group-head"><i class="sw o-served"></i><strong>Waiting demand close to unlocking</strong><span class="T">slightly cheaper internal price unlocks it</span></div>
+      {% for row in near_unlock %}
+      {% if loop.index == 4 %}<details class="ov-more"><summary>+{{ near_unlock|length - 3 }} more</summary>{% endif %}
+      <div class="ov-row"><span>{{ row.name }}</span><span class="T">{{ row.cheapest_effective_pm|fmt_price_pm }}/M now, needs ≤ {{ row.unlock_price_per_m|fmt_price_pm }}/M</span><span class="fig">{{ row.latent_jobs_day|fmt_num }} tok/day</span></div>
+      {% if loop.last and loop.length > 3 %}</details>{% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+  {% endif %}
+
+  <details class="ov-full">
+    <summary>Full brief: situation, economics, footprint</summary>
   <h3>The situation</h3>
   {% if f.total_tokens <= 0 %}
     <p>No use case carries demand yet. Add use cases with demand above zero in the calculator and this brief will describe the routed market.</p>
@@ -33,13 +133,13 @@
     ({{ (p.value_capture_rate * 100)|round(0)|int }}% of opportunity, {{ f.served_tokens|fmt_num }} tokens)
     is served on your GPUs.
     {% if p.value_cloud_day > 0 %}
-    <span class="fig warn">{{ p.value_cloud_day|fmt_money }}/day</span> leaves as cloud invoice spend
-    ({{ f.spilled_pct|round(0)|int }}% spilled because capacity is saturated,
-    {{ f.leaked_pct|round(0)|int }}% leaked because no compatible or affordable model is deployed).
+    <span class="fig warn">{{ p.value_cloud_day|fmt_money }}/day</span> goes to cloud
+    ({{ f.spilled_pct|round(0)|int }}% sent because capacity is saturated,
+    {{ f.leaked_pct|round(0)|int }}% because no compatible or affordable model is deployed).
     {% endif %}
     {% if p.value_destroyed_day > 0 %}
-    <span class="fig bad">{{ p.value_destroyed_day|fmt_money }}/day</span> is destroyed entirely —
-    even the cloud reference is above what these workloads are willing to pay, so the work is shelved.
+    <span class="fig bad">{{ p.value_destroyed_day|fmt_money }}/day</span> is lost: even the cloud
+    reference is above what these workloads are willing to pay, so the work is not done.
     {% endif %}
   </p>
   {% endif %}
@@ -49,46 +149,13 @@
   <p>
     The cluster costs <span class="fig">{{ p.cost_day|fmt_money }}/day</span>
     ({{ p.total_gpus }} GPUs, {{ p.total_gpus_used }} assigned to models),
-    which works out to <span class="fig">${{ '%.2f'|format(p.cost_per_m_served) }}/M</span> served tokens.
+    which works out to <span class="fig">{{ p.cost_per_m_served|fmt_price_pm }}/M</span> served tokens.
     Against the equivalent value served, that is a net margin of
-    <span class="fig {{ 'good' if p.margin_day >= 0 else 'bad' }}">{{ p.margin_day|fmt_money }}/day</span>
-    — a value-to-cost multiple of <span class="fig {{ 'good' if p.revenue_multiple >= 1.5 else ('warn' if p.revenue_multiple >= 1 else 'bad') }}">{{ '%.2f'|format(p.revenue_multiple) }}×</span>.
+    <span class="fig {{ 'good' if p.margin_day >= 0 else 'bad' }}">{{ p.margin_day|fmt_money }}/day</span>,
+    a value-to-cost multiple of <span class="fig {{ 'good' if p.revenue_multiple >= 1.5 else ('warn' if p.revenue_multiple >= 1 else 'bad') }}">{{ p.revenue_multiple|fmt_mult }}</span>.
     Fleet time-utilization is <span class="fig">{{ (p.utilization * 100)|round(0)|int }}%</span>.
   </p>
   {% endif %}
-
-  {% if p.projects and f.total_tokens > 0 %}
-  <h3>What needs attention</h3>
-  <ul>
-    {% for row in p.projects %}
-      {% if row.destroyed_pct >= 50 %}
-      <li><strong>{{ row.name }}</strong> — mostly destroyed (<span class="fig bad">{{ row.destroyed_pct|round(0)|int }}%</span>).
-        {% if row.cloud_blocked %}No cloud model in the catalog meets its SLO at AA {{ '%.1f'|format(aa(row.difficulty)) }}, so unserved demand has nowhere to go.
-        {% else %}Cloud reference {{ row.cloud_label }} at ${{ '%.2f'|format(row.cloud_pm) }}/M sits above its ${{ '%.2f'|format(row.wtp_per_m) }}/M willingness to pay.{% endif %}
-        Worth <span class="fig bad">{{ row.value_destroyed|fmt_money }}/day</span> of lost work.</li>
-      {% elif row.spilled_pct >= 15 %}
-      <li><strong>{{ row.name }}</strong> — capacity-bound: <span class="fig warn">{{ row.spilled_pct|round(0)|int }}%</span> spills to cloud
-        (<span class="fig warn">{{ row.value_spilled|fmt_money }}/day</span>). Adding GPUs on the serving model directly recovers this.</li>
-      {% elif row.leaked_pct >= 15 %}
-      <li><strong>{{ row.name }}</strong> — fit problem: <span class="fig warn">{{ row.leaked_pct|round(0)|int }}%</span> leaks to cloud
-        (<span class="fig warn">{{ row.value_leaked|fmt_money }}/day</span>).
-        {% if not row.has_compatible %}No deployed model is compatible{% else %}Deployed options are priced above its ceiling{% endif %} — this is a model-selection fix, not a capacity fix.</li>
-      {% elif row.served_pct > 99.5 %}
-      <li><strong>{{ row.name }}</strong> — fully served on-prem
-        {% if row.any_suboptimal %}<span class="fig warn">via a stretched model, paying a token tax on quality</span>{% else %}at {{ row.value_served|fmt_money }}/day{% endif %}.</li>
-      {% endif %}
-      {% if row.latent_close_to_unlock %}
-      <li><strong>{{ row.name }}</strong> — latent pool near unlock: cheapest internal offer is
-        <span class="fig">${{ '%.2f'|format(row.cheapest_effective_pm) }}/M</span>, needs ≤
-        <span class="fig">${{ '%.2f'|format(row.unlock_price_per_m) }}/M</span> to activate
-        {{ row.latent_jobs_day|fmt_num }} tok/day of waiting demand.</li>
-      {% endif %}
-    {% endfor %}
-  </ul>
-  {% endif %}
-
-  <div hx-get="/econ/swaps" hx-vals='{"panel":"{{ panel }}","view":"action"}'
-       hx-trigger="load" hx-swap="innerHTML"></div>
 
   {% if p.co2_kg_day_total > 0 %}
   <h3>Footprint</h3>
@@ -101,7 +168,8 @@
 
   <div class="b-foot">
     Method: demand is routed highest-WTP-first to the cheapest tier-compatible deployed model at or below
-    min(WTP, cloud reference). Value figures are equivalent value priced at the cloud substitute — not booked revenue.
+    min(WTP, cloud reference). Value figures are equivalent value priced at the cloud substitute, not booked revenue.
     Internal cost allocates GPU-day TCO; idle pool GPUs count toward cost but not toward served-token tariffs.
   </div>
+  </details>
 </div>

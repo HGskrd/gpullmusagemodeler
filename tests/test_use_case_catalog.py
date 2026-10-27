@@ -3,8 +3,9 @@ import unittest
 
 from app_factory import create_test_app
 
-from data import MODELS, PROJECT_PRESETS, effective_quality, required_quality
-from state import _normalize_use_case_def
+from data import MODELS, PROJECT_PRESETS, required_quality
+from placement import _model_serves_project
+from state import PlannerState, _add_project_from_preset, _normalize_use_case_def
 from use_case_evidence import (
     USE_CASE_EVIDENCE,
     USE_CASE_RESEARCH_CAPTURED_AT,
@@ -15,7 +16,7 @@ from web.helpers import use_case_detail_for
 
 class UseCaseCatalogTests(unittest.TestCase):
     def test_catalog_is_expanded_and_scale_math_is_internally_consistent(self):
-        self.assertGreaterEqual(len(PROJECT_PRESETS), 19)
+        self.assertGreaterEqual(len(PROJECT_PRESETS), 25)
         keys = [preset["key"] for preset in PROJECT_PRESETS]
         self.assertEqual(len(keys), len(set(keys)))
 
@@ -55,15 +56,11 @@ class UseCaseCatalogTests(unittest.TestCase):
                 preset["min_success_rate"],
                 quality_floor=preset.get("quality_floor", 0.0),
             )
-            required_caps = set(preset.get("requires", ()))
+            project = _add_project_from_preset(PlannerState(), preset["key"])
             eligible = [
                 model
                 for model in MODELS.values()
-                if not model.hidden
-                and not model.is_asr_model
-                and not model.is_embedding_model
-                and required_caps <= model.capabilities
-                and effective_quality(model) >= threshold
+                if not model.hidden and _model_serves_project(model, project)
             ]
             with self.subTest(key=preset["key"], threshold=threshold):
                 self.assertTrue(eligible)
@@ -88,6 +85,10 @@ class UseCaseCatalogTests(unittest.TestCase):
         self.assertIn(b"illustrative large-enterprise scenarios", response.data)
         self.assertIn(b"Prefix reuse", response.data)
         self.assertIn(b"empirical", response.data)
+        self.assertIn(b"Meeting &amp; call transcription", response.data)
+        self.assertIn(b"Search corpus indexing", response.data)
+        self.assertIn(b"Ticket intent routing", response.data)
+        self.assertIn(b"capacity only", response.data)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin · Journeys</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  .funnel { display: grid; grid-template-columns: 210px 1fr 120px; gap: 8px 12px; align-items: center; }
+  .funnel .lab { font-size: 12px; }
+  .funnel .lab small { display: block; color: var(--muted); font-size: 11px; }
+  .funnel .track { height: 22px; position: relative; }
+  .funnel .fill { height: 100%; border-radius: 0 4px 4px 0; background: var(--accent); }
+  .funnel .drop { font-size: 11px; color: var(--muted); text-align: right; }
+  .seghm { display: grid; gap: 2px; font-size: 11px; }
+  .seghm .c { height: 24px; display: flex; align-items: center; justify-content: center; border-radius: 3px; font-variant-numeric: tabular-nums; }
+  .seghm .h { color: var(--muted); font-size: 10px; text-align: center; align-self: end; padding-bottom: 3px; line-height: 1.2; }
+  .path { display: flex; gap: 3px; flex-wrap: wrap; align-items: center; }
+  .path .s { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--chip); white-space: nowrap; }
+  .path .s.bad { background: transparent; color: var(--critical); box-shadow: inset 0 0 0 1px var(--critical); }
+  .path .s.ok { background: transparent; color: var(--good-ink); box-shadow: inset 0 0 0 1px var(--good-ink); }
+  .path .arr { color: var(--muted); font-size: 10px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="topbar" id="top"></header>
+  <div class="banner">Prototype · synthetic sample data. <b>Prod today cannot draw this page</b>: <span class="mono">/model/add</span>, <span class="mono">/model/remove</span>, <span class="mono">/model/prec</span> and <span class="mono">/gpu/qty</span> return <span class="mono">_htmx_response</span> (untracked), so prod logs show “gpu_add → nothing” even when people go on to add models.</div>
+  <div class="filters" id="filters"></div>
+
+  <section class="card">
+    <div class="card-head"><h2>From landing to a plan they take away</h2><span class="spacer"></span><span class="muted" style="font-size:12px">Human visitors · counted once per person</span></div>
+    <div class="q">Each bar is the share of all human visitors who reached that stage.</div>
+    <div class="funnel" id="funnel"></div>
+    <div class="needs"><b>Needs:</b> track <span class="mono">model_add/remove/prec</span>, <span class="mono">gpu_qty</span>, a server-side <span class="mono">result</span> event (fits / doesn’t + GB), and client beacons for copy-link / export.</div>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><h2>Stage reached, by segment</h2><span class="spacer"></span>
+      <span class="seg" id="segby"><button data-v="persona" class="on">Persona</button><button data-v="device">Device</button><button data-v="channel">Channel</button><button data-v="country">Country</button></span></div>
+    <div class="q">% of the segment reaching each stage. Read across a row to see where that group stalls.</div>
+    <div id="seghm" style="overflow:auto"></div>
+  </section>
+
+  <section class="grid g2">
+    <div class="card">
+      <h2>After “doesn’t fit”, what did they do?</h2>
+      <div class="q">First action after each failed fit, and how often it ended in a fitting plan.</div>
+      <div id="recovery"></div>
+    </div>
+    <div class="card">
+      <h2>Last thing before leaving</h2>
+      <div class="q">Final recorded step of engaged sessions that ended without a fitting plan.</div>
+      <div id="lastStep"></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Friction signals</h2>
+    <div class="q">Each row is a fixable problem with examples you can open.</div>
+    <table class="t" id="friction"></table>
+  </section>
+
+  <section class="grid g2">
+    <div class="card">
+      <h2>Most common paths</h2>
+      <div class="q">First six meaningful steps of engaged sessions, collapsed.</div>
+      <table class="t" id="paths"></table>
+    </div>
+    <div class="card">
+      <h2>Time to first model</h2>
+      <div class="q">Seconds from landing to the first model added. Long tails suggest the picker is hard to use.</div>
+      <svg id="ttfm" viewBox="0 0 560 200" style="width:100%;height:auto"></svg>
+    </div>
+  </section>
+</div>
+
+<script src="data.js"></script>
+<script src="common.js"></script>
+<script>
+(function () {
+  const { A, PERSONAS, PERSONA_ORDER, pColor, pchip, fmt, pct, flag, countryName, esc, shortGpu, shortModel, visible, filterBar, setCount, nav, hbars, countBy, engaged, dur } = UI;
+  nav(document.getElementById("top"), "Journeys & friction", "Where people get stuck, and what they do about it");
+  let segBy = "persona";
+  document.querySelectorAll("#segby button").forEach((b) => b.addEventListener("click", () => {
+    segBy = b.dataset.v; document.querySelectorAll("#segby button").forEach((x) => x.classList.toggle("on", x === b)); render();
+  }));
+  filterBar(document.getElementById("filters"), render);
+
+  const STAGES = [
+    ["Landed", "opened any page", () => true],
+    ["Changed anything", "any input edited", (v) => v.f.config > 0],
+    ["Picked hardware", "added or resized a GPU pool", (v) => Object.keys(v.f.gpus).length > 0],
+    ["Added a model", "at least one model placed", (v) => v.f.nModels > 0],
+    ["Got a plan that fits", "a fitting result at some point", (v) => v.sessions.some((s) => s.events.some((e) => e.type === "result" && e.fits))],
+    ["Went deeper", "compare, economics, use-cases or tuning", (v) => v.f.compare + v.f.econ + v.f.useCases + v.f.dist > 0],
+    ["Took it away", "export / share link, or came back", (v) => v.f.exports > 0 || v.sessions.length > 1],
+  ];
+
+  function funnel(hs) {
+    const n0 = hs.length || 1;
+    let prev = null;
+    document.getElementById("funnel").innerHTML = STAGES.map(([lab, sub, fn], i) => {
+      const n = hs.filter(fn).length;
+      const drop = prev == null ? "" : `−${pct(1 - n / Math.max(1, prev))} from previous`;
+      prev = n;
+      const shade = `var(--seq-${Math.max(2, 6 - Math.floor(i * 0.75))})`;
+      return `<div class="lab">${lab}<small>${sub}</small></div>
+        <div class="track" data-tip="<b>${lab}</b><div>${fmt(n)} of ${fmt(n0)} visitors (${pct(n / n0)})</div>"><div class="fill" style="width:${(n / n0) * 100}%;background:${shade}"></div></div>
+        <div><span class="num" style="font-weight:600">${pct(n / n0)}</span> <span class="muted num">${fmt(n)}</span><div class="drop">${drop}</div></div>`;
+    }).join("");
+  }
+
+  function segHeat(hs) {
+    const key = { persona: (v) => v.persona, device: (v) => v.device, channel: (v) => v.channel, country: (v) => v.country }[segBy];
+    let groups = countBy(hs, key);
+    if (segBy === "country") groups = groups.slice(0, 12);
+    if (segBy === "persona") groups = PERSONA_ORDER.map((k) => [k, hs.filter((v) => v.persona === k).length]).filter(([, n]) => n);
+    const label = (g) => segBy === "persona" ? pchip(g, PERSONAS[g].short) : segBy === "country" ? `${flag(g)} ${esc(countryName(g))}` : esc(g);
+    let html = `<div class="seghm" style="grid-template-columns:170px 60px repeat(${STAGES.length - 1}, minmax(70px, 1fr))"><div></div><div class="h">visitors</div>` +
+      STAGES.slice(1).map(([l]) => `<div class="h">${l}</div>`).join("");
+    for (const [g, n] of groups) {
+      const list = hs.filter((v) => key(v) === g);
+      html += `<div style="align-self:center">${label(g)}</div><div class="num muted" style="align-self:center;text-align:right;padding-right:8px">${fmt(n)}</div>`;
+      for (const [l, , fn] of STAGES.slice(1)) {
+        const r = list.filter(fn).length / Math.max(1, list.length);
+        const step = r === 0 ? "--seq-0" : `--seq-${Math.min(6, 1 + Math.floor(r * 6))}`;
+        html += `<div class="c" style="background:var(${step});color:${r >= 0.5 ? "var(--panel)" : "var(--text-2)"}" data-tip="<b>${esc(segBy === "persona" ? PERSONAS[g].label : segBy === "country" ? countryName(g) : g)}</b> · ${l}<div>${pct(r)} of ${fmt(list.length)}</div>">${Math.round(r * 100)}%</div>`;
+      }
+    }
+    document.getElementById("seghm").innerHTML = html + "</div>";
+  }
+
+  function recovery(hs) {
+    const out = { "Re-quantized": [0, 0], "Added GPUs": [0, 0], "Removed the model": [0, 0], "Reset everything": [0, 0], "Left": [0, 0] };
+    for (const v of hs) for (const s of v.sessions) {
+      const ev = s.events;
+      for (let i = 0; i < ev.length; i++) {
+        if (ev[i].type !== "result" || ev[i].fits) continue;
+        const nx = ev.slice(i + 1).find((e) => e.type !== "result");
+        const k = !nx ? "Left" : nx.type === "model_prec" ? "Re-quantized" : nx.type === "gpu_qty" || nx.type === "gpu_add" ? "Added GPUs" : nx.type === "model_remove" ? "Removed the model" : nx.type === "session_reset" ? "Reset everything" : null;
+        if (!k) continue;
+        out[k][0]++;
+        if (ev.slice(i + 1).some((e) => e.type === "result" && e.fits) || (s.final && s.final.fit)) out[k][1]++;
+      }
+    }
+    const rows = Object.entries(out).filter(([, [n]]) => n).sort((a, b) => b[1][0] - a[1][0]);
+    const tot = rows.reduce((s, [, [n]]) => s + n, 0) || 1;
+    document.getElementById("recovery").innerHTML = hbars(rows.map(([k, [n, ok]]) => ({
+      label: esc(k), plain: k, value: n, sub: `${pct(ok / Math.max(1, n))} → fit`,
+      tip: `<b>${esc(k)}</b><div>${fmt(n)} of ${fmt(tot)} doesn’t-fit moments (${pct(n / tot)})</div><div>${pct(ok / Math.max(1, n))} ended with a fitting plan</div>`,
+      color: k === "Left" || k === "Reset everything" ? "var(--critical)" : "var(--accent)",
+    })), { labelW: "36%" }) + `<div class="note" style="margin-top:12px">Idea: when a model doesn’t fit, offer the two fixes inline (“NVFP4 fits on 4×”, “needs 2 more GPUs”) instead of a red number.</div>`;
+  }
+
+  function lastStep(hs) {
+    const names = { gpu_add: "Added a GPU", gpu_qty: "Changed GPU count", result: "Saw doesn’t-fit", model_add: "Added a model", model_remove: "Removed a model", model_prec: "Changed precision",
+      session_reset: "Reset", search: "Search with no result", mode: "Switched tab", compare_gpu: "Set up compare", econ_view: "Opened economics", settings_mu: "Changed context",
+      use_case_add: "Added a use-case", gpu_cost: "Entered $/hr", dist_slide: "Tuned TP/PP", compare_duplicate: "Opened compare", projection_toggle: "Toggled projection", scenario_restore: "Resumed scenario",
+      copy_link: "Copied share link", export_report: "Exported report", scenario_export: "Exported scenario", feedback: "Left feedback" };
+    const ends = [];
+    for (const v of hs) if (engaged(v)) for (const s of v.sessions) {
+      if (s.final && s.final.fit) continue;
+      const last = [...s.events].reverse().find((e) => e.type !== "scroll");
+      if (last && last.type !== "open") ends.push(last.type === "result" && last.fits ? null : last.type);
+    }
+    const rows = countBy(ends, (x) => x).slice(0, 8);
+    document.getElementById("lastStep").innerHTML = hbars(rows.map(([k, n]) => ({ label: esc(names[k] || k), plain: names[k] || k, value: n, color: k === "result" || k === "search" ? "var(--critical)" : "var(--accent)" })), { labelW: "40%" });
+  }
+
+  function friction(hs) {
+    const sessions = hs.flatMap((v) => v.sessions.map((s) => ({ v, s })));
+    const sig = [
+      ["✕", "Doesn’t fit, never recovered", "Saw a failed fit and the visit ended without a fitting plan",
+        ({ s }) => s.events.some((e) => e.type === "result" && !e.fits) && !(s.final && s.final.fit),
+        (ex) => { const pairs = countBy(ex.flatMap(({ s }) => s.events.filter((e) => e.type === "model_add").map((e) => shortModel(e.model))), (x) => x).slice(0, 2); return pairs.map(([m]) => esc(m)).join(", "); }],
+      ["?", "Searched, found nothing", "Picker search returned zero results",
+        ({ s }) => s.events.some((e) => e.type === "search" && !e.results),
+        (ex) => countBy(ex.flatMap(({ s }) => s.events.filter((e) => e.type === "search").map((e) => e.term)), (x) => x).slice(0, 3).map(([t]) => `“${esc(t)}”`).join(", ")],
+      ["↺", "Reset loop", "Reset the scenario twice or more in one visit",
+        ({ s }) => s.events.filter((e) => e.type === "session_reset").length >= 2, () => "default scenario not what they wanted"],
+      ["▯", "Mobile bounce", "Phone visitor who changed nothing",
+        ({ v, s }) => v.device === "mobile" && !s.events.some((e) => e.type !== "open" && e.type !== "scroll" && e.type !== "search"), () => "layout needs a phone-sized first answer"],
+      ["⌁", "Agent API rejected", "Agent call returned 4xx",
+        ({ s }) => s.events.some((e) => e.type === "api_call" && e.status >= 400), (ex) => countBy(ex.map(({ v }) => v.ua), (x) => x).slice(0, 2).map(([u]) => esc(u)).join(", ")],
+    ];
+    const total = sessions.length || 1;
+    document.getElementById("friction").innerHTML = `<thead><tr><th></th><th>Signal</th><th class="r">Sessions</th><th class="r">Share</th><th>Most common</th><th>Who</th><th>Examples</th></tr></thead><tbody>` +
+      sig.map(([ic, name, desc, fn, top]) => {
+        const ex = sessions.filter(fn);
+        const who = countBy(ex, ({ v }) => v.persona).slice(0, 2);
+        const exs = [...new Set(ex.map(({ v }) => v.id))].slice(0, 3);
+        return `<tr><td style="color:var(--critical);font-weight:600">${ic}</td><td><b>${name}</b><div class="muted" style="font-size:11px">${desc}</div></td>
+          <td class="r">${fmt(ex.length)}</td><td class="r">${pct(ex.length / total, 1)}</td><td>${ex.length ? top(ex) : "—"}</td>
+          <td>${who.map(([k]) => pchip(k, PERSONAS[k].short)).join("<br>")}</td>
+          <td>${exs.map((id) => `<a class="mono" href="3-people.html#v=${id}">${id}</a>`).join(" ")}</td></tr>`;
+      }).join("") + "</tbody>";
+  }
+
+  function paths(hs) {
+    const tok = (e) => ({ session_reset: ["reset"], scenario_restore: ["resume"], gpu_add: ["+GPU"], gpu_qty: ["#GPU"], model_add: ["+model"], model_prec: ["quantize"], model_remove: ["−model"],
+      result: [e.fits ? "✓ fits" : "✕ no fit", e.fits ? "ok" : "bad"], compare_duplicate: ["compare"], econ_view: ["econ"], use_case_add: ["use-case"], mode: [e.mode], search: ["search ✕", "bad"],
+      copy_link: ["share"], export_report: ["export"], scenario_export: ["export"], dist_slide: ["TP/PP"], settings_mu: ["context"], gpu_cost: ["$/hr"] }[e.type]);
+    const seqs = [];
+    for (const v of hs) if (engaged(v) && v.persona !== "agent") for (const s of v.sessions) {
+      const t = [];
+      for (const e of s.events) {
+        const k = tok(e);
+        if (!k) continue;
+        if (t.length && t[t.length - 1][0] === k[0]) continue;
+        t.push(k);
+        if (t.length >= 6) break;
+      }
+      if (t.length) seqs.push({ t, fit: s.final && s.final.fit });
+    }
+    const groups = new Map();
+    for (const q of seqs) {
+      const key = q.t.map((x) => x[0]).join(" › ");
+      if (!groups.has(key)) groups.set(key, { t: q.t, n: 0, fit: 0 });
+      const g = groups.get(key); g.n++; if (q.fit) g.fit++;
+    }
+    const rows = [...groups.values()].sort((a, b) => b.n - a.n).slice(0, 10);
+    const tot = seqs.length || 1;
+    document.getElementById("paths").innerHTML = `<thead><tr><th>Path</th><th class="r">Sessions</th><th class="r">Ends fitting</th></tr></thead><tbody>` +
+      rows.map((g) => `<tr><td><div class="path">${g.t.map(([l, c]) => `<span class="s ${c || ""}">${esc(l)}</span>`).join('<span class="arr">›</span>')}</div></td>
+        <td class="r">${fmt(g.n)} <span class="muted">${pct(g.n / tot)}</span></td><td class="r">${pct(g.fit / g.n)}</td></tr>`).join("") + "</tbody>";
+  }
+
+  function ttfm(hs) {
+    const xs = [];
+    for (const v of hs) for (const s of v.sessions) {
+      const m = s.events.find((e) => e.type === "model_add");
+      if (m) xs.push((m.t - s.start) / 1000);
+    }
+    const edges = [0, 15, 30, 60, 90, 120, 180, 300, 600, Infinity];
+    const labels = ["<15s", "15–30s", "30–60s", "1–1.5m", "1.5–2m", "2–3m", "3–5m", "5–10m", "10m+"];
+    const bins = labels.map(() => 0);
+    for (const x of xs) for (let i = 0; i < labels.length; i++) if (x >= edges[i] && x < edges[i + 1]) { bins[i]++; break; }
+    const W = 560, H = 200, L = 34, R = 6, T = 10, B = 26;
+    const max = Math.max(1, ...bins);
+    const bw = (W - L - R) / bins.length;
+    const y = (n) => T + (1 - n / max) * (H - T - B);
+    const ticks = [0, Math.round(max / 2), max];
+    const sorted = [...xs].sort((a, b) => a - b);
+    const med = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0;
+    document.getElementById("ttfm").innerHTML =
+      ticks.map((t) => `<line class="gridline" x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}"/><text x="${L - 6}" y="${y(t) + 4}" text-anchor="end">${t}</text>`).join("") +
+      bins.map((n, i) => `<rect x="${L + i * bw + 2}" y="${y(n)}" width="${bw - 4}" height="${y(0) - y(n)}" rx="3" fill="var(--accent)" data-tip="<b>${labels[i]}</b><div>${fmt(n)} sessions (${pct(n / Math.max(1, xs.length))})</div>"/>
+        <text x="${L + i * bw + bw / 2}" y="${H - 8}" text-anchor="middle">${labels[i]}</text>`).join("") +
+      `<line class="baseline" x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}"/>
+       <text x="${W - R}" y="${T + 4}" text-anchor="end" style="fill:var(--text-2)">median ${dur(med * 1000)} · ${fmt(xs.length)} sessions</text>`;
+  }
+
+  function render() {
+    const vs = visible();
+    setCount(vs.length);
+    const hs = vs.filter((v) => v.persona !== "agent");
+    funnel(hs); segHeat(hs); recovery(hs); lastStep(hs); friction(vs); paths(hs); ttfm(hs);
+  }
+  render();
+})();
+</script>
+</body>
+</html>

@@ -22,6 +22,9 @@ from calc import (
     avg_dist,
     compute_data,
     compute_data_capacity,
+    compute_decision,
+    compute_embedding,
+    compute_realtime_max_users,
     default_strategy,
     spec_runtime_for,
     valid_strategies,
@@ -49,6 +52,8 @@ from data import (
     required_quality,
     success_rate,
 )
+from data.use_case_modalities import model_workload_kind, workload_unit
+from state import project_demand_multiplier
 
 
 @dataclass(frozen=True)
@@ -207,6 +212,14 @@ def _project_workload_profile(project, fallback: dict) -> dict:
     routing economics need the project's own shape. Otherwise a short classification stream
     inherits the blended portfolio's long-output token tax and can look falsely priced out.
     """
+    if project.workload_kind != "llm":
+        # ASR uses audio seconds; embedding/decision use full formatted input tokens.
+        size = (
+            1.0
+            if project.workload_kind == "asr"
+            else max(1.0, float(project.scale_kind["token_multiplier"]))
+        )
+        return {"in_len": size, "out_len": 0.0, "tokens_per_request": size}
     in_preset = DIST_PRESETS.get(getattr(project, "in_pre", "")) or DIST_PRESETS["Chat"]
     out_preset = DIST_PRESETS.get(getattr(project, "out_pre", "")) or DIST_PRESETS["Chat"]
     in_len: float = avg_dist(in_preset["in"], INPUT_BUCKETS)
@@ -285,8 +298,30 @@ def _workload_profile(state) -> dict:
     }
 
 
+HOURS = 24
+
+
+def _day_shape_shares(shape_key: str) -> list[float]:
+    """Share of a day's demand arriving in each hour for an interactive day shape."""
+    weights = cast(list[float], (DAY_SHAPES.get(shape_key) or DAY_SHAPES["workday"])["weights"])
+    total = sum(weights)
+    if len(weights) != HOURS or total <= 0:
+        return [1.0 / HOURS] * HOURS
+    return [w / total for w in weights]
+
+
+def _peak_over_mean(shares: list[float]) -> float:
+    return max(shares) * HOURS if shares else 1.0
+
+
 def _build_model_supply(state, profile, prefix_hit_rate, peak_factor_eff) -> list[dict]:
-    """For each deployed model, compute peak RPS, sustainable tokens/day, and internal $/M."""
+    """For each deployed model, compute peak RPS, tokens/day at full load, and internal $/M.
+
+    Capacity is booked hour by hour: each deployment can serve 1/24 of its full-load
+    daily tokens in every hour. ``daily_tokens_cap`` is that 24-hour full-load total;
+    the internal price still spreads GPU cost over the portfolio's effective peak, so
+    it reflects tokens the fleet can actually sell given when demand arrives.
+    """
     tokens_per_req = max(1.0, profile["tokens_per_request"])
     pool_rate = {gp.uid: gp.cost_per_gpu_hour * 24.0 for gp in state.gpus}
     pool_country = {gp.uid: getattr(gp, "country", DEFAULT_COUNTRY) for gp in state.gpus}
@@ -296,40 +331,43 @@ def _build_model_supply(state, profile, prefix_hit_rate, peak_factor_eff) -> lis
     day_weights = cast(list[float], day_shape["weights"]) or [1.0] * 24
     night_weights = [1.0 if h in NIGHT_HOURS else 0.0 for h in range(24)]
     supply = []
+    active_kinds = {project.workload_kind for project in state.projects} | {"llm"}
     for am, gpu in _iter_resolved_models(state):
-        if (
-            getattr(am.model, "is_asr_model", False)
-            or am.model.is_decision_model
-            or getattr(am.model, "embedding_profile", None) is not None
-        ):
+        if model_workload_kind(am.model) not in active_kinds:
             continue
-        cap = compute_data_capacity(
-            am.model,
-            (am.prefill_tp, am.prefill_pp, am.prefill_dp),
-            (am.tp, am.pp, am.dp),
-            profile["in_len"],
-            profile["out_len"],
-            gpu,
-            state.mu,
-            state.profiled_non_kv_gb,
-            am.prec,
-            prefix_hit_rate,
-            state.prefill_efficiency,
-            state.decode_efficiency,
-            spec_runtime_for(state, am, am.model),
-        )
-        batch_sizes = _batch_axis_sweep([cap], DATA_BATCH_SIZES)
-        best = _best_deployment_result_for_model(
-            state, am, gpu, profile["in_len"], profile["out_len"], batch_sizes
-        )
-        peak_rps = best.rps if (best and best.rps > 0) else 0.0
-        # Sustainable daily token capacity: honor peak-hour headroom so we don't promise
-        # throughput the day-shape can't actually sustain without thrashing.
-        daily_tokens_cap = (
-            peak_rps * 3600.0 * 24.0 * tokens_per_req / peak_factor_eff if peak_rps > 0 else 0.0
-        )
+        if model_workload_kind(am.model) != "llm":
+            native_profile = {
+                "in_len": min(512, am.model.max_context_tokens),
+                "out_len": 0.0,
+                "tokens_per_request": 1.0,
+            }
+            daily_tokens_cap, peak_rps = _native_deployment_capacity(state, am, gpu, native_profile)
+        else:
+            cap = compute_data_capacity(
+                am.model,
+                (am.prefill_tp, am.prefill_pp, am.prefill_dp),
+                (am.tp, am.pp, am.dp),
+                profile["in_len"],
+                profile["out_len"],
+                gpu,
+                state.mu,
+                state.profiled_non_kv_gb,
+                am.prec,
+                prefix_hit_rate,
+                state.prefill_efficiency,
+                state.decode_efficiency,
+                spec_runtime_for(state, am, am.model),
+            )
+            batch_sizes = _batch_axis_sweep([cap], DATA_BATCH_SIZES)
+            best = _best_deployment_result_for_model(
+                state, am, gpu, profile["in_len"], profile["out_len"], batch_sizes
+            )
+            peak_rps = best.rps if (best and best.rps > 0) else 0.0
+        if model_workload_kind(am.model) == "llm":
+            daily_tokens_cap = peak_rps * 3600.0 * 24.0 * tokens_per_req if peak_rps > 0 else 0.0
+        sellable_tokens = daily_tokens_cap / max(peak_factor_eff, 1.0)
         gpu_cost_day = pool_rate.get(am.gpu_uid, 0.0) * am.gpu_count
-        internal_pm = (gpu_cost_day * 1e6 / daily_tokens_cap) if daily_tokens_cap > 0 else math.inf
+        internal_pm = (gpu_cost_day * 1e6 / sellable_tokens) if sellable_tokens > 0 else math.inf
         country = pool_country.get(am.gpu_uid, DEFAULT_COUNTRY)
         grid_day = carbon_intensity_avg(country, day_weights)
         grid_night = carbon_intensity_avg(country, night_weights)
@@ -349,8 +387,8 @@ def _build_model_supply(state, profile, prefix_hit_rate, peak_factor_eff) -> lis
                 "token_efficiency": max(float(am.model.token_efficiency), 1e-6),
                 "peak_rps": peak_rps,
                 "daily_tokens_cap": daily_tokens_cap,
-                "remaining_cap": daily_tokens_cap,
-                "remaining_fraction": 1.0,
+                # Unbooked share of the full-load day, per hour (each hour starts at 1/24).
+                "remaining_h": [1.0 / HOURS] * HOURS,
                 "used_fraction": 0.0,
                 "served_tokens": 0.0,
                 "gpu_cost_day": gpu_cost_day,
@@ -406,19 +444,29 @@ def build_supply(state) -> _ProjectionContext:
     prefix_hit_rate = min(max(state.prefix_hit_rate, 0.0), 1.0)
     corpo_cloud = getattr(state, "corpo_cloud", CORPO_CLOUD_DEFAULT)
     day_shape = DAY_SHAPES.get(state.projection_day_shape) or DAY_SHAPES["workday"]
-    weights = cast(list[float], day_shape["weights"]) or [1.0]
-    mean_w = sum(weights) / len(weights)
-    peak_factor = (max(weights) / mean_w) if mean_w > 0 else 1.0
 
+    # Interactive use cases arrive on their own day shape; batch use cases run in
+    # whatever hours are free. The portfolio's effective peak/mean is the busiest
+    # interactive hour against the whole day's demand (never below 1).
     projects = tuple(state.projects)
-    total_demand = sum(max(0.0, p.tokens_day) for p in projects)
-    batch_demand = sum(max(0.0, p.tokens_day) for p in projects if p.batch_eligible)
+    interactive_h = [0.0] * HOURS
+    total_demand = 0.0
+    batch_demand = 0.0
+    for p in projects:
+        demand = max(0.0, p.tokens_day) * project_demand_multiplier(state, p)
+        total_demand += demand
+        if p.batch_eligible:
+            batch_demand += demand
+            continue
+        for h, share in enumerate(_day_shape_shares(p.day_shape)):
+            interactive_h[h] += demand * share
+    interactive_demand = total_demand - batch_demand
+    peak_factor = max(interactive_h) * HOURS / interactive_demand if interactive_demand > 0 else 1.0
     batch_share = (batch_demand / total_demand) if total_demand > 0 else 0.0
-    night_batching = bool(state.projection_night_batching)
+    night_batching = True
     peak_factor_eff = (
-        (1.0 - batch_share) * peak_factor + batch_share if night_batching else peak_factor
+        max(max(interactive_h) * HOURS / total_demand, 1.0) if total_demand > 0 else 1.0
     )
-    peak_factor_eff = max(peak_factor_eff, 1.0)
     supply = _build_model_supply(state, profile, prefix_hit_rate, peak_factor_eff)
     return _ProjectionContext(
         state=state,
@@ -436,10 +484,12 @@ def build_supply(state) -> _ProjectionContext:
 
 
 def classify_demand(context: _ProjectionContext) -> _ProjectionContext:
-    """Order demand by economic value and compatibility scarcity."""
+    """Order demand: interactive before batch (batch fills the hours left over), then by
+    economic value and compatibility scarcity."""
     projects_sorted = sorted(
         context.projects,
         key=lambda p: (
+            bool(p.batch_eligible),
             -float(p.wtp_per_m),
             -required_quality(
                 float(getattr(p, "difficulty", 0.5)),
@@ -458,9 +508,8 @@ def allocate_capacity(context: _ProjectionContext) -> _ProjectionContext:
     state = context.state
     profile = context.profile
     corpo_cloud = context.corpo_cloud
-    peak_factor = context.peak_factor
-    night_batching = context.night_batching
     projects = context.projects
+    price_driven = bool(getattr(state, "price_driven_demand", False))
     projects_sorted = context.projects_sorted
     supply = [dict(model_supply) for model_supply in context.supply]
     routed: dict[int, dict] = {}
@@ -476,6 +525,7 @@ def allocate_capacity(context: _ProjectionContext) -> _ProjectionContext:
         required_caps = frozenset(getattr(p, "requires", frozenset()) or frozenset())
         project_prefix_hit_rate = min(max(float(getattr(p, "prefix_hit_rate", 0.0)), 0.0), 1.0)
         project_profile = _project_workload_profile(p, profile)
+        project_profile["streaming_required"] = p.workload_kind == "asr" and not p.batch_eligible
         cloud_info, cloud_pm = _cloud_price_per_m_in_preset(
             difficulty,
             slo,
@@ -486,10 +536,19 @@ def allocate_capacity(context: _ProjectionContext) -> _ProjectionContext:
             required_caps,
             quality_domain,
         )
+        if not getattr(state, "cloud_enabled", True):
+            # No cloud fallback: every use case behaves as if no cloud model qualified.
+            cloud_info, cloud_pm = None, 0.0
+        if p.workload_kind != "llm":
+            # No comparable native-modality cloud prices in the text API catalog.
+            cloud_info, cloud_pm = None, 0.0
         cloud_blocked = cloud_info is None
         cloud_details = cloud_info or {}
         wtp = float(p.wtp_per_m)
-        total = max(0.0, float(p.tokens_day))
+        demand_scale = project_demand_multiplier(state, p)
+        total = max(0.0, float(p.tokens_day)) * demand_scale
+        hour_shares = None if p.batch_eligible else _day_shape_shares(p.day_shape)
+        project_peak_factor = 1.0 if hour_shares is None else _peak_over_mean(hour_shares)
 
         # Candidate list with capability + success-rate gates. `useful tokens` = work the
         # project needs done; token efficiency affects generated/output tokens only, so the
@@ -500,6 +559,8 @@ def allocate_capacity(context: _ProjectionContext) -> _ProjectionContext:
         floor_compatible_seen = False
         slo_compatible_seen = False
         for me in supply:
+            if model_workload_kind(me["model"]) != p.workload_kind:
+                continue
             if not me["runnable"]:
                 continue
             runnable_seen = True
@@ -507,12 +568,15 @@ def allocate_capacity(context: _ProjectionContext) -> _ProjectionContext:
                 continue
             capability_compatible_seen = True
             project_quality = model_profile_quality(me["model"], quality_weights, quality_domain)
-            if project_quality + 1e-9 < quality_floor:
+            if p.workload_kind == "llm" and project_quality + 1e-9 < quality_floor:
                 continue
             floor_compatible_seen = True
             sr = model_profile_success_rate(
                 me["model"], difficulty, quality_weights, quality_domain
             )
+            if p.workload_kind != "llm":
+                # Capacity only: do not infer accuracy or retry rates from LLM quality.
+                sr = 1.0
             if sr + 1e-9 < slo:
                 continue
             slo_compatible_seen = True
@@ -522,18 +586,20 @@ def allocate_capacity(context: _ProjectionContext) -> _ProjectionContext:
                 float(project_profile["out_len"]),
             )
             retry_mult = 1.0 / max(sr, 1e-6)
-            project_peak_factor = 1.0 if (night_batching and p.batch_eligible) else peak_factor
+            # Full-load daily tokens for this use case's request shape; hours are booked
+            # against it below. The internal price spreads GPU cost over the tokens that
+            # can be sold given when this use case's demand arrives.
             shape_daily_cap, shape_peak_rps = _deployment_capacity_for_profile(
                 state,
                 me["am"],
                 me["gpu"],
                 project_profile,
-                project_peak_factor,
+                1.0,
                 project_prefix_hit_rate,
             )
             if shape_daily_cap <= 0:
                 continue
-            shape_internal_pm = me["gpu_cost_day"] * 1e6 / shape_daily_cap
+            shape_internal_pm = me["gpu_cost_day"] * 1e6 * project_peak_factor / shape_daily_cap
             project_tpt = tokens_per_task(
                 me["model"],
                 int(project_profile["in_len"]),
@@ -572,7 +638,9 @@ def allocate_capacity(context: _ProjectionContext) -> _ProjectionContext:
         # Latent demand activates smoothly around the unlock price. This keeps the configured
         # unlock as the midpoint while avoiding discontinuous portfolio demand jumps.
         baseline_tokens = total
-        latent_pool = max(0.0, float(getattr(p, "latent_jobs_day", 0.0)))
+        latent_pool = max(0.0, float(getattr(p, "latent_jobs_day", 0.0))) * demand_scale
+        if not price_driven or not getattr(state, "projection_include_latent", True):
+            latent_pool = 0.0
         unlock_price = float(getattr(p, "unlock_price_per_m", 0.0))
         cheapest_pm = candidates[0]["effective_pm"] if candidates else float("inf")
         latent_activation = (
@@ -586,28 +654,48 @@ def allocate_capacity(context: _ProjectionContext) -> _ProjectionContext:
         per_model_served: list[tuple[dict, float, float, int]] = []
         internal_cost = 0.0
         co2_g_day_project = 0.0
-        # Internal price cap: never charge above WTP; if cloud is reachable, also cap at cloud
-        # (otherwise the project would just buy from cloud instead of paying us more).
-        price_cap = wtp if cloud_blocked else min(wtp, cloud_pm)
+        # Price-driven demand: never charge above WTP; if cloud is reachable, also cap at
+        # cloud (the use case would buy there instead). Sizing mode has no cap: GPUs that
+        # are already paid for serve whatever they can.
+        if price_driven:
+            price_cap = wtp if cloud_blocked else min(wtp, cloud_pm)
+        else:
+            price_cap = math.inf
         has_affordable_candidate = any(c["effective_pm"] <= price_cap + 1e-9 for c in candidates)
+        # Hour-by-hour booking. Interactive demand arrives on its day shape and can only
+        # use capacity in that hour; batch demand takes whatever hours are still free.
+        demand_h = [total * share for share in hour_shares] if hour_shares is not None else None
         for c in candidates:
             me = c["me"]
-            if me["remaining_fraction"] <= 0:
-                continue
             if c["effective_pm"] > price_cap:
                 continue
-            useful_remaining = total - served
-            if useful_remaining <= 0:
+            if total - served <= 0:
                 break
-            shape_remaining = me["remaining_fraction"] * c["shape_daily_cap"]
-            useful_take = min(useful_remaining, shape_remaining / c["token_mult"])
+            per_frac = c["shape_daily_cap"] / c["token_mult"]  # useful tokens per day-fraction
+            remaining_h = me["remaining_h"]
+            useful_take = 0.0
+            if demand_h is None:
+                free = sum(remaining_h)
+                if free <= 0:
+                    continue
+                useful_take = min(total - served, free * per_frac)
+                used = useful_take / per_frac
+                keep = max(0.0, 1.0 - used / free)
+                for h in range(HOURS):
+                    remaining_h[h] *= keep
+            else:
+                for h in range(HOURS):
+                    if demand_h[h] <= 0 or remaining_h[h] <= 0:
+                        continue
+                    take = min(demand_h[h], remaining_h[h] * per_frac)
+                    demand_h[h] -= take
+                    remaining_h[h] = max(0.0, remaining_h[h] - take / per_frac)
+                    useful_take += take
             if useful_take <= 0:
                 continue
             actual_take = useful_take * c["token_mult"]
             fraction_used = actual_take / c["shape_daily_cap"]
-            me["remaining_fraction"] = max(0.0, me["remaining_fraction"] - fraction_used)
             me["used_fraction"] = min(1.0, me["used_fraction"] + fraction_used)
-            me["remaining_cap"] = me["daily_tokens_cap"] * me["remaining_fraction"]
             me["served_tokens"] += actual_take
             per_model_served.append((me, useful_take, actual_take, c["success_rate"]))
             internal_cost += (actual_take / 1e6) * c["shape_internal_pm"]
@@ -637,7 +725,7 @@ def allocate_capacity(context: _ProjectionContext) -> _ProjectionContext:
                     spilled = unserved
                 else:
                     leaked = unserved
-                if cloud_pm > wtp:
+                if price_driven and cloud_pm > wtp:
                     destroyed = spilled + leaked
                     spilled, leaked = 0.0, 0.0
 
@@ -680,6 +768,15 @@ def allocate_capacity(context: _ProjectionContext) -> _ProjectionContext:
             "leaked_pct": (leaked / total * 100.0) if total > 0 else 0.0,
             "destroyed_pct": (destroyed / total * 100.0) if total > 0 else 0.0,
             "internal_cost_day": internal_cost,
+            **(
+                {
+                    "workload_kind": p.workload_kind,
+                    "workload_unit": workload_unit(p.workload_kind),
+                    "quality_status": "uncalibrated",
+                }
+                if p.workload_kind != "llm"
+                else {}
+            ),
             "quality_floor": quality_floor,
             "quality_domain": quality_domain,
             "quality_domain_label": QUALITY_DOMAIN_LABELS[quality_domain],
@@ -830,7 +927,8 @@ def calculate_environmental_impact(context: _ProjectionContext) -> _ProjectionCo
     for row in supply:
         cap = row["daily_tokens_cap"]
         util = row.get("used_fraction", 0.0)
-        saturated = cap > 0 and row.get("remaining_fraction", 1.0) <= 0.01
+        # Saturated: at least one hour fully booked (demand was turned away then).
+        saturated = cap > 0 and min(row.get("remaining_h", [1.0])) <= 0.01 / HOURS
         served_tasks = row["served_tasks"]
         tokens_per_task = row["served_tokens"] / served_tasks if served_tasks > 0 else 0.0
         co2_day_gco2 = row["served_co2_g_day"] / served_tasks if served_tasks > 0 else 0.0
@@ -1062,6 +1160,7 @@ def _marginal_model_swap_recommendations(
                 continue
             rows.append(
                 {
+                    "am_uid": am.uid,
                     "current_key": am.model_key,
                     "current_name": current.name,
                     "candidate_key": cand_key,
@@ -1098,6 +1197,64 @@ def _marginal_model_swap_recommendations(
     return rows[:MARGINAL_RECOMMENDATION_LIMIT]
 
 
+def _native_deployment_capacity(state, am, gpu: GPU, profile: dict) -> tuple[float, float]:
+    """Daily work units and tasks/s, using native capacity without a decode proxy.
+
+    ASR is conservatively capped at realtime audio seconds (also for batch jobs).
+    Embedding/decision requests contain only input tokens, with no prefix savings.
+    Context overflow is rejected, never silently truncated.
+    """
+    model = am.model
+    strat = (am.tp, am.pp, am.dp)
+    if model.is_asr_model:
+        users = compute_realtime_max_users(
+            model,
+            strat,
+            gpu,
+            state.mu,
+            state.profiled_non_kv_gb,
+            am.prec,
+            state.decode_efficiency,
+        )
+        if profile.get("streaming_required") and not model.realtime_profile.streaming:
+            return 0.0, 0.0
+        return users * 86400.0, float(users)
+    seq = max(1, math.ceil(profile["in_len"]))
+    native_profile = model.decision_profile if model.is_decision_model else model.embedding_profile
+    if native_profile is None or seq > native_profile.max_sequence_length:
+        return 0.0, 0.0
+    best_rps = 0.0
+    for bs in DATA_BATCH_SIZES:
+        if model.is_decision_model:
+            decision = compute_decision(
+                model,
+                strat,
+                bs,
+                seq,
+                gpu,
+                state.mu,
+                state.profiled_non_kv_gb,
+                am.prec,
+                state.prefill_efficiency,
+            )
+            rps = decision.rps if decision else 0.0
+        else:
+            embedding = compute_embedding(
+                model,
+                strat,
+                bs,
+                seq,
+                gpu,
+                state.mu,
+                state.profiled_non_kv_gb,
+                am.prec,
+                state.prefill_efficiency,
+            )
+            rps = embedding.rps if embedding else 0.0
+        best_rps = max(best_rps, rps)
+    return best_rps * 86400.0 * seq, best_rps
+
+
 def _deployment_capacity_for_profile(
     state,
     am,
@@ -1119,6 +1276,9 @@ def _deployment_capacity_for_profile(
         if prefix_hit_rate is None
         else min(max(float(prefix_hit_rate), 0.0), 1.0)
     )
+    if model_workload_kind(am.model) != "llm":
+        daily, rps = _native_deployment_capacity(state, am, gpu, profile)
+        return daily / max(float(peak_factor), 1.0), rps
     cap = compute_data_capacity(
         am.model,
         (am.prefill_tp, am.prefill_pp, am.prefill_dp),
@@ -1222,7 +1382,13 @@ def _cloud_price_per_m_in_preset(
     best: Optional[tuple[float, dict]] = None
     for key, cloud in cloud_policy.effective_corpo_models(preset_name):
         priced_cloud, price_effective_at = _dated_cloud_pricing(cloud, profile)
-        if not (required_capabilities <= frozenset(cloud.get("capabilities", ()))):
+        # Most cloud entries carry no capability list. Missing data is unknown, not
+        # "can do nothing": such entries pass the gate and are flagged unverified.
+        listed_capabilities = cloud.get("capabilities")
+        capabilities_unverified = listed_capabilities is None and bool(required_capabilities)
+        if listed_capabilities is not None and not (
+            required_capabilities <= frozenset(listed_capabilities)
+        ):
             continue
         cloud_quality = float(cloud.get("quality", 0.5))
         cloud_eff = max(float(cloud.get("token_efficiency", 1.0)), 1e-6)
@@ -1290,6 +1456,7 @@ def _cloud_price_per_m_in_preset(
                 | {
                     "key": key,
                     "success_rate": cloud_success,
+                    "capabilities_unverified": capabilities_unverified,
                     "long_context_pricing_applied": long_context_pricing,
                     "pricing_period": pricing_period,
                     "price_effective_at": price_effective_at,

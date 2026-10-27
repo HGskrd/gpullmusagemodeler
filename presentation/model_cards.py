@@ -12,6 +12,7 @@ from calc import (
     compute_decision,
     compute_decode,
     compute_embedding_distribution,
+    compute_prefill,
     compute_realtime_capacity,
     compute_realtime_max_users,
     effective_prefill_length,
@@ -31,10 +32,12 @@ from data import (
     GPU,
     INPUT_BUCKETS,
     OUTPUT_BUCKETS,
+    PRECISION_LABELS,
     PRECISION_SPECS,
     PRECISIONS,
     Model,
     artifact_options,
+    artifact_precision,
 )
 from placement import (
     _assignment_memories,
@@ -195,6 +198,7 @@ def _build_model_info(
 
     strats: list[tuple[int, int, int]] = []
     recommended_label = ""
+    recommended_strategy: Optional[tuple[int, int, int]] = None
     alt_prec = None
     alt_fits_now = False
     selected_min_gpu_count = None
@@ -208,7 +212,8 @@ def _build_model_info(
         strats = valid_strategies(
             model, am.gpu_count, gpu, state.mu, state.profiled_non_kv_gb, am.prec, spec_runtime
         )
-        recommended_label = strategy_label(*_preferred_strategy(state, am, gpu, "decode"))
+        recommended_strategy = _preferred_strategy(state, am, gpu, "decode")
+        recommended_label = strategy_label(*recommended_strategy)
 
     avg_in = avg_dist(state.in_dist, INPUT_BUCKETS)
     avg_out = avg_dist(state.out_dist, OUTPUT_BUCKETS)
@@ -535,6 +540,9 @@ def _build_model_info(
         and (decision is None or decision["sample"] is not None),
         "runnable": bool(strats) and (decision is None or decision["sample"] is not None),
         "recommended_label": recommended_label,
+        "recommended_strategy": recommended_strategy,
+        "layout_is_recommended": recommended_strategy is None
+        or recommended_strategy == (am.tp, am.pp, am.dp),
         "topology_label": topology_label,
         "selected_min_gpu_count": selected_min_gpu_count,
         "selected_pool_min_gpu_count": selected_pool_min_gpu_count,
@@ -592,3 +600,155 @@ def get_model_infos(state: PlannerState) -> list[dict]:
             prefill_mem, decode_mem = _assignment_memories(state, am, gpu)
         infos.append(_build_model_info(state, am, gpu_pool, prefill_mem, decode_mem))
     return infos
+
+
+# ── Short labels for the model row's closed dropdowns ───────────────────────
+# The open list keeps the full catalog names; the closed control shows these.
+
+
+def short_artifact_label(model: Model, option: dict) -> str:
+    """'Native · FP8 text + BF16 vision…' -> 'FP8 native'; 'BF16 · estimated conversion' -> 'BF16 est.'."""
+    precision = PRECISION_LABELS.get(artifact_precision(model, option["key"]), "")
+    key = str(option.get("key", ""))
+    if key.startswith("native:"):
+        return f"{precision} native".strip()
+    if key.startswith("estimate:"):
+        return f"{precision} est.".strip()
+    return precision or str(option.get("label", ""))
+
+
+def short_spec_label(label: str) -> str:
+    """Speculative-decoding profile label -> a word: 'Gemma 4 assistant MTP' -> 'MTP'."""
+    text = str(label or "")
+    for token, short in (
+        ("MTP", "MTP"),
+        ("EAGLE", "EAGLE-3" if "EAGLE-3" in text else "EAGLE"),
+        ("DFlash", "DFlash"),
+        ("N-gram", "N-gram"),
+        ("Medusa", "Medusa"),
+    ):
+        if token in text:
+            return short
+    return text.split(" ")[0] if text else "off"
+
+
+def short_note(note: str) -> str:
+    """One or two words naming a model-row warning; the full text stays in the tooltip."""
+    text = str(note or "")
+    for needle, short in (
+        ("MoE", "MoE"),
+        ("spans nodes", "cross-node"),
+        ("Speculative", "spec. prior"),
+        ("speculative", "spec. prior"),
+        ("FP8", "precision"),
+        ("FP4", "precision"),
+        ("precision", "precision"),
+        ("LUT", "estimate"),
+    ):
+        if needle in text:
+            return short
+    return "note"
+
+
+def short_gpu_label(name: str) -> str:
+    """'H100 80GB SXM' -> 'H100'; 'RTX PRO 6000 Blackwell Workstation 96GB' -> 'RTX PRO 6000'."""
+    words = []
+    for word in str(name or "").split():
+        if "GB" in word:
+            break
+        words.append(word)
+    return " ".join(words[:3]) or str(name or "")
+
+
+def tech_scorecard(state: PlannerState, econ: dict) -> list[dict]:
+    """Technical result rows, one per deployed model: can it keep up (status,
+    capacity, peak req/s), how fast for users (first-token time for one typical
+    prompt; per-user decode speed alone and at full load) and how it fits
+    (per-GPU memory split, most concurrent users). Capacity and saturation come
+    from the projection; speeds come from the same decode model as the chart.
+    """
+    by_uid = {row["am_uid"]: row for row in econ["p"]["models"]}
+    rows = []
+    for info in get_model_infos(state):
+        am, model, gpu = info["am"], info["model"], info["gpu"]
+        if am.gpu_count <= 0 or gpu is None:
+            continue
+        projected = by_uid.get(am.uid, {})
+        is_text = not (model.is_embedding_model or model.is_asr_model or model.is_decision_model)
+        spec = resolve_spec_runtime(
+            model, am.spec_method, am.spec_k, state.spec_acceptance, am.prec
+        )
+        speed_alone = speed_full = ttft = None
+        slots = int(info["decode_max_slots"] or 0) if is_text else 0
+        if is_text and info["runnable"] and info["decode_fits"]:
+            alone = compute_decode(
+                model,
+                am.tp,
+                am.pp,
+                1,
+                am.dp,
+                gpu,
+                state.mu,
+                state.profiled_non_kv_gb,
+                am.prec,
+                state.in_dist,
+                state.out_dist,
+                state.decode_efficiency,
+                spec,
+            )
+            full = (
+                compute_decode(
+                    model,
+                    am.tp,
+                    am.pp,
+                    slots,
+                    am.dp,
+                    gpu,
+                    state.mu,
+                    state.profiled_non_kv_gb,
+                    am.prec,
+                    state.in_dist,
+                    state.out_dist,
+                    state.decode_efficiency,
+                    spec,
+                )
+                if slots > 0
+                else None
+            )
+            speed_alone = alone.tps if alone else None
+            speed_full = (full.tps / slots) if full and slots else None
+            prefill = compute_prefill(
+                model,
+                am.prefill_tp,
+                am.prefill_pp,
+                1,
+                am.prefill_dp,
+                int(info["prefill_probe_len"] or 1),
+                gpu,
+                state.mu,
+                state.profiled_non_kv_gb,
+                am.prec,
+                state.prefill_efficiency,
+                spec,
+            )
+            ttft = prefill.service_time if prefill else None
+        mem = info["decode_mem"] or info["prefill_mem"]
+        rows.append(
+            {
+                "info": info,
+                "saturated": bool(projected.get("saturated")),
+                "utilization": float(projected.get("utilization", 0.0) or 0.0),
+                "capacity": float(projected.get("daily_tokens_cap", 0.0) or 0.0),
+                "peak_rps": float(projected.get("peak_rps", 0.0) or 0.0),
+                "ttft": ttft,
+                "probe_len": int(info["prefill_probe_len"] or 0),
+                "speed_alone": speed_alone,
+                "speed_full": speed_full,
+                "slots": slots,
+                "gpu_mem_gb": gpu.mem / 1e9,
+                "weights_gb": (mem.weights / 1e9) if mem else 0.0,
+                "runtime_gb": (mem.profiled_non_kv / 1e9) if mem else 0.0,
+                "kv_gb": (mem.kv_reserved / 1e9) if mem else 0.0,
+            }
+        )
+    return rows

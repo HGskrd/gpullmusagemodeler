@@ -1,0 +1,61 @@
+{# Models deployed on the pools (one config): one aligned row per model. #}
+<div class="panel">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;">
+    <h2 style="margin:0;">Models{% if label %} · {{ label }}{% endif %}</h2>
+    <div style="display:flex;align-items:center;gap:4px;">
+      <select id="auto-strategy-{{ panel }}" class="auto-strategy-select" name="strategy"
+              title="Automatic model-selection strategy"
+              {{ 'disabled' if state.gpus|length == 0 else '' }}>
+        {% for key, label, desc in AUTO_MODEL_STRATEGIES %}
+        <option value="{{ key }}"
+                title="{{ desc }}"
+                {{ 'selected' if state.auto_strategy == key else '' }}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <button class="ghost sm"
+              type="button"
+              hx-post="/model/auto"
+              hx-target="#main-content"
+              hx-include="#auto-strategy-{{ panel }}"
+              hx-vals='{"panel":"{{ panel }}"}'
+              title="Recommend and immediately replace this panel's model set using the selected strategy. Duplicate to Compare first if you want to preserve the current set."
+              aria-label="Recommend models and replace the current model set"
+              {{ 'disabled' if state.gpus|length == 0 else '' }}>Recommend</button>
+      <div class="picker-wrap">
+        <button class="acc sm" data-picker="model" aria-expanded="false" onclick="togglePicker(this, '/picker/model?panel={{ panel }}')" {{ 'disabled' if state.gpus|length == 0 else '' }}>+ Add model</button>
+      </div>
+    </div>
+  </div>
+  {% set infos = get_model_infos(state) %}
+  {% if infos %}
+  {% set multi_pool = state.gpus|length > 1 %}
+  <div class="mrows{{ ' multi-pool' if multi_pool }}" role="table" aria-label="Models{{ ' · ' ~ label if label }}">
+    <div class="mr-h">Model</div>{% if multi_pool %}<div class="mr-h">On</div>{% endif %}<div class="mr-h">Weights</div><div class="mr-h">GPUs</div><div class="mr-h">Layout</div><div class="mr-h">Spec. dec.</div><div class="mr-h">Quality (0–1)</div><div class="mr-h">Warnings</div><div class="mr-h mr-h-blank"></div>
+    {% for info in infos %}
+      {% set am = info.am %}
+      {% set m = info.model %}
+      {% include "partials/model_row.html" %}
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="T" style="padding:6px 2px;">No models yet. Add one, or let the planner recommend a set.</div>
+  {% endif %}
+  {% if state.auto_mode and state.auto_excluded %}
+  <div style="margin-top:8px;padding-top:6px;border-top:1px solid var(--border);">
+    <span class="T" style="display:block;margin-bottom:4px;color:var(--fg3);">Excluded from auto</span>
+    <div style="display:flex;flex-wrap:wrap;gap:4px;">
+      {% for key in state.auto_excluded %}
+        {% if key in MODELS %}
+        <div style="display:flex;align-items:center;gap:4px;padding:2px 6px;border:1px solid var(--border);border-radius:4px;opacity:0.5;">
+          <span class="T">{{ MODELS[key].name }}</span>
+          <button class="ghost sm" aria-label="Allow {{ MODELS[key].name }} in recommendations" title="Allow {{ MODELS[key].name }} in recommendations" style="padding:1px 7px;"
+                  hx-post="/model/auto-reallow"
+                  hx-target="#main-content"
+                  hx-vals='{"panel":"{{ panel }}","key":"{{ key }}"}'>✕</button>
+        </div>
+        {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</div>

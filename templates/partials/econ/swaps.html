@@ -1,4 +1,39 @@
-{% if view == "action" %}
+{% if view == "moves" %}
+  <h3>Next best moves</h3>
+  {% set swaps = swap_recs[:3] %}
+  {% set grows = (gpu_recs or [])[:2] %}
+  {% if swaps or grows %}
+  {# One aligned row per move: change · margin · less cloud · recovered · Apply. #}
+  <div class="mt{{ ' no-cloud' if not cloud_on }}">
+    <span class="mt-h"></span><span class="mt-h">Change</span><span class="mt-h r">Margin / day</span>{% if cloud_on %}<span class="mt-h r">Less cloud</span>{% endif %}<span class="mt-h r">Recovered</span><span class="mt-h"></span>
+    {% for rec in swaps %}
+    <span class="mt-ic swap" aria-hidden="true">⇄</span>
+    <span class="mt-t" title="Swap {{ rec.current_name }} → {{ rec.candidate_name }} · {{ rec.gpu_count }}× {{ rec.gpu_name }} · fit {{ (rec.current_quality * 100)|round(0)|int }}→{{ (rec.candidate_quality * 100)|round(0)|int }}% · {{ rec.quality_mix }}">{{ rec.current_name|short_model_name }} → <b>{{ rec.candidate_name|short_model_name }}</b> <span class="T">fit {{ (rec.current_quality * 100)|round(0)|int }}→{{ (rec.candidate_quality * 100)|round(0)|int }}%</span></span>
+    <span class="r {{ 'good' if rec.margin_gain_day > 0 else 'bad' }}">{{ '+' if rec.margin_gain_day > 0 }}{{ rec.margin_gain_day|fmt_money }}</span>
+    {% if cloud_on %}<span class="r">{{ rec.cloud_reduced_day|fmt_money if rec.cloud_reduced_day >= 1 else '—' }}</span>{% endif %}
+    <span class="r">{{ rec.destroyed_reduced_day|fmt_money if rec.destroyed_reduced_day >= 1 else '—' }}</span>
+    <span><button type="button" class="{{ 'acc' if loop.first else '' }} sm"
+              hx-post="/model/swap" hx-target="#main-content"
+              hx-vals='{"panel":"{{ panel }}","uid":"{{ rec.am_uid }}","model_key":"{{ rec.candidate_key }}","prec":"{{ rec.prec }}"}'
+              aria-label="Apply swap: replace {{ rec.current_name }} with {{ rec.candidate_name }}">Apply</button></span>
+    {% endfor %}
+    {% for rec in grows %}
+    <span class="mt-ic grow" aria-hidden="true">+</span>
+    <span class="mt-t" title="Add {{ rec.added_gpus }} {{ rec.gpu_name }} to {{ rec.model_name }} · {{ rec.new_gpu_count }} GPUs total · +{{ rec.served_gain_tokens|fmt_num }} tok/day served">+{{ rec.added_gpus }} GPU → <b>{{ rec.model_name|short_model_name }}</b> <span class="T">{{ rec.new_gpu_count }} GPUs</span></span>
+    <span class="r {{ 'good' if rec.margin_gain_day > 0 else 'bad' }}">{{ '+' if rec.margin_gain_day > 0 }}{{ rec.margin_gain_day|fmt_money }}</span>
+    {% if cloud_on %}<span class="r">{{ rec.cloud_reduced_day|fmt_money if rec.cloud_reduced_day >= 1 else '—' }}</span>{% endif %}
+    <span class="r">{{ rec.destroyed_reduced_day|fmt_money if rec.destroyed_reduced_day >= 1 else '—' }}</span>
+    <span><button type="button" class="{{ 'acc' if not swaps and loop.first else '' }} sm"
+              hx-post="/model/grow" hx-target="#main-content"
+              hx-vals='{"panel":"{{ panel }}","uid":"{{ rec.am_uid }}","added":"{{ rec.added_gpus }}"}'
+              aria-label="Apply: add {{ rec.added_gpus }} {{ rec.gpu_name }} to {{ rec.model_name }}">Apply</button></span>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="T">No model swap or single-GPU addition improves this scenario.</p>
+  {% endif %}
+
+{% elif view == "action" %}
   {% if swap_recs %}
   {% set rec = swap_recs[0] %}
   <h3>Recommended next step</h3>

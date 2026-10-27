@@ -1,40 +1,47 @@
-{# Main content that gets swapped on every state change #}
-<div class="compare-container">
-  <div class="cp">
-    {% with state=A, panel="A", label="Config A" if B else "" %}
-      {% include "partials/panel.html" %}
-    {% endwith %}
-  </div>
-  {% if B %}
-  <div class="cp">
-    {% with state=B, panel="B", label="Config B" %}
-      {% include "partials/panel.html" %}
-    {% endwith %}
-  </div>
-  {% endif %}
+{# Main content that gets swapped on every state change: the two input steps.
+   Step 1 puts hardware and models side by side, one row per config; step 2
+   (workload) keeps A and B side by side. Steps 3 and 4 (results) live outside
+   #main-content and are full width. #}
+{% set configs = [("A", A, ECON_A)] + ([("B", B, ECON_B)] if B else []) %}
+{% macro step_head(n, anchor, title) %}
+<div class="step-head" id="{{ anchor }}">
+  <span class="step-n">{{ n }}</span><span class="step-title">{{ title }}</span>
+  <span class="step-sum">{{ caller() }}</span>
 </div>
+{% endmacro %}
 
-{% if A.mode != 'data' %}
-<div class="flex" style="gap:8px;margin-top:4px;">
-  {% for panels in [(A, '')] + ([(B, ' (B)')] if B else []) %}
-    {% set state = panels[0] %}
-    {% set suffix = panels[1] %}
-    {% for am in state.models %}
-      {% if am.gpu_count > 0 %}
-        {% set m = MODELS[am.model_key] %}
-        {% set is_embedding_workload = state.mode in ('embedding', 'embedquality') %}
-        {% set is_prefill_phase = state.mode in ('data', 'decision') or is_embedding_workload %}
-        {% set phase = 'F' if m.is_decision_model else 'E' if is_embedding_workload and m.is_embedding_model else ('P' if is_prefill_phase else 'D') %}
-        {% set phase_tp = am.prefill_tp if is_prefill_phase else am.tp %}
-        {% set phase_pp = am.prefill_pp if is_prefill_phase else am.pp %}
-        {% set phase_dp = am.prefill_dp if is_prefill_phase else am.dp %}
-        {% set legend_info = get_model_info(state, am) %}
-        <span class="flex" style="gap:3px;">
-          <span class="dot" style="background:{{ m.color }};width:5px;height:5px;{{ 'border:1px dashed var(--fg2);' if suffix else '' }}"></span>
-          <span class="T">{{ m.name }} {{ phase }} {{ strategy_label(phase_tp, phase_pp, phase_dp) }} · {{ PRECISION_LABELS[am.prec] }}{% if legend_info.spec %} · {{ legend_info.spec.profile.label }} · k {% if am.spec_k == 0 %}Auto→{{ legend_info.spec.k if legend_info.spec.active else 'off' }}{% else %}{{ legend_info.spec.k }}{% endif %} · α {{ "%.0f"|format(legend_info.spec.alpha * 100) }}% · {{ "%.2f"|format(legend_info.spec.speedup) }}× @{{ legend_info.spec.probe_bs }} users{% endif %}{{ suffix }}</span>
-        </span>
-      {% endif %}
-    {% endfor %}
+
+{% call step_head(1, "step-hardware", "Hardware and models") %}
+  {% for panel, state, ep in configs %}{% set deployed = state.models|selectattr('gpu_count', 'gt', 0)|list %}<span>{% if B %}<b>{{ panel }}</b> {% endif %}{% for gp in state.gpus %}{{ gp.count }}× {{ GPUS[gp.gpu_type].name }}{{ ' + ' if not loop.last }}{% else %}no GPUs{% endfor %} · {{ deployed|length }} model{{ 's' if deployed|length != 1 }} · {{ ep.p.cost_day|fmt_money }}/day</span>{% endfor %}
+{% endcall %}
+{# Single config: hardware left half, models right half. Compare: one column
+   per config (like the workload below), hardware above models. #}
+{% if B %}
+<div class="compare-container hm-compare">
+  {% for panel, state, ep in configs %}
+  <div class="cp">{% with label="Config " ~ panel %}
+    <div class="hm-cell">{% include "partials/panel_cluster.html" %}</div>
+    <div class="hm-cell">{% include "partials/panel_models.html" %}</div>
+  {% endwith %}</div>
   {% endfor %}
 </div>
+{% else %}
+{% for panel, state, ep in configs %}
+<div class="hm-row">
+  {% with label="" %}
+  <div class="hm-cell">{% include "partials/panel_cluster.html" %}</div>
+  <div class="hm-cell">{% include "partials/panel_models.html" %}</div>
+  {% endwith %}
+</div>
+{% endfor %}
 {% endif %}
+
+{% call step_head(2, "step-workload", "Workload") %}
+  {% if not A.cloud_enabled %}<span class="no-cloud-tag">no cloud · unserved demand is lost</span>{% endif %}
+  {% for panel, state, ep in configs %}<span>{% if B %}<b>{{ panel }}</b> {% endif %}{{ state.projects|length }} use cases · {{ ep.p.baseline_tokens_day|fmt_num }} tok/day</span>{% endfor %}
+{% endcall %}
+<div class="compare-container">
+  {% for panel, state, ep in configs %}
+  <div class="cp">{% with label="Config " ~ panel if B else "" %}{% include "partials/panel_workload.html" %}{% endwith %}</div>
+  {% endfor %}
+</div>

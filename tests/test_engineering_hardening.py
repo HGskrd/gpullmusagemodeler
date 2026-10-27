@@ -7,6 +7,7 @@ import time
 import unittest
 import uuid
 from collections import deque
+from html import escape
 from pathlib import Path
 from unittest.mock import patch
 
@@ -303,7 +304,7 @@ class EngineeringHardeningTests(unittest.TestCase):
 
     def test_prefix_panel_reflects_workload_distribution_basis(self):
         # The model card probes prefill capacity at max(task_il, avg in-dist);
-        # the prefix-reuse panel must quote the same basis, not task_il alone.
+        # the workload figures line must quote the same basis, not task_il alone.
         from calc import avg_dist, effective_prefill_length
         from data import INPUT_BUCKETS
         from planner_service import create_default_state
@@ -314,8 +315,7 @@ class EngineeringHardeningTests(unittest.TestCase):
         response = self.client.get("/", headers=self.headers)
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
-        self.assertIn(f"Effective prefill input: {effective:,} / {basis:,} tok", html)
-        self.assertIn("Portfolio prefix-token reuse", html)
+        self.assertIn(f"prefill {effective:,} of {basis:,} tok", html)
         self.assertNotIn('hx-post="/settings/prefix-hit"', html)
 
     def test_cloud_only_use_case_shows_money_paid_to_cloud(self):
@@ -333,20 +333,23 @@ class EngineeringHardeningTests(unittest.TestCase):
                     min_success_rate=0.5,
                     prefix_hit_rate=0.25,
                 )
-            ]
+            ],
+            cloud_enabled=True,
         )
         replace_scope_states(f"{self.visitor_id}:{self.tab_id}", state, None)
 
         response = self.client.get("/", headers=self.headers)
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
-        self.assertIn("Cloud spend lost / day", html)
+        self.assertIn("Cloud spend / day", html)
         # The KPI tile and the per-use-case table both surface the cloud outflow.
         from engine.economics import compute_revenue_projection
 
         projection = compute_revenue_projection(state)
         self.assertGreater(projection["value_cloud_day"], 0)
-        self.assertIn(fmt_money(projection["value_cloud_day"]), html)
+        # Jinja escapes the "<" in sub-dollar amounts ("<$1").
+        self.assertIn(escape(fmt_money(projection["value_cloud_day"])), html)
+        # The economic result's per-use-case table carries the cloud outflow.
         self.assertIn("To cloud", html)
 
     def test_unserved_sublabel_is_neutral_without_demand(self):

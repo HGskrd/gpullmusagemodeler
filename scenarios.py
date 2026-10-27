@@ -115,6 +115,7 @@ def _project_definition_payload(proj: Project) -> dict:
         "difficulty": float(proj.difficulty),
         "scale_kind": copy.deepcopy(getattr(proj, "scale_kind", DEFAULT_SCALE_KIND)),
         "wtp_per_m": float(proj.wtp_per_m),
+        "workload_kind": proj.workload_kind,
         "requires": sorted(proj.requires),
         "min_success_rate": float(proj.min_success_rate),
         "quality_floor": float(getattr(proj, "quality_floor", 0.0)),
@@ -124,6 +125,7 @@ def _project_definition_payload(proj: Project) -> dict:
             getattr(proj, "quality_domain", "general"),
         ),
         "batch_eligible": bool(proj.batch_eligible),
+        "day_shape": proj.day_shape,
         "prefix_hit_rate": float(getattr(proj, "prefix_hit_rate", 0.0)),
         "unlock_price_per_m": float(proj.unlock_price_per_m),
         "in_pre": proj.in_pre,
@@ -142,6 +144,7 @@ def _project_scale_payload(proj: Project) -> dict:
         ),
         "tokens_day": float(proj.tokens_day),
         "latent_jobs_day": float(proj.latent_jobs_day),
+        "locked": bool(getattr(proj, "scale_locked", False)),
     }
 
 
@@ -232,7 +235,13 @@ def _project_from_payload(state: PlannerState, item: dict) -> Project:
         scale_value=max(0.0, float(scale_value)),
         scale_kind=copy.deepcopy(scale_kind),
         kind_key=str(base["key"]) if preset else "custom",
+        scale_locked=bool(scale.get("locked", item.get("scale_locked", False))),
         batch_eligible=bool(definition.get("batch_eligible", base.get("batch_eligible", False))),
+        # Legacy payloads had one portfolio day shape; projects inherit it.
+        day_shape=normalize_day_shape(
+            definition.get("day_shape", item.get("day_shape", state.projection_day_shape))
+        ),
+        workload_kind=definition.get("workload_kind", base.get("workload_kind", "llm")),
         requires=requires,
         min_success_rate=_bounded_project_value(
             "min_success_rate",
@@ -385,6 +394,9 @@ def deserialize_planner_state(payload: Any) -> PlannerState:
             raise ValueError("A scenario may contain at most 256 use-case definitions.")
         replace_use_case_defs(state, {"use_cases": use_case_defs})
 
+    # Read before the projects: legacy payloads carry one portfolio day shape that
+    # each use case inherits.
+    state.projection_day_shape = normalize_day_shape(payload.get("projection_day_shape"))
     projects = payload.get("projects", [])
     if not isinstance(projects, list) or len(projects) > 256:
         raise ValueError("A scenario panel may contain at most 256 use cases.")
@@ -522,6 +534,16 @@ def deserialize_planner_state(payload: Any) -> PlannerState:
     state.projection_day_shape = normalize_day_shape(payload.get("projection_day_shape"))
     state.corpo_cloud = normalize_corpo_cloud(payload.get("corpo_cloud"))
     state.projection_night_batching = bool(payload.get("projection_night_batching", False))
+    state.projection_include_latent = bool(payload.get("projection_include_latent", True))
+    state.company_size = _scenario_int(payload, "company_size", 100, 1, 10_000_000)
+    state.tech_savviness = (
+        str(payload.get("tech_savviness"))
+        if payload.get("tech_savviness") in ("low", "typical", "high")
+        else "typical"
+    )
+    # Scenarios saved before the switch existed were built with cloud fallback on.
+    state.cloud_enabled = bool(payload.get("cloud_enabled", True))
+    state.price_driven_demand = bool(payload.get("price_driven_demand", False))
     state.auto_mode = bool(payload.get("auto_mode", False))
     state.auto_strategy = normalize_auto_strategy(payload.get("auto_strategy"))
     excluded = payload.get("auto_excluded", [])

@@ -105,6 +105,8 @@ class PartialRenderSmokeTests(unittest.TestCase):
                         "/picker/model?panel=A&kind=text",
                         "/picker/project?panel=A",
                         "/econ/supply",
+                        "/econ/flow",
+                        "/econ/dashboard",
                         "/econ/swaps?panel=A&view=table",
                     )
                 ]

@@ -1,0 +1,15 @@
+{% set p = ep.p %}
+{% if p.value_opportunity_day > 0 %}
+<div class="mn-k">Where a day of demand value goes</div>
+<div class="chart-box econ-chart" data-chart="sankey-money" style="height:300px;"></div>
+{% else %}
+<p class="T">No demand routed yet.</p>
+{% endif %}
+{% if p.models %}
+<div class="mn-k">Internal tariff <span class="T">$/1M tokens charged per deployed model · output scales with token efficiency</span></div>
+<div class="mn-tariff">
+  {% for m in p.models %}
+  <span><i class="dot" style="background:{{ m.color }};"></i>{{ m.name|short_model_name }} · in {% if m.runnable and m.internal_input_pm > 0 %}${{ '%.2f'|format(m.internal_input_pm) }}{% else %}—{% endif %} · out {% if m.runnable and m.internal_output_pm > 0 %}${{ '%.2f'|format(m.internal_output_pm) }}{% else %}—{% endif %}</span>
+  {% endfor %}
+</div>
+{% endif %}

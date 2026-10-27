@@ -14,12 +14,13 @@
     if (!COLORS) {
       COLORS = {
         total: css('--acc') || '#2255aa',
-        served: css('--acc2') || '#1a7a55',
+        // Outcome colors come from the shared --o-* tokens in style.css.
+        served: css('--o-served') || '#1a7a55',
         margin: '#2ea36b',
         cost: css('--fg2') || '#5f5f58',
-        spilled: css('--amber') || '#a06800',
-        leaked: css('--red') || '#b42e2e',
-        destroyed: '#7f1d1d',
+        spilled: css('--o-cloud') || '#a06800',
+        leaked: css('--o-wrong') || '#b42e2e',
+        destroyed: css('--o-lost') || '#6b6b64',
         uc: '#8a8a82',
         fg: css('--fg0') || '#1a1a18',
         fg2: css('--fg2') || '#5f5f58',
@@ -34,11 +35,14 @@
     schemeQuery.addEventListener('change', function () { COLORS = null; });
   }
 
+  // Mirrors presentation/formatting.py fmt_money so charts and text agree.
   var money = function (v) {
     var s = v < 0 ? '-' : ''; v = Math.abs(v);
-    if (v >= 1e6) return s + '$' + (v / 1e6).toFixed(2) + 'M';
-    if (v >= 1e3) return s + '$' + (v / 1e3).toFixed(1) + 'k';
-    return s + '$' + v.toFixed(v >= 100 ? 0 : 2);
+    if (v >= 1e9) return s + '$' + (v / 1e9).toFixed(1) + 'B';
+    if (v >= 1e6) return s + '$' + (v / 1e6).toFixed(1) + 'M';
+    if (v >= 1e4) return s + '$' + (v / 1e3).toFixed(1) + 'k';
+    if (v >= 0.5) return s + '$' + Math.round(v).toLocaleString('en-US');
+    return v > 0 ? s + '<$1' : '$0';
   };
   var num = function (v) {
     if (v >= 1e9) return (v / 1e9).toFixed(1) + 'B';
@@ -70,7 +74,7 @@
         layoutIterations: 0,
         label: {
           color: colors().fg, fontSize: 11,
-          formatter: function (x) { return x.name.replace(/^(m|uc\d+)::/, ''); }
+          formatter: function (x) { return x.name.replace(/^(m|uc\d+)::/, '') + (x.value ? '  ' + fmt(x.value) : ''); }
         },
         lineStyle: { color: 'gradient', curveness: 0.5, opacity: 0.32 },
         emphasis: { focus: 'adjacency' }
@@ -84,7 +88,7 @@
       tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' },
         formatter: function (xs) { var x = xs[1] || xs[0]; return x.name + '<br><b>' + v.fmt(x.value) + '/day</b>'; } },
       grid: { left: 8, right: 8, top: 32, bottom: 8, containLabel: true },
-      xAxis: { type: 'category', data: [v.totalName, 'To cloud', 'Captured on-prem', 'Destroyed'],
+      xAxis: { type: 'category', data: [v.totalName, 'Cloud spend', 'Served', 'Lost'],
         axisLabel: { color: colors().fg2, interval: 0 }, axisLine: { lineStyle: { color: colors().b1 } } },
       yAxis: { type: 'value', axisLabel: { color: colors().fg2, formatter: v.fmt }, splitLine: { lineStyle: { color: colors().b1 } } },
       series: [
@@ -107,9 +111,9 @@
   function stackOption(rows) {
     var segs = [
       ['served_pct', 'Served', colors().served],
-      ['spilled_pct', 'Spilled (capacity)', colors().spilled],
-      ['leaked_pct', 'Leaked (fit/price)', colors().leaked],
-      ['destroyed_pct', 'Destroyed', colors().destroyed]
+      ['spilled_pct', 'Sent to cloud', colors().spilled],
+      ['leaked_pct', 'Wrong model', colors().leaked],
+      ['destroyed_pct', 'Lost', colors().destroyed]
     ];
     return {
       textStyle: { color: colors().fg, fontFamily: 'inherit' },
@@ -141,6 +145,9 @@
   function payloadFor(el) {
     var host = el.closest('[data-econ-panel]');
     if (!host) return null;
+    if (host.dataset.econJson) {
+      try { return JSON.parse(host.dataset.econJson); } catch (e) { return null; }
+    }
     var tag = host.querySelector('script.econ-payload');
     if (!tag) return null;
     try { return JSON.parse(tag.textContent); } catch (e) { return null; }
@@ -178,27 +185,49 @@
     });
   }
 
+  // Step 4 starts folded; charts drawn while hidden need a resize on open.
+  document.addEventListener('toggle', function (e) {
+    var el = e.target;
+    if (!(el instanceof HTMLDetailsElement) || !el.classList.contains('econ-fold') || !el.open) return;
+    initEcon(el);
+    el.querySelectorAll('.econ-chart[data-inited]').forEach(function (c) { if (c._econChart) c._econChart.resize(); });
+  }, true);
+
   window.addEventListener('resize', function () {
     document.querySelectorAll('.econ-chart[data-inited]').forEach(function (el) {
       if (el._econChart && el.isConnected) el._econChart.resize();
     });
   });
 
-  /* ── Delegated interactions (survive HTMX swaps) ─────────────────────── */
-  document.addEventListener('click', function (e) {
-    // View tabs within an economics section.
-    var tabBtn = e.target.closest('.econ-tab-btn');
-    if (tabBtn) {
-      var tabs = tabBtn.closest('.econ-tabs');
-      tabs.querySelectorAll('.econ-tab-btn').forEach(function (b) { b.classList.remove('on'); });
-      tabBtn.classList.add('on');
+  /* ── View tabs: one selection shared by Config A and B, kept across swaps ── */
+  // Every HTMX edit re-renders the section with its default tab, so the
+  // viewer's choice is re-applied after each swap instead of resetting.
+  var selectedTab = null;
+  function applyTab(root) {
+    if (!selectedTab) return;
+    root.querySelectorAll('.econ-tabs').forEach(function (tabs) {
+      if (!tabs.querySelector('.econ-tab-btn[data-tab="' + selectedTab + '"]')) return;
+      tabs.querySelectorAll('.econ-tab-btn').forEach(function (b) {
+        b.classList.toggle('on', b.dataset.tab === selectedTab);
+        b.setAttribute('aria-pressed', b.dataset.tab === selectedTab ? 'true' : 'false');
+      });
       tabs.querySelectorAll('.econ-tab-panel').forEach(function (panel) {
-        panel.hidden = panel.dataset.tab !== tabBtn.dataset.tab;
+        panel.hidden = panel.dataset.tab !== selectedTab;
       });
       // Charts in a freshly revealed panel need a resize to pick up real width.
       tabs.querySelectorAll('.econ-tab-panel:not([hidden]) .econ-chart[data-inited]').forEach(function (el) {
         if (el._econChart) el._econChart.resize();
       });
+    });
+  }
+
+  /* ── Delegated interactions (survive HTMX swaps) ─────────────────────── */
+  document.addEventListener('click', function (e) {
+    // View tabs within an economics section.
+    var tabBtn = e.target.closest('.econ-tab-btn');
+    if (tabBtn) {
+      selectedTab = tabBtn.dataset.tab;
+      applyTab(document);
       return;
     }
 
@@ -255,7 +284,8 @@
   // pass covers content inserted after the event fires.
   var scheduleInit = function () {
     initEcon(document);
-    setTimeout(function () { initEcon(document); }, 50);
+    applyTab(document);
+    setTimeout(function () { initEcon(document); applyTab(document); }, 50);
   };
   document.body.addEventListener('htmx:afterSwap', scheduleInit);
   document.body.addEventListener('htmx:oobAfterSwap', scheduleInit);

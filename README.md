@@ -178,6 +178,24 @@ API calls do not save snapshots, set cookies, or change browser scenarios; each 
 logs one usage event (endpoint, status, requested model/GPU keys) under a pseudonymous,
 daily-rotating id so `/admin` can show what agents ask.
 
+Use-case definitions accept `workload_kind`: `llm` (the legacy default), `asr`,
+`embedding`, or `decision`. Native stages route only to their matching model family;
+text API prices are not used as native cloud fallback. Six presets cover recorded
+transcription, live captions, corpus indexing, query embeddings, ticket routing, and
+content moderation. Pair these independent stages with the related LLM presets and
+align their volumes; pipeline dependencies and end-to-end latency are not simulated.
+
+Native estimates cover capacity, not task accuracy or retries. LLM difficulty/SLO
+and prefix reuse do not apply. ASR accounting units are audio seconds (3600 per
+recorded hour); WTP is per million audio seconds. ASR batch work conservatively uses
+realtime stream capacity without faster-than-realtime credit. Embedding and decision
+units are formatted input tokens; decision requests assume one question with four
+options and no generated output. Historical `tokens_day` report fields retain these
+accounting units for compatibility, with explicit native `workload_kind`,
+`workload_unit`, and `quality_status` on project results. Mixed-modality totals are
+accounting aggregates, not comparable task counts. Source links and scenario
+assumptions appear in the use-case library (native sources checked 2026-10-24).
+
 Start at [`/llms.txt`](llms.txt) or read the [API guide](docs/api.md). Runtime
 discovery is available at `/api/v1/catalog`, `/api/v1/example` and
 `/api/v1/openapi.json`. No API key or cookies are required; existing request-size

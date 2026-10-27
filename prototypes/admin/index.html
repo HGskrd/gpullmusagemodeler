@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin Prototypes</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  .props { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); gap: 14px; }
+  .prop { text-decoration: none; color: inherit; display: flex; flex-direction: column; gap: 6px; transition: border-color 0.1s; }
+  .prop:hover { border-color: var(--accent); }
+  .prop .n { font-size: 11px; color: var(--accent); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+  .prop h3 { font-size: 15px; }
+  .prop p { color: var(--text-2); font-size: 12px; }
+  .prop ul { font-size: 12px; color: var(--muted); padding-left: 16px; }
+  ol.inst { padding-left: 18px; display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+  ol.inst b { font-weight: 600; }
+  ol.inst .why { color: var(--muted); }
+  .obs li { margin-bottom: 5px; }
+  .share { display: flex; height: 22px; gap: 2px; border-radius: 6px; overflow: hidden; margin-top: 8px; }
+  .share span { height: 100%; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="topbar" id="top"></header>
+  <div class="banner">Prototype · synthetic sample data (seeded, ~860 visitors over 90 days), built from the real catalog and the session shapes on prod <span class="mono">/admin</span>. No production data on these pages.</div>
+
+  <section class="grid g-73">
+    <div class="card">
+      <h2>The problem with today’s /admin</h2>
+      <div class="q">From reading prod (495 snapshots, 10 visitors per page):</div>
+      <ul class="obs" style="padding-left:18px;font-size:12px">
+        <li><b>It’s an event log, not a view of people.</b> Every visitor card has the same shape and nothing says who they are, where they’re from or why they came.</li>
+        <li><b>Most rows are noise.</b> The default scenario’s <span class="mono">open</span> snapshot repeats in full on nearly every visit.</li>
+        <li><b>The main journey is invisible.</b> Prod shows <span class="mono">open → session_reset → gpu_add</span> and then nothing. <span class="mono">/model/add</span>, <span class="mono">/model/remove</span>, <span class="mono">/model/prec</span> and <span class="mono">/gpu/qty</span> don’t record a snapshot (<span class="mono">web/planner.py</span>, untracked <span class="mono">_htmx_response</span>), so the models people try are never seen.</li>
+        <li><b>You are in the data.</b> <span class="mono">a45934d3</span> (50 events, multi-tab) is almost certainly you and skews every count.</li>
+        <li><b>Agent API traffic doesn’t appear at all.</b></li>
+      </ul>
+    </div>
+    <div class="card">
+      <h2>In this sample</h2>
+      <div class="q">Derived persona mix (all visitors, 90 days)</div>
+      <div class="share" id="share"></div>
+      <div class="legend" id="legend" style="margin-top:8px"></div>
+    </div>
+  </section>
+
+  <section class="props">
+    <a class="card prop" href="1-audience.html"><span class="n">Proposal 1</span><h3>Audience & geography</h3>
+      <p>World map + country table; click a country for its persona mix, channels, hardware and models. Arrival channels, local-time heatmap, device and language.</p>
+      <ul><li>Where are people from, and does that change what they plan?</li><li>Which channels bring people who actually engage?</li></ul></a>
+    <a class="card prop" href="2-personas.html"><span class="n">Proposal 2</span><h3>Personas</h3>
+      <p>Rule-based segments (homelab, infra buyer, evaluator, speech/RAG, use-case planner, AI agent, bounced) with the rule shown, behaviour table, country mix, weekly trend.</p>
+      <ul><li>Who is the tool really for?</li><li>What should we build for each group?</li></ul></a>
+    <a class="card prop" href="3-people.html"><span class="n">Proposal 3</span><h3>People</h3>
+      <p>Replaces the stream: a searchable directory (one row per person) and a profile that reads each visit as a story, with inferred intent and their final plan.</p>
+      <ul><li>What was this person trying to do?</li><li>Did they get an answer?</li></ul></a>
+    <a class="card prop" href="4-journeys.html"><span class="n">Proposal 4</span><h3>Journeys & friction</h3>
+      <p>Funnel from landing to “took a plan away”, by persona/device/channel/country. What people do after “doesn’t fit”, common paths, friction signals with example people.</p>
+      <ul><li>Where do people get stuck?</li><li>Which fixes would help most?</li></ul></a>
+    <a class="card prop" href="5-demand.html"><span class="n">Proposal 5</span><h3>Demand & gaps</h3>
+      <p>Model-size × hardware heatmap, top GPUs/models with fit rates, “wanted but didn’t fit” with the smallest fix, zero-result searches, precision habits, agent questions, $/hr entered.</p>
+      <ul><li>What should go into the catalog next?</li><li>Which presets would answer people fastest?</li></ul></a>
+  </section>
+
+  <section class="card">
+    <h2>Instrumentation these pages need</h2>
+    <div class="q">In rough order of value per effort. None store IPs or need a consent banner beyond what a first-party cookie already needs.</div>
+    <ol class="inst">
+      <li><b>Track the untracked planner routes.</b> Switch <span class="mono">model_add / model_add_many / model_remove / model_prec / model_count / gpu_qty / gpu_cost</span> in <span class="mono">web/planner.py</span> to <span class="mono">_tracked_htmx_response</span>. <span class="why">Without this, proposals 3–5 have no model data.</span></li>
+      <li><b>Visitor table with first-touch context.</b> On first request for a new <span class="mono">planner_vid</span>, store <span class="mono">CF-IPCountry</span>, <span class="mono">cf-ipcity</span>/<span class="mono">cf-region</span>/<span class="mono">cf-timezone</span> (Cloudflare managed transform), Referer host, <span class="mono">utm_*</span>, entry path, UA class (desktop/mobile/agent + named bot), and the first <span class="mono">Accept-Language</span> tag. <span class="why">Powers proposal 1 and persona context.</span></li>
+      <li><b>Store a slim event, not the full A/B state, per action.</b> Add an <span class="mono">events</span> table (visitor, session, t, type, small JSON detail) next to <span class="mono">snapshots</span>. Keep full snapshots for “open” and the session’s last state. <span class="why">Makes funnels and paths cheap, and drops the repeated default-scenario rows.</span></li>
+      <li><b>Record the fit outcome server-side</b> after each recompute: fits?, need GB, have GB. <span class="why">This is the main friction signal.</span></li>
+      <li><b>Log zero-result picker searches</b> from <span class="mono">/picker/gpu</span> and <span class="mono">/picker/model</span>. <span class="why">The most direct catalog-gap signal.</span></li>
+      <li><b>Mark internal traffic.</b> Set a flag on the visitor when the admin session cookie is present. <span class="why">Removes you from every chart.</span></li>
+      <li><b>Log agent API calls</b> (<span class="mono">web/agent_api.py</span>) with UA and the request’s model/GPU. <span class="why">Shows what assistants tell people about running models.</span></li>
+      <li><b>Client beacons</b> for copy-link / export / scroll depth (one small POST). <span class="why">The “took it away” stage of the funnel.</span></li>
+    </ol>
+  </section>
+</div>
+<script src="data.js"></script>
+<script src="common.js"></script>
+<script>
+(function () {
+  const { A, PERSONAS, PERSONA_ORDER, pColor, pchip, pct, nav } = UI;
+  nav(document.getElementById("top"), "Admin: five proposals", "Understand who uses the calculator, not just what was clicked");
+  const vs = A.visitors.filter((v) => !v.internal);
+  const rows = PERSONA_ORDER.map((k) => [k, vs.filter((v) => v.persona === k).length]).filter(([, n]) => n);
+  document.getElementById("share").innerHTML = rows.map(([k, n]) => `<span style="width:${(n / vs.length) * 100}%;background:${pColor(k)}" data-tip="<b>${PERSONAS[k].label}</b><div>${n} · ${pct(n / vs.length)}</div>"></span>`).join("");
+  document.getElementById("legend").innerHTML = rows.map(([k, n]) => pchip(k, `${PERSONAS[k].short} <span class="muted">${pct(n / vs.length)}</span>`)).join("");
+})();
+</script>
+</body>
+</html>

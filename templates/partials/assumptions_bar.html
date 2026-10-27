@@ -1,0 +1,38 @@
+{# Scenario-wide assumptions that apply to A and B together, on one line. #}
+{% set cmp = COMPARE if B else none %}
+<div class="assumptions" id="assumptionsBar" {% if oob %}hx-swap-oob="outerHTML"{% endif %}>
+  <span class="as-k">Assumptions</span>
+  <label class="as-sw{{ ' off' if not A.cloud_enabled }}" title="On: demand your GPUs can't serve goes to cloud models. Off: it is lost (sizing local capacity only). Applies to A and B.">
+    <input type="checkbox" name="value" {{ 'checked' if A.cloud_enabled }} hx-post="/cloud/toggle" hx-target="#main-content" hx-trigger="change" />
+    Cloud fallback
+  </label>
+  {% if A.cloud_enabled %}
+  {% set gw = CORPO_CLOUD_PRESETS.get(A.corpo_cloud) %}
+  <span class="as-sw" style="gap:3px;">
+    <span class="T">via</span>
+    <label class="pick" title="Cloud gateway: which cloud models take overflow{% if gw %} — {% for k in gw.models %}{% if k in CLOUD_MODELS %}{{ CLOUD_MODELS[k].label }}{{ ', ' if not loop.last }}{% endif %}{% endfor %}{% endif %}">
+      <span class="lbl">{{ gateway_short_label(A.corpo_cloud) }}</span><span class="car">▾</span>
+      <select name="value" aria-label="Cloud gateway" hx-post="/gateway" hx-target="#main-content" hx-trigger="change">
+        {% for key, preset in CORPO_CLOUD_PRESETS.items() %}<option value="{{ key }}" {{ 'selected' if A.corpo_cloud == key }}>{{ preset.label }}</option>{% endfor %}
+      </select>
+    </label>
+  </span>
+  {% endif %}
+  <label class="as-sw" title="Off: demand is the workload you entered, and your GPUs serve whatever they can. On (internal chargeback): latent demand appears when the internal price is low, and use cases stop when every option costs more than they are willing to pay. Applies to A and B.">
+    <input type="checkbox" name="value" {{ 'checked' if A.price_driven_demand }} hx-post="/pricing/toggle" hx-target="#main-content" hx-trigger="change" />
+    Price-driven demand
+  </label>
+  {% if cmp and A.price_driven_demand %}
+  <label class="as-sw" title="Score A and B against baseline demand only, so latent demand activated by each deployment's prices cannot make the totals differ.">
+    <input type="checkbox" name="value" {{ 'checked' if cmp.equal_demand }} hx-post="/compare/equal-demand" hx-target="#main-content" hx-trigger="change" />
+    Equal demand
+  </label>
+  <span class="as-note{{ ' warn' if cmp.demand_mismatch and not cmp.equal_demand }}" title="Total demand scored for each config">A {{ cmp.demand_a|fmt_num }} · B {{ cmp.demand_b|fmt_num }} tok/day{% if cmp.demand_mismatch and not cmp.equal_demand %} · not like-for-like{% endif %}</span>
+  {% endif %}
+  <nav class="as-steps" aria-label="Jump to planner step">
+    <a href="#step-hardware">1 Hardware and models</a>
+    <a href="#step-workload">2 Workload</a>
+    <a href="#performance-results">3 Technical result</a>
+    <a href="#economic-impact">4 Economic result</a>
+  </nav>
+</div>

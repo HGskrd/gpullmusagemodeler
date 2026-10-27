@@ -1,25 +1,194 @@
-{# Single model card #}
-<div class="card" data-fast-card>
-  <div class="model-card-head">
-    <span class="dot" style="background:{{ m.color }};"></span>
-    <span class="model-card-name">{{ m.name }}</span>
-    <div class="model-card-actions">
-      <button class="ghost sm model-card-remove" aria-label="{{ 'Exclude' if state.auto_mode else 'Remove' }} {{ m.name }}" title="{{ 'Exclude from recommendations' if state.auto_mode else 'Remove model' }}"
-              hx-post="{{ '/model/auto-exclude' if state.auto_mode else '/model/remove' }}"
-              hx-target="#main-content"
-              data-fast-remove
-              hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}'>✕</button>
-    </div>
+{# One model as one row of the models grid (see panel_models.html), input only:
+   weights, GPUs, layout, speculative decoding, plus quality, warnings and
+   remove. Capacity outputs (users, KV) live in the technical result step.
+   ▸ opens a full-width row with every remaining setting and engine detail. #}
+{% set is_llm = not m.is_embedding_model and not m.is_asr_model and not m.is_decision_model %}
+{% set notes = namespace(items=[]) %}
+{% for alert in info.precision_alerts + info.prefill_alerts + info.decode_alerts %}
+  {% if alert not in notes.items %}{% set notes.items = notes.items + [alert] %}{% endif %}
+{% endfor %}
+{% if info.decode_exceeds_node or info.prefill_exceeds_node %}{% set notes.items = notes.items + ['Tensor parallelism spans nodes; cross-node all-reduce dominates.'] %}{% endif %}
+{% if info.spec and info.spec.unmeasured_prior %}{% set notes.items = notes.items + ['Speculative acceptance is an unmeasured profile prior, not a benchmark for this deployment.'] %}{% endif %}
+{% if info.spec and info.spec.speedup > 0 and info.spec.speedup < 1 %}{% set notes.items = notes.items + ['Speculative decoding is modeled slower than baseline at ' ~ info.spec.probe_bs ~ ' users.'] %}{% endif %}
+{% set more_id = "mr-" ~ panel ~ "-" ~ am.uid %}
+{% set layout_phase = 'prefill' if (m.is_embedding_model or m.is_decision_model) else 'decode' %}
+<div class="mr-c mr-name" data-fast-card>
+  <button type="button" class="mr-more" data-more="{{ more_id }}" aria-expanded="false" aria-controls="{{ more_id }}" title="All settings and details">▸</button>
+  <span class="dot" style="background:{{ m.color }};"></span>
+  <b title="{{ m.name }}">{{ m.name }}</b>
+</div>
+{% if state.gpus|length > 1 %}
+<div class="mr-c">
+  {% set cur_pool = state.find_gpu(am.gpu_uid) %}
+  <label class="pick" title="Deployed on {{ GPUS[cur_pool.gpu_type].name if cur_pool else 'no pool' }}">
+    <span class="lbl">{{ short_gpu_label(GPUS[cur_pool.gpu_type].name) if cur_pool else '—' }}</span><span class="car">▾</span>
+    <select name="gpu_uid" aria-label="GPU pool for {{ m.name }}"
+            hx-post="/model/gpu_pool" hx-target="#main-content" hx-trigger="change" hx-include="this"
+            hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}'>
+      {% for gp2 in state.gpus %}
+      {% set free2 = gp2.count - state.used_gpu_for_pool(gp2.uid) + (am.gpu_count if gp2.uid == am.gpu_uid else 0) %}
+      <option value="{{ gp2.uid }}" {{ 'selected' if gp2.uid == am.gpu_uid }}>{{ GPUS[gp2.gpu_type].name }} · {{ free2 }} of {{ gp2.count }} available</option>
+      {% endfor %}
+    </select>
+  </label>
+</div>
+{% endif %}
+<div class="mr-c">
+  {% set cur = info.artifact_options|selectattr('key', 'equalto', am.artifact_id)|first %}
+  <label class="pick" title="{{ cur.label if cur else '' }}">
+    <span class="lbl">{{ short_artifact_label(m, cur) if cur else '—' }}</span><span class="car">▾</span>
+    <select name="artifact_id" aria-label="Artifact for {{ m.name }}"
+            hx-post="/model/artifact" hx-target="#main-content" hx-trigger="change" hx-include="this"
+            hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}'>
+      {% for option in info.artifact_options %}
+      <option value="{{ option.key }}" title="{{ option.description }}" {{ 'selected' if am.artifact_id == option.key else '' }}>{{ option.label }} · {{ "%.1f"|format(option.checkpoint_bytes / 1e9) }} GB</option>
+      {% endfor %}
+    </select>
+  </label>
+</div>
+<div class="mr-c">
+  {% set opts = info.gpu_count_options %}
+  {% if opts|length <= 4 %}
+  <span class="seg">
+  {% for i in opts %}
+    <button type="button" class="sm" aria-label="Assign {{ i }} GPUs to {{ m.name }}" aria-pressed="{{ 'true' if i == am.gpu_count else 'false' }}"
+            hx-post="/model/count" hx-target="#main-content"
+            hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}","count":"{{ i }}"}'>{{ i }}</button>
+  {% endfor %}
+  {% if am.gpu_count not in opts %}<button type="button" class="sm" aria-pressed="true" disabled>{{ am.gpu_count }}</button>{% endif %}
+  </span>
+  {% else %}
+  {# Many valid counts: one dropdown, same look as Weights, so the row keeps its width. #}
+  <label class="pick" title="GPUs assigned to {{ m.name }} ({{ info.max_avail }} available)">
+    <span class="lbl">{{ am.gpu_count }} GPU{{ 's' if am.gpu_count != 1 }}</span><span class="car">▾</span>
+    <select name="count" aria-label="GPUs for {{ m.name }}"
+            hx-post="/model/count" hx-target="#main-content" hx-trigger="change" hx-include="this"
+            hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}'>
+      {% for i in opts %}<option value="{{ i }}" {{ 'selected' if i == am.gpu_count }}>{{ i }} GPU{{ 's' if i != 1 }}</option>{% endfor %}
+      {% if am.gpu_count not in opts %}<option value="{{ am.gpu_count }}" selected>{{ am.gpu_count }} GPUs</option>{% endif %}
+    </select>
+  </label>
+  {% endif %}
+</div>
+<div class="mr-c">
+  {% set layout_labels = [] %}{% for tp_val, pp_val, dp_val in info.strats %}{% set _ = layout_labels.append(layout_label(tp_val, pp_val, dp_val)) %}{% endfor %}
+  {% if am.gpu_count > 0 and (info.strats|length > 3 or (layout_labels|map('length')|max if layout_labels else 0) > 4) %}
+  {# Many layouts: one dropdown so the column keeps a fixed width; ★ = planner pick. #}
+  {% set cur_layout = layout_label(am.prefill_tp, am.prefill_pp, am.prefill_dp) if layout_phase == 'prefill' else layout_label(am.tp, am.pp, am.dp) %}
+  {% set cur_is_pick = info.layout_is_recommended %}
+  <label class="pick" title="Layout {{ cur_layout }}{{ ' (planner pick)' if cur_is_pick else '' }}. Prefill and decode share this layout.">
+    <span class="lbl">{{ cur_layout }}{% if cur_is_pick %}★{% endif %}</span><span class="car">▾</span>
+    <select name="layout" aria-label="Layout for {{ m.name }}" data-layout-select
+            data-panel="{{ panel }}" data-uid="{{ am.uid }}" data-phase="{{ layout_phase }}">
+      {% for tp_val, pp_val, dp_val in info.strats %}
+      {% set is_pick = info.recommended_strategy and (tp_val, pp_val, dp_val) == info.recommended_strategy %}
+      <option value="{{ tp_val }},{{ pp_val }},{{ dp_val }}" {{ 'selected' if layout_label(tp_val, pp_val, dp_val) == cur_layout }}>{{ layout_label(tp_val, pp_val, dp_val) }}{{ ' ★ planner pick' if is_pick }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  {% elif am.gpu_count > 0 and info.strats|length == 1 %}
+  {% set only = info.strats[0] %}
+  <span class="mr-fixed" title="{{ layout_label(*only) }} is the only valid layout for {{ m.name }} on {{ am.gpu_count }} GPU{{ 's' if am.gpu_count != 1 }} (the model's dimensions don't split any other way). Change the GPU count for other layouts.">{{ layout_label(*only) }} <span class="T">only option</span></span>
+  {% elif am.gpu_count > 0 and info.strats|length > 0 %}
+  <span class="seg">
+  {% for tp_val, pp_val, dp_val in info.strats %}
+    {% if layout_phase == 'prefill' %}{% set sel = (tp_val == am.prefill_tp and pp_val == am.prefill_pp and dp_val == am.prefill_dp) %}
+    {% else %}{% set sel = (tp_val == am.tp and pp_val == am.pp and dp_val == am.dp) %}{% endif %}
+    {% set is_pick = info.recommended_strategy and (tp_val, pp_val, dp_val) == info.recommended_strategy %}
+    {% set strat_label = layout_label(tp_val, pp_val, dp_val) %}
+    <button type="button" class="sm" aria-pressed="{{ 'true' if sel else 'false' }}"
+            aria-label="Use {{ strat_label }} layout for {{ m.name }}{{ ' (planner pick)' if is_pick }}"
+            title="{{ 'Planner pick: highest modeled throughput. ' if is_pick }}Prefill and decode share this layout."
+            hx-post="/model/strat" hx-target="#main-content"
+            hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}","phase":"{{ layout_phase }}","tp":"{{ tp_val }}","pp":"{{ pp_val }}","dp":"{{ dp_val }}"}'>{{ strat_label }}{% if is_pick %}★{% endif %}</button>
+  {% endfor %}
+  </span>
+  {% elif am.gpu_count > 0 %}
+  <span class="mr-bad" title="No feasible {{ PRECISION_LABELS[am.prec] }} layout on {{ am.gpu_count }} GPUs under the current memory budget">doesn't fit</span>
+  {% else %}
+  <span class="T">not deployed</span>
+  {% endif %}
+</div>
+<div class="mr-c">
+  {% if is_llm %}
+  {% set cur_spec = (m.available_spec_profiles|selectattr('method', 'equalto', am.spec_method)|first) if am.spec_method != 'off' else none %}
+  <label class="pick" title="{{ cur_spec.label if cur_spec else 'Speculative decoding off' }}">
+    <span class="lbl">{{ short_spec_label(cur_spec.label) if cur_spec else 'off' }}</span><span class="car">▾</span>
+    <select name="method" aria-label="Speculative decoding for {{ m.name }}"
+            hx-post="/model/spec" hx-target="#main-content" hx-trigger="change" hx-include="this"
+            hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}","spec_k":"{{ am.spec_k }}"}'>
+      <option value="off" {{ 'selected' if am.spec_method == 'off' else '' }}>Off</option>
+      {% for sp in m.available_spec_profiles %}
+      <option value="{{ sp.method }}" {{ 'selected' if am.spec_method == sp.method else '' }}>{{ sp.label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  {% else %}<span class="T">—</span>{% endif %}
+</div>
+<div class="mr-c">
+  {% if is_llm %}
+  {% set q = effective_quality(m) %}
+  <span class="mr-q" title="Quality {{ '%.2f'|format(q) }} on a 0–1 scale, confidence-adjusted (raw {{ '%.2f'|format(m.quality) }}, benchmark confidence {{ '%.0f'|format(m.quality_confidence * 100) }}%{% if m.quality_confidence > 0 %}, AA {{ '%.1f'|format(quality_to_aa_intelligence(m.quality)) }}{% endif %}). A use case is served only by models at or above its quality floor. Token efficiency {{ '%.2f'|format(m.token_efficiency) }}×.">
+    <span class="mr-qbar"><i style="width:{{ (q * 100)|round(1) }}%"></i></span><span class="M">{{ "%.2f"|format(q) }}</span>
+  </span>
+  {% else %}<span class="T">—</span>{% endif %}
+</div>
+<div class="mr-c">
+  {% if notes.items %}
+  <span class="mr-tag" title="{{ notes.items|join('\n') }}">⚠ {{ short_note(notes.items[0]) }}{% if notes.items|length > 1 %} +{{ notes.items|length - 1 }}{% endif %}</span>
+  {% else %}<span class="T">none</span>{% endif %}
+</div>
+<div class="mr-c">
+  <button type="button" class="ghost sm mr-rm" aria-label="{{ 'Exclude' if state.auto_mode else 'Remove' }} {{ m.name }}" title="{{ 'Exclude from recommendations' if state.auto_mode else 'Remove model' }}"
+          hx-post="{{ '/model/auto-exclude' if state.auto_mode else '/model/remove' }}"
+          hx-target="#main-content" data-fast-remove
+          hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}'>✕</button>
+</div>
+<div class="mr-detail" id="{{ more_id }}" hidden>
+  {% if notes.items %}<ul class="mr-notes">{% for note in notes.items %}<li>⚠ {{ note }}</li>{% endfor %}</ul>{% endif %}
+  <div class="mr-detail-grid">
+    <div class="mr-detail-col">
+      <div class="flex" style="gap:4px;"><span class="T" style="min-width:28px;">GPUs</span>
+      <input class="sm" type="number" min="0" max="{{ info.max_avail }}" step="1" value="{{ am.gpu_count }}"
+           style="width:54px;min-width:54px;padding:2px 4px;"
+           title="Assigned GPUs" aria-label="Custom GPU count assigned to {{ m.name }}"
+           hx-post="/model/count" hx-target="#main-content" hx-trigger="change"
+           hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}' name="count" />
+      </div>
+  {% if not m.is_embedding_model and not m.is_asr_model and not m.is_decision_model %}
+  <div class="flex" style="margin-bottom:3px;gap:3px;"{% if am.spec_method == 'off' %} hidden{% endif %}>
+    <span class="T" style="min-width:28px;" title="Draft-token depth">k</span>
+    <input type="hidden" name="method" value="{{ am.spec_method }}">
+    {% if am.spec_method != 'off' %}
+    {% set k_options = info.spec.profile.supported_ks if info.spec and info.spec.profile.supported_ks else range(1, 33) %}
+    <select class="prec-select" name="spec_k" aria-label="Draft-token depth for {{ m.name }}"
+            title="Auto selects the k with the highest modeled generated-token throughput at the card's stated user concurrency. Manual values hold k fixed."
+            hx-post="/model/spec" hx-target="#main-content" hx-trigger="change" hx-include="closest .flex"
+            hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}' style="width:78px;">
+      <option value="0" {{ 'selected' if am.spec_k == 0 else '' }}>k Auto</option>
+      {% for k_option in k_options %}
+      <option value="{{ k_option }}" {{ 'selected' if am.spec_k == k_option else '' }}>k {{ k_option }}</option>
+      {% endfor %}
+    </select>
+    {% endif %}
   </div>
-
-  <select class="prec-select artifact-select" name="artifact_id" aria-label="Artifact for {{ m.name }}" title="Choose a released checkpoint or an explicit conversion estimate. Changing artifact enables the current execution model."
-              hx-post="/model/artifact" hx-target="#main-content" hx-trigger="change" hx-include="this"
-              hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}'>
-        {% for option in info.artifact_options %}
-        <option value="{{ option.key }}" title="{{ option.description }}" {{ 'selected' if am.artifact_id == option.key else '' }}>{{ option.label }} · {{ "%.1f"|format(option.checkpoint_bytes / 1e9) }} GB</option>
-        {% endfor %}
-  </select>
-
+  {% if info.spec %}
+  <div class="T" style="margin-bottom:3px;" title="{{ info.spec.profile.note }} Source: {{ info.spec.profile.source }}.">
+    {{ info.spec.profile.label }} · {% if am.spec_k == 0 %}Auto {{ 'chose' if info.spec.active else 'tested' }} {% endif %}k={{ info.spec.k }} · α={{ "%.0f"|format(info.spec.alpha * 100) }}% ({{ info.spec.alpha_source }}) · τ≈{{ "%.2f"|format(info.spec.tau) }} tok/cycle{% if info.spec.draft_gb > 0 %} · +{{ "%.1f"|format(info.spec.draft_gb) }} GB draft{% endif %}{% if info.spec.speedup > 0 %} · {{ "%.2f"|format(info.spec.speedup) }}× decode @{{ info.spec.probe_bs }} users{% endif %}
+  </div>
+  {% if am.spec_k == 0 %}
+  <div class="T" style="margin-bottom:3px;">Auto optimizes modeled generated tok/s at {{ info.spec.probe_bs }} concurrent users. {% if info.spec.active %}The effective k can change with workload and hardware.{% else %}It kept speculative decoding off; k={{ info.spec.k }} is the best speculative candidate, shown for comparison.{% endif %}</div>
+  {% endif %}
+  {% if info.spec.unmeasured_prior %}
+  <div class="warn">⚠ Acceptance is an unmeasured profile prior, not a benchmark for this exact deployment. Speculative decoding is not free: draft, verification, KV, and scheduler costs are included where modeled.</div>
+  {% endif %}
+  {% if info.spec.speedup > 0 and info.spec.speedup < 1 %}
+  <div class="warn">⚠ Spec decode is modeled slower than baseline at {{ info.spec.probe_bs }} users — verification is compute-bound at this batch.</div>
+  {% elif am.spec_k == 0 and not info.spec.active %}
+  <div class="warn">⚠ Auto kept the baseline because no speculative k cleared the benefit threshold at {{ info.spec.probe_bs }} users ({{ info.spec.reason }}).</div>
+  {% endif %}
+  {% endif %}
+  {% endif %}
   <details class="T" style="margin-bottom:6px;" data-artifact-details {{ 'open' if am.execution_backend != 'legacy' else '' }}>
     <summary>Execution {{ info.execution.path if info.execution else 'unassigned' }}{% if not m.is_decision_model %} · KV {{ info.kv_format }}{% if m.linear_attention_layer_count %} · recurrent {{ info.recurrent_format }}{% endif %}{% endif %}</summary>
     <div class="artifact-runtime" style="display:grid;gap:6px;margin:6px 0;">
@@ -82,50 +251,8 @@
     {% if am.execution_backend != 'legacy' %}<p>Active read estimate {{ "%.3f"|format(m.active_weight_bytes(am.prec) / 1e9) }} GB/{{ 'forward' if m.is_decision_model else 'token' }} before batching/sharding. Operator shares are proxies, not measured kernel throughput. FP32 recurrent state is a conservative default; validate the selected runtime. Fixed architectural cache layouts override generic KV choices.</p>{% endif %}
     </details>
   </details>
-
-  {% if not m.is_embedding_model and not m.is_asr_model and not m.is_decision_model %}
-  <div class="flex" style="margin-bottom:3px;gap:3px;">
-    <span class="T" style="min-width:28px;">⚡</span>
-    <select class="prec-select" name="method" aria-label="Speculative decoding for {{ m.name }}"
-            title="Speculative decoding drafter. Native MTP / speculator checkpoints are lossless: accepted tokens match the target model's own output."
-            hx-post="/model/spec" hx-target="#main-content" hx-trigger="change" hx-include="closest .flex"
-            hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}'>
-      <option value="off" {{ 'selected' if am.spec_method == 'off' else '' }}>Spec off</option>
-      {% for sp in m.available_spec_profiles %}
-      <option value="{{ sp.method }}" {{ 'selected' if am.spec_method == sp.method else '' }}>{{ sp.label }}</option>
-      {% endfor %}
-    </select>
-    {% if am.spec_method != 'off' %}
-    {% set k_options = info.spec.profile.supported_ks if info.spec and info.spec.profile.supported_ks else range(1, 33) %}
-    <select class="prec-select" name="spec_k" aria-label="Draft-token depth for {{ m.name }}"
-            title="Auto selects the k with the highest modeled generated-token throughput at the card's stated user concurrency. Manual values hold k fixed."
-            hx-post="/model/spec" hx-target="#main-content" hx-trigger="change" hx-include="closest .flex"
-            hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}' style="width:78px;">
-      <option value="0" {{ 'selected' if am.spec_k == 0 else '' }}>k Auto</option>
-      {% for k_option in k_options %}
-      <option value="{{ k_option }}" {{ 'selected' if am.spec_k == k_option else '' }}>k {{ k_option }}</option>
-      {% endfor %}
-    </select>
-    {% endif %}
-  </div>
-  {% if info.spec %}
-  <div class="T" style="margin-bottom:3px;" title="{{ info.spec.profile.note }} Source: {{ info.spec.profile.source }}.">
-    {{ info.spec.profile.label }} · {% if am.spec_k == 0 %}Auto {{ 'chose' if info.spec.active else 'tested' }} {% endif %}k={{ info.spec.k }} · α={{ "%.0f"|format(info.spec.alpha * 100) }}% ({{ info.spec.alpha_source }}) · τ≈{{ "%.2f"|format(info.spec.tau) }} tok/cycle{% if info.spec.draft_gb > 0 %} · +{{ "%.1f"|format(info.spec.draft_gb) }} GB draft{% endif %}{% if info.spec.speedup > 0 %} · {{ "%.2f"|format(info.spec.speedup) }}× decode @{{ info.spec.probe_bs }} users{% endif %}
-  </div>
-  {% if am.spec_k == 0 %}
-  <div class="T" style="margin-bottom:3px;">Auto optimizes modeled generated tok/s at {{ info.spec.probe_bs }} concurrent users. {% if info.spec.active %}The effective k can change with workload and hardware.{% else %}It kept speculative decoding off; k={{ info.spec.k }} is the best speculative candidate, shown for comparison.{% endif %}</div>
-  {% endif %}
-  {% if info.spec.unmeasured_prior %}
-  <div class="warn">⚠ Acceptance is an unmeasured profile prior, not a benchmark for this exact deployment. Speculative decoding is not free: draft, verification, KV, and scheduler costs are included where modeled.</div>
-  {% endif %}
-  {% if info.spec.speedup > 0 and info.spec.speedup < 1 %}
-  <div class="warn">⚠ Spec decode is modeled slower than baseline at {{ info.spec.probe_bs }} users — verification is compute-bound at this batch.</div>
-  {% elif am.spec_k == 0 and not info.spec.active %}
-  <div class="warn">⚠ Auto kept the baseline because no speculative k cleared the benefit threshold at {{ info.spec.probe_bs }} users ({{ info.spec.reason }}).</div>
-  {% endif %}
-  {% endif %}
-  {% endif %}
-
+    </div>
+    <div class="mr-detail-col">
   <div class="T" style="margin-bottom:3px;">
     {{ "%.1f"|format(m.gpu_weight_bytes(am.prec) / 1e9) }} GB{% if m.system_ram_weight_bytes %} GPU{% endif %} weights{% if info.mixed_weight_precision %} · ~{{ "%.2f"|format(info.weight_bpp) }} B/param{% if m.system_ram_weight_bytes %} checkpoint{% endif %} avg{% endif %}{{ ' · MLA KV' if m.is_mla else '' }}{% if m.attention_label %} · {{ m.attention_label }}{% endif %}
   </div>
@@ -153,9 +280,6 @@
     {{ available_profile.label }} LUT available · {{ available_profile.source_repo }}{% if available_profile.source_kind != 'exact' %} · {{ available_profile.source_kind }}{% endif %}
   </div>
   {% endif %}
-  {% for alert in info.precision_alerts %}
-  <div class="warn">⚠ {{ alert }}</div>
-  {% endfor %}
   {% if m.is_decision_model %}
   <div class="T">Decision model · single forward · zero generated tokens · planner input cap {{ m.decision_profile.max_sequence_length|fmt_num }} positions. No speculative decoding or generation economics.</div>
   {% endif %}
@@ -213,147 +337,6 @@
     {{ "%.1f"|format(m.active_params / 1e9) }}B active · {{ "%.2f"|format(state.moe_imbalance) }}× expert imbalance
   </div>
   {% endif %}
-
-  {% if state.gpus|length > 1 %}
-  <div class="flex" style="margin-bottom:3px;gap:3px;">
-    <span class="T" style="min-width:28px;">On</span>
-    <select aria-label="GPU pool for {{ m.name }}" hx-post="/model/gpu_pool" hx-target="#main-content"
-            hx-trigger="change" hx-include="this"
-            hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}'
-            name="gpu_uid">
-      {% for gp2 in state.gpus %}
-      <option value="{{ gp2.uid }}" {{ 'selected' if gp2.uid == am.gpu_uid else '' }}>
-        {{ GPUS[gp2.gpu_type].name }} ({{ gp2.count }})
-      </option>
-      {% endfor %}
-    </select>
-  </div>
-  {% endif %}
-
-  <div class="flex" style="margin-bottom:3px;gap:2px;">
-    <span class="T" style="min-width:28px;">GPUs</span>
-    {% for i in info.gpu_count_options %}
-      <button class="sm" aria-label="Assign {{ i }} GPUs to {{ m.name }}" aria-pressed="{{ 'true' if i == am.gpu_count else 'false' }}" style="min-width:28px;padding:2px 5px;{{ 'background:var(--fg0);color:var(--bg0);border-color:var(--fg0);' if i == am.gpu_count else '' }}"
-              hx-post="/model/count" hx-target="#main-content"
-              hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}","count":"{{ i }}"}'>{{ i }}</button>
-    {% endfor %}
-    <input class="sm" type="number" min="0" max="{{ info.max_avail }}" step="1" value="{{ am.gpu_count }}"
-           style="width:54px;min-width:54px;padding:2px 4px;"
-           title="Assigned GPUs" aria-label="Custom GPU count assigned to {{ m.name }}"
-           hx-post="/model/count" hx-target="#main-content" hx-trigger="change"
-           hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}"}' name="count" />
-  </div>
-
-  {% if am.gpu_count > 0 and info.strats|length > 0 %}
-  {% if m.is_embedding_model or m.is_decision_model %}
-  <div class="flex" style="margin-bottom:3px;gap:2px;">
-    <span class="T" style="min-width:28px;">{{ 'F' if m.is_decision_model else 'E' }}</span>
-    {% for tp_val, pp_val, dp_val in info.strats %}
-      {% set sel = (tp_val == am.prefill_tp and pp_val == am.prefill_pp and dp_val == am.prefill_dp) %}
-      {% if tp_val == 1 and pp_val == 1 and dp_val == 1 %}
-        {% set strat_label = 'TP' + tp_val|string %}
-      {% elif pp_val == 1 %}
-        {% set strat_label = 'TP' + tp_val|string + '×DP' + dp_val|string %}
-      {% elif dp_val == 1 %}
-        {% set strat_label = 'TP' + tp_val|string + '×PP' + pp_val|string %}
-      {% else %}
-        {% set strat_label = 'TP' + tp_val|string + '×PP' + pp_val|string + '×DP' + dp_val|string %}
-      {% endif %}
-      <button class="sm" aria-label="Use {{ strat_label }} {{ 'decision' if m.is_decision_model else 'embedding' }} topology for {{ m.name }}" aria-pressed="{{ 'true' if sel else 'false' }}" style="padding:2px 6px;{{ 'background:'+m.color+';color:white;border-color:'+m.color+';' if sel else '' }}"
-              hx-post="/model/strat" hx-target="#main-content"
-              hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}","phase":"prefill","tp":"{{ tp_val }}","pp":"{{ pp_val }}","dp":"{{ dp_val }}"}'>
-        {{ strat_label }}
-      </button>
-    {% endfor %}
-  </div>
-  {% if info.prefill_comm_summary %}
-  <div class="T" style="margin-bottom:3px;">E {{ info.prefill_comm_summary }}</div>
-  {% endif %}
-  {% if info.prefill_exceeds_node %}
-  <div class="warn">⚠ Embedding TP spans nodes.</div>
-  {% endif %}
-  {% for alert in info.prefill_alerts %}
-  <div class="warn">⚠ {{ alert }}</div>
-  {% endfor %}
-  {% else %}
-  <div class="flex" style="margin-bottom:3px;gap:2px;">
-    <span class="T" style="min-width:28px;">P</span>
-    {% for tp_val, pp_val, dp_val in info.strats %}
-      {% set sel = (tp_val == am.prefill_tp and pp_val == am.prefill_pp and dp_val == am.prefill_dp) %}
-      {% if tp_val == 1 and pp_val == 1 and dp_val == 1 %}
-        {% set strat_label = 'TP' + tp_val|string %}
-      {% elif pp_val == 1 %}
-        {% set strat_label = 'TP' + tp_val|string + '×DP' + dp_val|string %}
-      {% elif dp_val == 1 %}
-        {% set strat_label = 'TP' + tp_val|string + '×PP' + pp_val|string %}
-      {% else %}
-        {% set strat_label = 'TP' + tp_val|string + '×PP' + pp_val|string + '×DP' + dp_val|string %}
-      {% endif %}
-      <button class="sm" aria-label="Use {{ strat_label }} prefill topology for {{ m.name }}" aria-pressed="{{ 'true' if sel else 'false' }}" style="padding:2px 6px;{{ 'background:'+m.color+';color:white;border-color:'+m.color+';' if sel else '' }}"
-              hx-post="/model/strat" hx-target="#main-content"
-              hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}","phase":"prefill","tp":"{{ tp_val }}","pp":"{{ pp_val }}","dp":"{{ dp_val }}"}'>
-        {{ strat_label }}
-      </button>
-    {% endfor %}
-  </div>
-  {% if info.prefill_comm_summary %}
-  <div class="T" style="margin-bottom:3px;">P {{ info.prefill_comm_summary }}</div>
-  {% endif %}
-  {% if info.prefill_exceeds_node %}
-  <div class="warn">⚠ Prefill TP spans nodes.</div>
-  {% endif %}
-  {% for alert in info.prefill_alerts %}
-  <div class="warn">⚠ {{ alert }}</div>
-  {% endfor %}
-
-  <div class="flex" style="margin-bottom:3px;gap:2px;">
-    <span class="T" style="min-width:28px;">D</span>
-    {% for tp_val, pp_val, dp_val in info.strats %}
-      {% set sel = (tp_val == am.tp and pp_val == am.pp and dp_val == am.dp) %}
-      {% if tp_val == 1 and pp_val == 1 and dp_val == 1 %}
-        {% set strat_label = 'TP' + tp_val|string %}
-      {% elif pp_val == 1 %}
-        {% set strat_label = 'TP' + tp_val|string + '×DP' + dp_val|string %}
-      {% elif dp_val == 1 %}
-        {% set strat_label = 'TP' + tp_val|string + '×PP' + pp_val|string %}
-      {% else %}
-        {% set strat_label = 'TP' + tp_val|string + '×PP' + pp_val|string + '×DP' + dp_val|string %}
-      {% endif %}
-      <button class="sm" aria-label="Use {{ strat_label }} decode topology for {{ m.name }}" aria-pressed="{{ 'true' if sel else 'false' }}" style="padding:2px 6px;{{ 'background:'+m.color+';color:white;border-color:'+m.color+';' if sel else '' }}"
-              hx-post="/model/strat" hx-target="#main-content"
-              hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}","phase":"decode","tp":"{{ tp_val }}","pp":"{{ pp_val }}","dp":"{{ dp_val }}"}'>
-        {{ strat_label }}
-      </button>
-    {% endfor %}
-  </div>
-  {% if info.decode_comm_summary %}
-  <div class="T" style="margin-bottom:3px;">D {{ info.decode_comm_summary }}</div>
-  {% endif %}
-  {% if info.decode_exceeds_node %}
-  <div class="warn">⚠ Decode TP spans nodes.</div>
-  {% endif %}
-  {% for alert in info.decode_alerts %}
-  <div class="warn">⚠ {{ alert }}</div>
-  {% endfor %}
-  {% endif %}
-  {% elif am.gpu_count > 0 %}
-  <div style="font-size:10px;color:var(--red);">No feasible {{ PRECISION_LABELS[am.prec] }} topology within the current memory cap.</div>
-  {% if info.alt_prec and info.alt_fits_now %}
-  <div class="T">Switch to {{ PRECISION_LABELS[info.alt_prec] }} to run on {{ am.gpu_count }} GPUs.</div>
-  {% elif info.selected_pool_min_gpu_count %}
-  <div class="T">{{ PRECISION_LABELS[am.prec] }} needs at least {{ info.selected_pool_min_gpu_count }} GPUs on this pool.</div>
-  {% else %}
-  <div class="T">{{ PRECISION_LABELS[am.prec] }} does not fit on this pool under the current memory cap.</div>
-  {% endif %}
-  {% if info.alt_prec and not info.alt_fits_now %}
-    {% if info.alt_pool_min_gpu_count %}
-    <div class="T">{{ PRECISION_LABELS[info.alt_prec] }} needs at least {{ info.alt_pool_min_gpu_count }} GPUs on this pool.</div>
-    {% else %}
-    <div class="T">{{ PRECISION_LABELS[info.alt_prec] }} does not fit on this pool under the current memory cap.</div>
-    {% endif %}
-  {% endif %}
-  {% endif %}
-
   {% if am.gpu_count == 0 %}
     <div class="T">Not deployed</div>
     {% if info.selected_pool_min_gpu_count %}
@@ -398,4 +381,6 @@
       {% endif %}
     {% endif %}
   {% endif %}
+    </div>
+  </div>
 </div>
