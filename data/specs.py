@@ -160,6 +160,7 @@ class QuantizationProfile:
     compute_evidence: str = "estimated operator shares; uncalibrated throughput"
     runtime_evidence: str = "runtime support requires a matching serving recipe"
     scheme: QuantizationScheme | None = None
+    source_url: str = ""
 
     def __post_init__(self) -> None:
         _storage_bytes(self.storage_format_counts)

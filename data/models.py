@@ -15,6 +15,7 @@ from .models_asr import ASR_MODELS
 from .models_decision import DECISION_MODELS
 from .models_embedding import EMBEDDING_MODELS
 from .models_lfm3 import LFM3_MODELS
+from .models_releases_202610 import RELEASE_MODELS
 from .models_text import TEXT_MODELS
 
 _ALL_MODEL_DEFINITIONS = {
@@ -23,11 +24,12 @@ _ALL_MODEL_DEFINITIONS = {
     **ASR_MODELS,
     **DECISION_MODELS,
     **LFM3_MODELS,
+    **RELEASE_MODELS,
 }
 _INITIAL_MODELS = {
     key: model for key, model in _ALL_MODEL_DEFINITIONS.items() if key not in ARCHIVED_MODELS
 }
-MODEL_ORDER = (
+MODEL_ORDER: tuple[str, ...] = (
     "d1-2b",
     "d1-omni-2b",
     "d1-3b",
@@ -142,6 +144,7 @@ MODEL_ORDER = (
     "granite-4.0-1b-speech",
     "cohere-transcribe-03-2026",
     "nvidia-parakeet-tdt-0.6b-v3",
+    "ms32",
     "mm31",
     "mistral-medium-3.5",
     "ms4",
@@ -181,6 +184,7 @@ MODEL_ORDER = (
     "embeddinggemma-2",
     "jais-asr",
 )
+MODEL_ORDER += tuple(RELEASE_MODELS)
 MODELS: dict[str, Model] = {key: _INITIAL_MODELS[key] for key in MODEL_ORDER}
 
 # Dedicated ASR variants intentionally follow the base model catalog. Keep this
@@ -243,6 +247,27 @@ MODELS.update(
         ),
     }
 )
+
+# Picker retirement preserves catalog keys and geometry for saved scenarios.
+# Apply after variants are constructed so successors do not inherit hidden=True.
+_HIDDEN_MODEL_KEYS = (
+    "lfm2-700m",
+    "lfm2-24b-a2b",
+    "glm45",
+    "glm46",
+    "mimo-v2.5",
+    "mimo-v2.5-pro",
+    "pplx-embed-v1-late-0.6b",
+    "lfm3-1.7b-base",
+    "rwkv7-g1d-01b",
+    "rwkv7-g1d-04b",
+    "rwkv7-g1f-15b",
+    "rwkv7-g1f-29b",
+    "rwkv7-g1g-72b",
+    "rwkv7-g1g-133b",
+)
+for _key in _HIDDEN_MODEL_KEYS:
+    MODELS[_key] = replace(MODELS[_key], hidden=True)
 
 # Structural catalog checks. These raise instead of using `assert` so that
 # `python -O` cannot strip the catalog's only load-time guard.

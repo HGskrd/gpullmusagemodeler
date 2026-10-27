@@ -1983,6 +1983,7 @@ TEXT_MODELS: dict[str, Model] = {
         False,
         hidden_dim=5120,
         max_context_tokens=131072,
+        quality_confidence=0.0,
     ),
     "mm31": Model(
         "mm31",
@@ -1997,7 +1998,6 @@ TEXT_MODELS: dict[str, Model] = {
         8,
         128,
         False,
-        hidden=True,
     ),
     "mistral-medium-3.5-preview": Model(
         "mistral-medium-3.5-preview",

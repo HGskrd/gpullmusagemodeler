@@ -200,10 +200,10 @@ def test_gpu_resident_conditional_tables_keep_layer_placement():
     )
 
 
-def test_models_without_host_tables_keep_full_gpu_weights():
+def test_models_without_host_tables_respect_explicit_reference_loader_casts():
     for model in MODELS.values():
         if model.key != MODEL.key:
             assert model.system_ram_weight_bytes == 0
-            assert model.gpu_weight_bytes(model.native_precision_key) == model.weight_bytes(
-                model.native_precision_key
+            assert model.gpu_weight_bytes(model.native_precision_key) == (
+                model.native_runtime_weight_bytes or model.weight_bytes(model.native_precision_key)
             )

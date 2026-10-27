@@ -1,5 +1,8 @@
 # GPU/LLM Usage Modeler
 
+The [27 October release ledger](docs/model-releases-2026-10-27.md) records the latest
+47 model/mode additions, pinned sources, artifact sizes and capacity assumptions.
+
 A Flask web application for planning and modeling multi-model LLM deployments across GPUs and AI accelerators. It lets you configure accelerator pools, LLM workloads, and traffic distributions to project infrastructure costs and throughput.
 
 ## Artifacts and execution formats

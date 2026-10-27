@@ -413,7 +413,9 @@ function updateChartAccessibleSummary(data) {
   root.appendChild(heading);
   if (!datasets.length) {
     const empty = document.createElement('p');
-    empty.textContent = 'No deployed model data is available for this chart.';
+    empty.textContent = data.capacity_only?.length
+      ? data.capacity_only.map(row => `${row.label}: ${Number(row.capacity).toLocaleString()} ${row.unit}; quality unavailable.`).join(' ')
+      : 'No deployed model data is available for this chart.';
     root.appendChild(empty);
     return;
   }
@@ -1057,6 +1059,38 @@ function renderChart(data) {
   const fmtRate = v => v >= 100 ? Math.round(v).toLocaleString() : v >= 10 ? v.toFixed(1) : v.toFixed(2);
 
   const narrowChart = el.clientWidth < 600;
+
+  // Keep unmeasured quality off the quality axes. Capacity remains available
+  // as a separate text readout, or as bars when no rated series are selected.
+  const capacityOnly = data.capacity_only || [];
+  const capacityRoot = document.getElementById('chartCapacityOnly');
+  if (capacityRoot) {
+    capacityRoot.replaceChildren();
+    capacityRoot.hidden = !capacityOnly.length || !datasets.length;
+    capacityOnly.forEach(row => {
+      const item = document.createElement('p');
+      item.textContent = `${row.label}: ${Number(row.capacity).toLocaleString()} ${row.unit}. Quality unavailable; capacity estimate only.`;
+      capacityRoot.appendChild(item);
+    });
+  }
+  if (!datasets.length && capacityOnly.length) {
+    chart.setOption({
+      ...baseOption(theme, params => {
+        const row = capacityOnly[params.dataIndex];
+        return `${escapeTooltipHtml(row.label)}<br>${Number(row.capacity).toLocaleString()} ${escapeTooltipHtml(row.unit)}<br>${escapeTooltipHtml(row.hardware)}<br>${escapeTooltipHtml(row.note)}`;
+      }, 'item'),
+      grid: { top: 30, right: 36, bottom: 48, left: 22, containLabel: true },
+      xAxis: axisCommon(theme, capacityOnly[0].unit, fmtRate, { type: 'value', min: 0 }),
+      yAxis: axisCommon(theme, '', v => v, {
+        type: 'category', data: capacityOnly.map(row => row.label),
+      }),
+      series: [{ type: 'bar', barMaxWidth: 28,
+        data: capacityOnly.map(row => ({ value: row.capacity, itemStyle: { color: row.color } })),
+      }],
+    });
+    setChartCaption('Capacity estimates only. No compatible published quality score is available for these checkpoints.');
+    return;
+  }
 
   if (data.mode === 'userpareto' || data.mode === 'usercapacity') {
     renderUserChart(data, el, theme, datasets, { fmtBatch, fmtUserTok, narrowChart });

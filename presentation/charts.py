@@ -51,6 +51,7 @@ from data import (
     PUBLISHED_EMBEDDING_QUALITY,
     Model,
 )
+from data.release_quality_202610 import RELEASE_EMBEDDING_METRICS
 from deployment import Deployment
 from presentation.formatting import short_model_name
 from state import PlannerState, project_demand_multiplier
@@ -151,9 +152,13 @@ def chart_embedding_quality(state, panel_suffix: str = "") -> list[dict]:
             "max_batch": best.max_batch,
             "mode": profile.mode_label,
             "quality": quality,
-            "quality_metric": "Decontaminated BEIR nDCG@10"
-            if uses_decontaminated_beir
-            else "Published retrieval nDCG@10 fallback",
+            "quality_metric": (
+                "Decontaminated BEIR nDCG@10"
+                if uses_decontaminated_beir
+                else RELEASE_EMBEDDING_METRICS.get(model.key, {}).get(
+                    "metric", "Published retrieval nDCG@10 fallback"
+                )
+            ),
             "source": (
                 EMBEDDING_DECONTAMINATED_BEIR_SOURCES.get(model.key, "")
                 if uses_decontaminated_beir

@@ -244,11 +244,12 @@
     <p>Storage: {{ info.quant_profile.storage_evidence }}. Active traffic: {{ info.quant_profile.active_traffic_evidence }}. Compute: {{ info.quant_profile.compute_evidence }}.</p>
     <p>{{ info.quant_profile.container }} · {{ info.quant_profile.quant_algo }} · {{ info.quant_profile.format_scheme.encoding }} · block {{ info.quant_profile.format_scheme.block_shape }} · scales {{ info.quant_profile.format_scheme.scale_format }} · zero points {{ info.quant_profile.format_scheme.zero_point_format }}.</p>
     <p>Quantized: {{ info.quant_profile.quantized|join('; ') }}. Retained: {{ info.quant_profile.retained|join('; ') }}.</p>
-    <p><a href="https://huggingface.co/{{ info.quant_profile.source_repo }}/tree/{{ info.quant_profile.source_revision }}" target="_blank" rel="noopener">Pinned checkpoint {{ info.quant_profile.source_revision[:12] }}</a> · captured {{ info.quant_profile.captured_at }}.</p>
+    <p><a href="{{ info.quant_profile.source_url or ('https://huggingface.co/' ~ info.quant_profile.source_repo ~ '/tree/' ~ info.quant_profile.source_revision) }}" target="_blank" rel="noopener">Pinned checkpoint {{ info.quant_profile.source_revision[:12] }}</a> · captured {{ info.quant_profile.captured_at }}.</p>
     {% else %}
     <p>Storage and conversion are catalog estimates; no exact tensor inventory is pinned for this choice.</p>
     {% endif %}
-    {% if am.execution_backend != 'legacy' %}<p>Active read estimate {{ "%.3f"|format(m.active_weight_bytes(am.prec) / 1e9) }} GB/{{ 'forward' if m.is_decision_model else 'token' }} before batching/sharding. Operator shares are proxies, not measured kernel throughput. FP32 recurrent state is a conservative default; validate the selected runtime. Fixed architectural cache layouts override generic KV choices.</p>{% endif %}
+    {% if info.realtime and info.realtime.chunk_work %}<p>Weight-read estimate {{ "%.3f"|format(info.realtime.chunk_work.weight_read_bytes / 1e9) }} GB per audio chunk before batching/sharding; encoder and decoder rates are modeled separately.</p>
+    {% elif am.execution_backend != 'legacy' %}<p>Active read estimate {{ "%.3f"|format(m.active_weight_bytes(am.prec) / 1e9) }} GB/{{ 'forward' if m.is_decision_model else 'token' }} before batching/sharding. Operator shares are proxies, not measured kernel throughput. FP32 recurrent state is a conservative default; validate the selected runtime. Fixed architectural cache layouts override generic KV choices.</p>{% endif %}
     </details>
   </details>
     </div>
@@ -305,8 +306,9 @@
   {% endif %}
   {% endif %}
   {% if info.realtime %}
+  {% if m.architecture_note and info.realtime.chunk_work %}<details class="T"><summary>Speech capacity assumptions</summary><p>{{ m.architecture_note }}</p><p>{{ info.realtime.profile.note }}</p></details>{% endif %}
   <div class="T" style="margin-bottom:3px;" title="{{ info.realtime.profile.note }} Source: {{ info.realtime.profile.source }}.">
-    {{ m.asr_mode_label }} · {{ info.realtime.profile.label }} · {% if info.realtime.profile.streaming %}target delay {{ info.realtime.profile.target_delay_ms }} ms{% else %}modeled clip {{ (info.realtime.profile.target_delay_ms / 1000)|fmt_num }} s{% endif %} · {{ "%.1f"|format(info.realtime.profile.tokens_per_second) }} audio tok/s per stream
+    {{ m.asr_mode_label }} · {{ info.realtime.profile.label }} · {% if info.realtime.profile.streaming %}target delay {{ info.realtime.profile.target_delay_ms }} ms{% else %}modeled clip {{ (info.realtime.profile.target_delay_ms / 1000)|fmt_num }} s{% endif %} · {{ "%.1f"|format(info.realtime.profile.tokens_per_second) }} {% if info.realtime.profile.audio_chunk_seconds %}{{ 'transcript tok/s' if info.realtime.profile.decoder_params else 'encoder frames/s' }}{% else %}audio tok/s{% endif %} per stream
   </div>
   <div class="T" style="margin-bottom:3px;">
     {% if info.realtime.max_users > 0 %}
@@ -363,6 +365,10 @@
       {% else %}
       <div style="font-size:10px;color:var(--red);">Embedding pass does not fit within the requested memory cap.</div>
       {% endif %}
+    {% elif m.is_asr_model and info.realtime and info.realtime.chunk_work %}
+      <div class="T">ASR {{ info.decode_kv_gb }} GB work buffer · {{ "%.1f"|format(info.realtime.profile.audio_chunk_seconds) }} s planning chunk</div>
+      <div class="T">{{ "%.1f"|format(info.realtime.chunk_work.scratch_bytes / 1e6) }} MB scratch and attention state per chunk · {{ info.realtime.sample.max_slots if info.realtime.sample else 0 }} memory slots</div>
+      <div class="T">Audio encoder{% if info.realtime.profile.decoder_params %}, decoder{% endif %}{% if info.realtime.profile.cross_attention %} and cross-attention{% endif %} work included. Uncalibrated capacity estimate.</div>
     {% else %}
       {% if info.prefill_fits %}
       <div class="T" title="Prefill requested {{ "%.1f"|format(info.prefill_mem.requested / 1e9) }} GB · weights {{ "%.1f"|format(info.prefill_mem.weights / 1e9) }} GB · profiled non-KV {{ "%.1f"|format(info.prefill_mem.profiled_non_kv / 1e9) }} GB · KV reserved {{ "%.1f"|format(info.prefill_mem.kv_reserved / 1e9) }} GB">
