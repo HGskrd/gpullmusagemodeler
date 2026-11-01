@@ -46,6 +46,7 @@
       <span class="T" style="font-family:var(--mono);">{{ "%.0f"|format(gp.pool_cost_day) }}/day for {{ gp.count }} GPUs</span>
       {% endif %}
     </div>
+    {% include "partials/pool_machines.html" %}
   </div>
   {% endfor %}
 

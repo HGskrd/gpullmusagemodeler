@@ -11,7 +11,7 @@
 {% if info.spec and info.spec.unmeasured_prior %}{% set notes.items = notes.items + ['Speculative acceptance is an unmeasured profile prior, not a benchmark for this deployment.'] %}{% endif %}
 {% if info.spec and info.spec.speedup > 0 and info.spec.speedup < 1 %}{% set notes.items = notes.items + ['Speculative decoding is modeled slower than baseline at ' ~ info.spec.probe_bs ~ ' users.'] %}{% endif %}
 {% set more_id = "mr-" ~ panel ~ "-" ~ am.uid %}
-{% set layout_phase = 'prefill' if (m.is_embedding_model or m.is_decision_model) else 'decode' %}
+{% set layout_phase = 'prefill' if (m.is_embedding_model or m.is_decision_model) else 'both' %}
 <div class="mr-c mr-name" data-fast-card>
   <button type="button" class="mr-more" data-more="{{ more_id }}" aria-expanded="false" aria-controls="{{ more_id }}" title="All settings and details">▸</button>
   <span class="dot" style="background:{{ m.color }};"></span>
@@ -390,3 +390,4 @@
     </div>
   </div>
 </div>
+{% include "partials/placement_strip.html" %}

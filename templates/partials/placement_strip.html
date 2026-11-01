@@ -1,0 +1,34 @@
+{# Machine map under a model row: where its layout lands on the pool's machines.
+   Shown only when the pool is larger than one machine. #}
+{% set pv = placement_view(state, info) %}
+{% if pv %}
+{% set c = pv.cur %}
+<div class="mr-place">
+  <div class="pl-map">
+    {% for machine in c.machines %}
+      {% set mi = loop.index0 %}
+      <div class="pl-machine">
+        <div class="pl-mh" title="GPUs inside this machine talk over {{ pv.scale_up_label }} at {{ pv.scale_up_gbs|round|int }} GB/s per GPU."><b>Machine {{ mi + 1 }}</b>{% if c.partners[mi] %}<span class="pl-bad" title="A model copy is split between these machines: every decode step sends {{ 'activations and expert tokens' if info.model.is_moe else 'activations' }} over the network ({{ pv.network_gbps|round|int }} Gb/s = {{ pv.network_gbs|round|int }} GB/s per GPU).">⇄ {{ c.partners[mi] }} over network</span>{% endif %}</div>
+        <div class="pl-gpus" style="grid-template-columns:repeat({{ [pv.node_size, 8]|min }}, 1fr);">
+          {% for slot in machine %}
+            {% if slot.rep is none %}
+            <span class="pl-gpu idle" title="Not used by this model (free or used by another model)">·</span>
+            {% else %}
+            <span class="pl-gpu" style="background:{{ pv.colors[slot.rep % pv.colors|length] }};"
+                  title="Copy {{ slot.rep + 1 }} · stage {{ slot.stage + 1 }}/{{ c.pp }} · TP rank {{ slot.rank + 1 }}/{{ c.tp }}">{% if c.pp > 1 %}S{{ slot.stage + 1 }}{% else %}{{ slot.rep + 1 }}{% endif %}</span>
+            {% endif %}
+          {% endfor %}
+        </div>
+        <div class="pl-mf T">
+          KV {{ '%.1f'|format(c.kv_gb) }} GB/GPU{% if pv.host_per_copy_gb %} · host RAM {{ c.host_by_machine_gb[mi]|round|int }} GB{% endif %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+  <div class="T pl-legend">
+    {{ c.label }} · colour = model copy{% if c.pp > 1 %}, S = pipeline stage{% endif %} · inside a machine {{ pv.scale_up_label }} {{ pv.scale_up_gbs|round|int }} GB/s ·
+    {% if pv.n_machines == 1 %}one machine, no network between GPUs{% elif c.span == 1 %}<span class="pl-ok">each copy stays inside one machine</span>: copies run independently and the {{ pv.network_gbps|round|int }} Gb/s network carries only user requests{% else %}<span class="pl-bad">each copy spans {{ c.span }} machines</span>: {% if c.tp_cross %}tensor-parallel all-reduce{% else %}{{ c.pp_cross }} pipeline hand-off{{ 's' if c.pp_cross != 1 }}{% endif %} over the {{ pv.network_gbps|round|int }} Gb/s ({{ pv.network_gbs|round|int }} GB/s) network every step{% if c.ep_cross %}; MoE expert traffic also crosses it and is not modelled{% endif %}{% endif %}
+    · {{ c.per_user|round|int }} tok/s/user · peak {{ c.peak_tps|fmt_num }} tok/s
+  </div>
+</div>
+{% endif %}

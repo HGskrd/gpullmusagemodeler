@@ -433,6 +433,8 @@ def deserialize_planner_state(payload: Any) -> PlannerState:
                     1_000_000.0,
                 ),
                 country,
+                _scenario_int(row, "gpus_per_machine", 0, 0, 1024),
+                _scenario_float(row, "network_gbps_per_gpu", 0.0, 0.0, 3200.0),
             )
         )
 
