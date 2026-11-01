@@ -67,6 +67,11 @@ The V4.1 native 510.286 GB checkpoint includes 196B Engram parameters, vision, a
 
 Cloud entries may define an input-length threshold and a second set of long-context input, cached-input, and output rates. The calculator switches tiers only when the request input is strictly above the published threshold.
 
+To export hardware/model combinations for a web-search agent, see the
+[benchmark research queue](docs/benchmark-research.md). The offline CLI generates
+JSONL tasks with calculator-screened configurations, source context, deterministic
+sharding, and resumable completion IDs. A bounded exploratory queue samples rejected pairs.
+
 ## Requirements
 
 - Python 3.10+

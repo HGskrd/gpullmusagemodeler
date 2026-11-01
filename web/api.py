@@ -29,6 +29,7 @@ from presentation.charts import (
     chart_decision_latency,
     chart_embedding_quality,
     chart_processing_pareto,
+    chart_prompt_caching,
     chart_realtime_capacity,
     chart_user_pareto,
     decision_use_cases,
@@ -103,6 +104,13 @@ def _build_chart_payload(sa: PlannerState, sb: PlannerState | None) -> dict:
         if sb:
             datasets += _annotate_chart_spec(sb, chart_processing_pareto(sb, batch_sizes, " (B)"))
         return {"type": "line", "datasets": datasets, "mode": mode, "x_max": batch_sizes[-1]}
+
+    if mode == "caching":
+        payload = chart_prompt_caching(sa)
+        if sb:
+            payload_b = chart_prompt_caching(sb, " (B)")
+            payload["datasets"] += payload_b["datasets"]
+        return {"type": "line", "mode": mode, **payload}
 
     if mode == "decision":
         use_cases = decision_use_cases(sa)

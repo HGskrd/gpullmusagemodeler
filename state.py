@@ -73,6 +73,7 @@ VISIBLE_PLOT_MODES = (
     ("embedquality", "Embedding Quality"),
     ("asrquality", "ASR Quality"),
     ("decision", "Decision response time"),
+    ("caching", "Prompt caching (prototype)"),
 )
 DEFAULT_PLOT_MODE = VISIBLE_PLOT_MODES[0][0]
 LEGACY_PLOT_MODE_REDIRECTS = {"realtime": "asrquality", "embedding": "embedquality"}

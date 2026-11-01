@@ -477,6 +477,224 @@ function decisionLenLabel(len) {
   return len >= 1024 && len % 1024 === 0 ? `${len / 1024}k` : String(len);
 }
 
+/* Prompt caching (prototype): fixed hardware, unlimited demand. Switchable
+ * views of one sweep of cache hit rate. A = tokens served per second by each
+ * deployment, B = token mix of one deployment, C and D = token mix of every
+ * deployment on one plot (stacked bars / bands). */
+const CACHING_VARIANTS = [
+  ['A', 'A · Tokens served'],
+  ['B', 'B · Token mix, one model'],
+  ['C', 'C · Token mix, all models (bars)'],
+  ['D', 'D · Token mix, all models (bands)'],
+];
+const cachingView = { variant: 'A', model: null };
+try { cachingView.variant = localStorage.getItem('cachingVariant') || 'A'; } catch (e) { /* storage unavailable */ }
+
+function renderCachingChart(data, theme, datasets) {
+  const view = cachingView;
+  if (!CACHING_VARIANTS.some(([k]) => k === view.variant)) view.variant = 'A';
+  if (!datasets.some(ds => ds.label === view.model)) view.model = datasets[0]?.label ?? null;
+  const rerender = () => renderChart(lastChartData);
+  const ctl = document.getElementById('chartControls');
+  if (ctl) {
+    ctl.hidden = false;
+    ctl.replaceChildren();
+    const chipRow = (items, isOn, onPick) => {
+      const chips = document.createElement('span');
+      chips.className = 'dc-chips';
+      items.forEach(([key, label, color]) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'dc-chip uv';
+        if (color) { const i = document.createElement('i'); i.style.background = color; b.appendChild(i); }
+        b.appendChild(document.createTextNode(label));
+        b.setAttribute('aria-pressed', String(isOn(key)));
+        b.onclick = () => { onPick(key); rerender(); };
+        chips.appendChild(b);
+      });
+      return chips;
+    };
+    const lbl = text => { const l = document.createElement('label'); l.textContent = text; return l; };
+    ctl.append(lbl('Variant (prototype)'), chipRow(CACHING_VARIANTS, k => k === view.variant, k => {
+      view.variant = k;
+      try { localStorage.setItem('cachingVariant', k); } catch (e) { /* storage unavailable */ }
+    }));
+    if (view.variant === 'B') {
+      ctl.append(lbl('Model'), chipRow(datasets.map(ds => [ds.label, ds.label, ds.borderColor]), k => k === view.model, k => { view.model = k; }));
+    }
+  }
+
+  const fmt = v => v >= 1e6 ? `${(v / 1e6).toFixed(v >= 1e7 ? 0 : 1)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(v >= 1e4 ? 0 : 1)}k` : v >= 10 ? Math.round(v).toString() : v.toFixed(1);
+  const tok = v => Number(v).toLocaleString();
+  const pct = v => `${Math.round(v)}%`;
+  const cur = Number(data.current_hit || 0);
+  const IN = Number(data.in_len), OUT = Number(data.out_len);
+  const workload = `avg ${tok(IN)} in / ${tok(OUT)} out tokens per request`;
+  const xAxis = axisCommon(theme, '% of input tokens already cached', v => pct(v), { type: 'value', min: 0, max: 95, nameGap: 30 });
+  const legend = {
+    show: true, type: 'scroll', top: 0, left: 8, right: 8, height: 24, icon: 'roundRect', itemWidth: 16, itemHeight: 5,
+    textStyle: { color: theme.tc, fontFamily: theme.fontFamily, fontSize: 10 },
+  };
+  const grid = { top: 34, right: 18, bottom: 48, left: 22, containLabel: true };
+  const currentMark = {
+    silent: true, symbol: 'none',
+    label: { formatter: `your workload ${pct(cur)}`, position: 'insideEndTop', color: theme.text, fontFamily: theme.fontFamily, fontSize: 10 },
+    lineStyle: { color: theme.text, type: 'solid', width: 1, opacity: 0.6 },
+    data: [{ xAxis: cur }],
+  };
+  const row = (color, name, value, detail) =>
+    `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
+    `<span style="display:inline-block;width:10px;height:2.5px;border-radius:2px;background:${color};flex-shrink:0;"></span>` +
+    `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px;color:${theme.text};">${escapeTooltipHtml(name)}</span>` +
+    `<span style="margin-left:4px;text-align:right;font-weight:600;color:${theme.text};">${value}${detail ? ` <span style="color:${theme.tc};font-size:10px;font-weight:400;">${detail}</span>` : ''}</span></div>`;
+  const base0 = ds => (ds.data || [])[0]?.rps || null;
+  const ceilingPin = (ds, y) => {
+    const p = ds.ceiling_x != null ? (ds.data || []).find(q => q.x === ds.ceiling_x) : null;
+    return p ? {
+      symbol: 'pin', symbolSize: 30, itemStyle: { color: ds.borderColor },
+      label: { show: true, formatter: 'max', fontSize: 9, color: '#fff' },
+      data: [{ coord: [p.x, y(p)] }],
+    } : undefined;
+  };
+  const batchText = (raw, ds) => ds?.max_batch ? `batch ${raw.batch} of ${ds.max_batch} that fit in memory` : `batch ${raw.batch}`;
+  const splitHtml = (raw, ds) =>
+    `<div style="margin:0 0 2px 17px;color:${theme.tc};font-size:9px;">uncached in ${fmt(raw.uncached_tps)} · cached in ${fmt(raw.cached_tps)} · output ${fmt(raw.output_tps)} tok/s · ${batchText(raw, ds)}</div>`;
+
+  if (view.variant === 'B') {
+    const ds = datasets.find(d => d.label === view.model);
+    if (!ds) return;
+    const css = getComputedStyle(document.documentElement);
+    const layers = [
+      ['output_tps', 'Output tokens (written)', ds.borderColor, 1],
+      ['uncached_tps', 'Uncached input (read from scratch)', ds.borderColor, 0.55],
+      ['cached_tps', 'Cached input (reused)', css.getPropertyValue('--fg2').trim() || '#999', 0.35],
+    ];
+    const pts = (ds.data || []).filter(p => p.rps);
+    chart.setOption({
+      ...baseOption(theme, params => {
+        const list = Array.isArray(params) ? params : [params];
+        if (!list.length) return '';
+        const raw = list[0].data?.raw;
+        let html = axisHeader(theme, 'Input already cached', pct(Number(list[0].axisValue)));
+        if (!raw) return html;
+        html += row(ds.borderColor, ds.label, `${fmt(raw.y)} tok/s`, `${(raw.rps / base0(ds)).toFixed(2)}× no caching`);
+        [...list].reverse().forEach(p => { html += row(p.color, p.seriesName, `${fmt(Number(p.data.value))} tok/s`); });
+        html += `<div style="margin:0 0 2px 17px;color:${theme.tc};font-size:9px;">${escapeTooltipHtml(ds.hardware)} · ${batchText(raw, ds)}</div>`;
+        return html;
+      }, 'axis'),
+      grid, legend,
+      xAxis: axisCommon(theme, '% of input tokens already cached', v => pct(v), {
+        type: 'category', boundaryGap: false, data: pts.map(p => p.x), nameGap: 30,
+      }),
+      yAxis: axisCommon(theme, 'Tokens per second at full load', fmt, { type: 'value', min: 0, nameGap: 46 }),
+      series: layers.map(([field, name, color, opacity], i) => ({
+        name, type: 'line', stack: 'mix', showSymbol: false, smooth: 0.3,
+        lineStyle: { width: 0.8, color }, itemStyle: { color, opacity },
+        areaStyle: { color, opacity },
+        data: pts.map(p => ({ value: p[field], raw: p })),
+        markLine: i === 0 ? {
+          ...currentMark,
+          data: [{ xAxis: String(pts.reduce((a, p) => Math.abs(p.x - cur) < Math.abs(a - cur) ? p.x : a, 0)) }],
+        } : undefined,
+      })),
+    });
+    setChartCaption(`${ds.label} on ${ds.hardware}, always busy (${workload}). Each request keeps the same size; caching shifts input from "read from scratch" to "reused", so the same GPUs finish more requests and every token type grows, until memory or answer writing becomes the limit.`);
+    return;
+  }
+
+  if (view.variant === 'C' || view.variant === 'D') {
+    const css = getComputedStyle(document.documentElement);
+    const cachedColor = css.getPropertyValue('--fg2').trim() || '#999';
+    const xs = view.variant === 'C' ? [0, 25, 50, 75, 90] : (datasets[0]?.data || []).map(p => p.x);
+    const at = (ds, x) => (ds.data || []).find(p => p.x === x && p.rps) || null;
+    const tooltip = params => {
+      const list = Array.isArray(params) ? params : [params];
+      if (!list.length) return '';
+      const x = Number(list[0].axisValue);
+      let html = axisHeader(theme, 'Input already cached', pct(x));
+      datasets
+        .filter(ds => list.some(p => p.seriesName === ds.label))
+        .map(ds => [ds, at(ds, x)])
+        .sort((a, b) => (b[1]?.y ?? -1) - (a[1]?.y ?? -1))
+        .forEach(([ds, raw]) => {
+          if (!raw) { html += row(ds.borderColor, ds.label, 'OOM'); return; }
+          html += row(ds.borderColor, ds.label, `${fmt(raw.y)} tok/s`, `${(raw.rps / base0(ds)).toFixed(2)}× no caching`);
+          html += splitHtml(raw, ds);
+        });
+      return html;
+    };
+    const catAxis = axisCommon(theme, '% of input tokens already cached', v => pct(v), {
+      type: 'category', boundaryGap: view.variant === 'C', data: xs, nameGap: 30,
+    });
+    const yAxis = axisCommon(theme, 'Tokens per second at full load', fmt, { type: 'value', min: 0, nameGap: 46 });
+    const nearest = String(xs.reduce((a, x) => Math.abs(x - cur) < Math.abs(a - cur) ? x : a, xs[0] ?? 0));
+    const mark = { ...currentMark, data: [{ xAxis: nearest }] };
+    let series;
+    if (view.variant === 'C') {
+      // One stacked bar per model and cache level: output, uncached input, cached input.
+      const layers = [['output_tps', 1, null], ['uncached_tps', 0.5, null], ['cached_tps', 0.9, cachedColor]];
+      series = datasets.flatMap((ds, i) => layers.map(([field, opacity, override], j) => ({
+        name: ds.label, type: 'bar', stack: ds.label, barMaxWidth: 22, barGap: '12%',
+        itemStyle: { color: override || ds.borderColor, opacity, borderColor: ds.borderColor, borderWidth: override ? 1 : 0 },
+        data: xs.map(x => at(ds, x)?.[field] ?? null),
+        markLine: i === 0 && j === 0 ? mark : undefined,
+      })));
+    } else {
+      // Per model: a dashed line for tokens read from scratch + written, and a
+      // shaded band above it up to the total; the band is the cached input.
+      series = datasets.flatMap((ds, i) => [
+        {
+          name: ds.label, type: 'line', stack: ds.label, showSymbol: false, smooth: 0.3,
+          lineStyle: { color: ds.borderColor, width: 1, type: 'dashed' }, itemStyle: { color: ds.borderColor },
+          data: xs.map(x => { const p = at(ds, x); return p ? p.uncached_tps + p.output_tps : null; }),
+          markLine: i === 0 ? mark : undefined,
+        },
+        {
+          name: ds.label, type: 'line', stack: ds.label, showSymbol: false, smooth: 0.3,
+          lineStyle: { color: ds.borderColor, width: Number(ds.borderWidth || 2), type: dashStyle(ds.borderDash) },
+          itemStyle: { color: ds.borderColor },
+          areaStyle: { color: ds.borderColor, opacity: 0.12 },
+          data: xs.map(x => at(ds, x)?.cached_tps ?? null),
+        },
+      ]);
+    }
+    chart.setOption({
+      ...baseOption(theme, tooltip, 'axis'),
+      tooltip: { ...tooltipBase(theme, 'axis', tooltip), axisPointer: { type: view.variant === 'C' ? 'shadow' : 'line' } },
+      grid, legend: { ...legend, data: datasets.map(ds => ds.label) }, xAxis: catAxis, yAxis, series,
+    });
+    setChartCaption(view.variant === 'C'
+      ? `Tokens per second each deployment gets through when always busy (${workload}). Each bar, bottom to top: output written (solid), input read from scratch (faded), cached input reused (grey). The faded part barely moves: that is the GPUs' prompt-reading budget. Caching adds the grey part on top, until memory is full.`
+      : `Tokens per second each deployment gets through when always busy (${workload}). Dashed line: tokens read from scratch plus written, which stays roughly flat. Solid line: total. The shaded band between them is cached input reused for almost no work; it stops widening when memory is full.`);
+    return;
+  }
+
+  chart.setOption({
+    ...baseOption(theme, params => {
+      const list = Array.isArray(params) ? params : [params];
+      if (!list.length) return '';
+      let html = axisHeader(theme, 'Input already cached', pct(Number(list[0].axisValue)));
+      [...list].sort((a, b) => (b.data?.raw?.y ?? -1) - (a.data?.raw?.y ?? -1)).forEach(p => {
+        const raw = p.data?.raw || {};
+        const ds = datasets.find(d => d.label === p.seriesName);
+        html += row(p.color, p.seriesName, raw.rps ? `${fmt(raw.y)} tok/s` : 'OOM', raw.rps && ds ? `${(raw.rps / base0(ds)).toFixed(2)}× no caching` : '');
+        if (raw.rps) html += splitHtml(raw, ds);
+        html += hardwareDisclosureHtml(p, theme);
+      });
+      return html;
+    }, 'axis'),
+    grid, legend, xAxis,
+    yAxis: axisCommon(theme, 'Tokens per second at full load', fmt, { type: 'value', min: 0, nameGap: 46 }),
+    series: datasets.map((ds, i) => ({
+      ...makeSeries(ds, true),
+      markLine: i === 0 ? currentMark : undefined,
+      markPoint: ceilingPin(ds, p => p.y),
+    })),
+  });
+  const ceilings = datasets.filter(ds => ds.ceiling_x != null).map(ds => `${ds.label} ${pct(ds.ceiling_x)}`).join(', ');
+  setChartCaption(`Tokens (input + output) each deployment gets through per second when it is always busy (${workload}). Caching skips the work of reading the reused part of the prompt; the pin marks where memory or answer writing takes over and more caching stops adding tokens: ${ceilings}.`);
+}
+
 function renderDecisionChart(data, el, theme) {
   const css = getComputedStyle(document.documentElement);
   const red = css.getPropertyValue('--red').trim() || '#b42e2e';
@@ -1094,6 +1312,11 @@ function renderChart(data) {
 
   if (data.mode === 'userpareto' || data.mode === 'usercapacity') {
     renderUserChart(data, el, theme, datasets, { fmtBatch, fmtUserTok, narrowChart });
+    return;
+  }
+
+  if (data.mode === 'caching') {
+    renderCachingChart(data, theme, datasets);
     return;
   }
 

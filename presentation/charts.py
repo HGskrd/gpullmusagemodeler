@@ -19,6 +19,7 @@ from calc import (
     _iter_resolved_models,
     avg_dist,
     compute_data,
+    compute_data_capacity,
     compute_decision,
     compute_decode,
     compute_embedding_distribution,
@@ -53,6 +54,7 @@ from data import (
 )
 from data.release_quality_202610 import RELEASE_EMBEDDING_METRICS
 from deployment import Deployment
+from engine.economics import _workload_profile
 from presentation.formatting import short_model_name
 from state import PlannerState, project_demand_multiplier
 
@@ -1212,3 +1214,108 @@ def chart_decision_latency(
             }
         )
     return datasets
+
+
+PROMPT_CACHE_HIT_SWEEP = tuple(round(i * 0.05, 2) for i in range(20))  # 0%..95%
+
+
+def chart_prompt_caching(state, panel_suffix: str = "") -> dict:
+    """Prototype: tokens a fixed deployment serves at full load against cache hit rate.
+
+    Unlimited demand: every deployment runs at its best batch size. Uses the
+    planner's data-path math (``compute_data``): a cached prefix skips prefill
+    compute but stays resident in KV (one copy per sequence; sharing one prefix
+    across concurrent sequences is not simulated), so throughput rises until
+    memory or decode becomes the limit.
+    """
+    is_b = panel_suffix != ""
+    profile = _workload_profile(state)
+    in_len, out_len = int(profile["in_len"]), int(profile["out_len"])
+    datasets = []
+    seen: set[str] = set()
+    for am, gpu in _iter_resolved_models(state):
+        model = am.model
+        if (
+            model.key in seen
+            or model.is_decision_model
+            or model.is_embedding_model
+            or model.is_asr_model
+        ):
+            continue
+        seen.add(model.key)
+        spec = spec_runtime_for(state, am, model)
+        pts: list[dict] = []
+        for hit in PROMPT_CACHE_HIT_SWEEP:
+            best = None
+            for bs in DATA_BATCH_SIZES:
+                result = compute_data(
+                    model,
+                    (am.prefill_tp, am.prefill_pp, am.prefill_dp),
+                    (am.tp, am.pp, am.dp),
+                    bs,
+                    in_len,
+                    out_len,
+                    gpu,
+                    state.mu,
+                    state.profiled_non_kv_gb,
+                    am.prec,
+                    hit,
+                    state.prefill_efficiency,
+                    state.decode_efficiency,
+                    spec,
+                )
+                if result and result.rps > 0 and (best is None or result.rps > best[1].rps):
+                    best = (bs, result)
+            if best is None:
+                pts.append({"x": round(hit * 100), "y": None})
+                continue
+            bs, result = best
+            pts.append(
+                {
+                    "x": round(hit * 100),
+                    "y": round(result.rps * (in_len + out_len)),
+                    "rps": result.rps,
+                    "batch": bs,
+                    "uncached_tps": result.rps * in_len * (1.0 - hit),
+                    "cached_tps": result.rps * in_len * hit,
+                    "output_tps": result.rps * out_len,
+                }
+            )
+        rated = [p for p in pts if p.get("rps")]
+        ceiling_x = None
+        if rated:
+            peak = max(p["rps"] for p in rated)
+            ceiling_x = next(p["x"] for p in rated if p["rps"] >= 0.99 * peak)
+        # Cached prefixes stay resident, so the memory limit does not depend on hit rate.
+        max_batch = compute_data_capacity(
+            model,
+            (am.prefill_tp, am.prefill_pp, am.prefill_dp),
+            (am.tp, am.pp, am.dp),
+            in_len,
+            out_len,
+            gpu,
+            state.mu,
+            state.profiled_non_kv_gb,
+            am.prec,
+            0.0,
+            state.prefill_efficiency,
+            state.decode_efficiency,
+            spec,
+        )
+        datasets.append(
+            {
+                "label": f"{short_model_name(model.name)}{panel_suffix}",
+                "hardware": _hardware_label(am, gpu),
+                "gpu_count": am.gpu_count,
+                "max_batch": max_batch,
+                "data": pts,
+                "ceiling_x": ceiling_x,
+                **_style(model, is_b),
+            }
+        )
+    return {
+        "datasets": datasets,
+        "current_hit": round(min(max(state.prefix_hit_rate, 0.0), 1.0) * 100, 1),
+        "in_len": in_len,
+        "out_len": out_len,
+    }
