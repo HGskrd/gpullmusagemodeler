@@ -65,6 +65,7 @@ from presentation.model_cards import (
     short_spec_label,
     tech_scorecard,
 )
+from presentation.placement_view import machine_options, placement_view
 from state import (
     AUTO_MODEL_STRATEGIES,
     TECH_SAVVINESS_LABELS,
@@ -274,6 +275,8 @@ def _template_context() -> dict:
         "effective_prefill_length": effective_prefill_length,
         "strategy_label": strategy_label,
         "layout_label": layout_label,
+        "placement_view": placement_view,
+        "machine_options": machine_options,
         "short_artifact_label": short_artifact_label,
         "short_spec_label": short_spec_label,
         "short_note": short_note,

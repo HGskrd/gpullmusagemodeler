@@ -1119,3 +1119,35 @@ input[type="range"]::-webkit-slider-thumb {
 .dc-read td i { display: inline-block; width: 10px; height: 3px; margin-right: 5px; vertical-align: middle; }
 .dc-read .bad { color: var(--red); }
 .dc-read .dim { color: var(--fg2); text-align: left; }
+
+/* Machine map under multi-machine model rows */
+.mr-place { grid-column: 1 / -1; padding: 4px 0 8px 18px; border-bottom: 1px solid var(--b1); font-size: 11px; }
+.pl-ok { color: var(--green, #1D9E75); }
+.pl-bad { color: var(--red, #A32D2D); }
+.pl-map { display: flex; align-items: stretch; gap: 6px; flex-wrap: wrap; }
+.pl-machine { border: 1px solid var(--b1); border-radius: 4px; padding: 4px 6px; min-width: 180px; }
+.pl-mh { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 3px; }
+.pl-gpus { display: grid; gap: 2px; }
+.pl-gpu { height: 20px; border-radius: 2px; color: #fff; font-size: 10px; display: flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums; }
+.pl-gpu.idle { background: transparent; border: 1px dashed var(--b1); color: var(--fg2); }
+.pl-mf { margin-top: 3px; }
+.pl-legend { margin-top: 4px; }
+
+/* Pool machine shape */
+.pm { margin-top: 4px; }
+.pm-ctl { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pm-toggle { margin-left: auto; }
+.pm-v { display: none; margin-top: 4px; }
+html[data-pm-grid="1"] .pm-B { display: block; }
+.pm-hide, html[data-pm-grid="1"] .pm-show { display: none; }
+html[data-pm-grid="1"] .pm-hide { display: inline; }
+.pm-grid { border-collapse: collapse; font-size: 11px; width: 100%; table-layout: fixed; margin-bottom: 3px; }
+.pm-grid .pm-gh { text-align: center; border-bottom: 1px solid var(--b1); }
+.pm-grid th { text-align: left; font-weight: 500; color: var(--fg2); padding: 1px 6px 1px 0; white-space: nowrap; }
+.pm-grid td { padding: 2px 5px; border: 1px solid var(--b0); cursor: pointer; vertical-align: top; }
+.pm-grid td:hover { background: var(--b0); }
+.pm-grid td.cur { outline: 2px solid var(--fg1); outline-offset: -2px; }
+.pm-grid td.best { background: rgba(29,158,117,0.12); }
+.pm-grid td.neg .M { color: var(--red); }
+.pm-d { font-size: 10px; color: var(--fg2); margin-left: 3px; }
+.pm-l { display: block; font-size: 10px; color: var(--fg2); }

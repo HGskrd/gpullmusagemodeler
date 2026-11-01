@@ -98,6 +98,8 @@ GPU_POOL = obj(
         "count": number(1, 100_000, integer=True),
         "cost_per_gpu_hour": number(0, 1_000_000),
         "country": choices(COUNTRIES),
+        "gpus_per_machine": number(0, 1024, integer=True),
+        "network_gbps_per_gpu": number(0, 3200),
     },
     ("uid", "gpu_type", "count"),
 )

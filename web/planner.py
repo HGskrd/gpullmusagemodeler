@@ -65,6 +65,7 @@ from state import (
     set_dist_preset,
     set_dist_value,
     set_gpu_cost,
+    set_gpu_machines,
     set_model_strat,
     set_project_batch_eligible,
     set_project_capability,
@@ -170,6 +171,26 @@ def gpu_remove(s):
     uid = _form_int("uid")
     remove_gpu(s, uid)
     return _tracked_htmx_response("gpu_remove", s)
+
+
+@planner_bp.route("/gpu/machines", methods=["POST"])
+@with_planner_state
+def gpu_machines(s):
+    uid = _form_int("uid")
+    gp = s.find_gpu(uid)
+    if gp is None:
+        return jsonify({"error": "GPU pool not found"}), 404
+    per_machine = _form_int("gpus_per_machine", gp.gpus_per_machine)
+    network = _finite_float(
+        request.form.get("network_gbps", gp.network_gbps_per_gpu),
+        name="network_gbps",
+        lo=0.0,
+        hi=3200.0,
+    )
+    set_gpu_machines(s, uid, per_machine, network)
+    # A new machine shape changes which layouts stay inside one machine.
+    retune_models(s, preserve_existing=False)
+    return _tracked_htmx_response("gpu_machines", s)
 
 
 @planner_bp.route("/gpu/cost", methods=["POST"])

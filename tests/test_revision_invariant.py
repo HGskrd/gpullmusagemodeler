@@ -103,6 +103,7 @@ def _mutations():
         ("state.add_gpu", lambda s: S.add_gpu(s, "H100", 8)),
         ("state.change_gpu_qty", lambda s: S.change_gpu_qty(s, gpu(s), 2)),
         ("state.set_gpu_cost", lambda s: S.set_gpu_cost(s, gpu(s), 4.5)),
+        ("state.set_gpu_machines", lambda s: S.set_gpu_machines(s, gpu(s), 4, 400.0)),
         ("state.remove_gpu", lambda s: S.remove_gpu(s, gpu(s))),
         # --- model assignments -----------------------------------------
         (

@@ -1946,3 +1946,21 @@ document.addEventListener('change', e => {
     values: { panel: sel.dataset.panel, uid: sel.dataset.uid, phase: sel.dataset.phase, tp, pp, dp },
   });
 });
+
+/* Pool machine shape: "Compare shapes" show/hide, kept across re-renders. */
+(function () {
+  let open = false;
+  try { open = localStorage.getItem('pmGrid') === '1'; } catch (e) { /* storage unavailable */ }
+  const apply = () => {
+    document.documentElement.dataset.pmGrid = open ? '1' : '0';
+    document.querySelectorAll('[data-pm-toggle]').forEach(b => b.setAttribute('aria-expanded', String(open)));
+  };
+  apply();
+  document.addEventListener('click', e => {
+    if (!e.target.closest('[data-pm-toggle]')) return;
+    open = !open;
+    try { localStorage.setItem('pmGrid', open ? '1' : '0'); } catch (err) { /* storage unavailable */ }
+    apply();
+  });
+  document.addEventListener('htmx:afterSettle', apply);
+})();

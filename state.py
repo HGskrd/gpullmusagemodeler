@@ -7,7 +7,7 @@ import math
 import os
 import re
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Concatenate, Optional, ParamSpec, TypeVar
@@ -195,6 +195,32 @@ def normalize_embedding_doc_distribution(state: "PlannerState"):
     )
 
 
+_POOL_GPU_CACHE: dict[tuple[str, int, float], GPU] = {}
+
+
+def pool_gpu(gpu_type: str, gpus_per_machine: int = 0, network_gbps: float = 0.0) -> GPU:
+    """Catalog GPU with the pool's machine shape applied (node size, scale-out bandwidth)."""
+    base = GPUS[gpu_type]
+    if gpus_per_machine <= 0 and network_gbps <= 0:
+        return base
+    key = (gpu_type, int(gpus_per_machine), float(network_gbps))
+    cached = _POOL_GPU_CACHE.get(key)
+    if cached is None:
+        cached = replace(
+            base,
+            node_size=int(gpus_per_machine) if gpus_per_machine > 0 else base.node_size,
+            # A per-GPU NIC hangs off the same host link, so scale-out cannot beat
+            # the GPU's own peer bandwidth (PCIe on RTX PRO / L40S class cards).
+            inter_node_bw=(
+                min(network_gbps * 1e9 / 8, max(base.scale_up_collective_bw, base.inter_node_bw))
+                if network_gbps > 0
+                else base.inter_node_bw
+            ),
+        )
+        _POOL_GPU_CACHE[key] = cached
+    return cached
+
+
 @dataclass
 class GpuPool:
     uid: int
@@ -202,10 +228,21 @@ class GpuPool:
     count: int
     cost_per_gpu_hour: float = 0.0
     country: str = "FR"
+    # Machine shape. 0 keeps the catalog value (GPU.node_size / GPU.inter_node_bw).
+    gpus_per_machine: int = 0
+    network_gbps_per_gpu: float = 0.0
 
     @property
     def gpu(self) -> GPU:
-        return GPUS[self.gpu_type]
+        return pool_gpu(self.gpu_type, self.gpus_per_machine, self.network_gbps_per_gpu)
+
+    @property
+    def machine_size(self) -> int:
+        return self.gpu.node_size
+
+    @property
+    def machine_count(self) -> int:
+        return max(1, math.ceil(self.count / max(self.machine_size, 1)))
 
     @property
     def cost_per_gpu_day(self) -> float:
@@ -1799,11 +1836,13 @@ def set_model_strat(
         am.dp = dp
         return
 
-    if phase == "prefill":
+    # "both" is what the layout picker sends: prefill and decode share one
+    # layout. A decode-only change would leave the copies on mismatched layouts.
+    if phase in ("prefill", "both"):
         am.prefill_tp = tp
         am.prefill_pp = pp
         am.prefill_dp = dp
-    else:
+    if phase in ("decode", "both"):
         am.tp = tp
         am.pp = pp
         am.dp = dp
@@ -1892,6 +1931,15 @@ def set_projection_toggle(state: PlannerState, key: str, value: bool):
         state.projection_night_batching = bool(value)
     elif key == "projection_include_latent":
         state.projection_include_latent = bool(value)
+
+
+@bumps_revision
+def set_gpu_machines(state: PlannerState, gpu_uid: int, gpus_per_machine: int, network_gbps: float):
+    gp = state.find_gpu(gpu_uid)
+    if gp is None:
+        return
+    gp.gpus_per_machine = max(0, min(int(gpus_per_machine), 1024))
+    gp.network_gbps_per_gpu = max(0.0, min(float(network_gbps), 3200.0))
 
 
 @bumps_revision

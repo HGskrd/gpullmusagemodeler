@@ -32,6 +32,8 @@ class GPU:
 
     system_memory_gb: float | None = None
     price_note: str = "Planning estimate; replace with your hardware quote."
+    # bytes/s per GPU between machines (scale-out NIC); 25 GB/s = 200 Gb/s per GPU.
+    inter_node_bw: float = 25e9
 
     @property
     def mem_gb(self) -> float:

@@ -1435,7 +1435,7 @@ def default_strategy(
 def _eff_collective_bw(tp: int, g: GPU) -> float:
     if tp <= g.node_size:
         return g.scale_up_collective_bw
-    return INTER_NODE_COLLECTIVE_BW
+    return g.inter_node_bw
 
 
 def _pp_boundary_counts(tp: int, pp: int, g: GPU) -> tuple[int, int]:
@@ -1487,7 +1487,7 @@ def _pp_boundary_oh(
         return 0.0, 0
     msg = batch_tokens * m.hidden_size * 2
     intra_time = intra * (msg / (g.scale_up_collective_bw * bw_eff))
-    cross_time = cross * (msg / (INTER_NODE_COLLECTIVE_BW * bw_eff))
+    cross_time = cross * (msg / (g.inter_node_bw * bw_eff))
     latency = (intra + cross) * 3e-6
     return intra_time + cross_time + latency, cross
 
