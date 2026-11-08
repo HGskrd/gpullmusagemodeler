@@ -15,6 +15,12 @@ per line to a separate `results.jsonl`, copying `task_id` and `input_fingerprint
 The template's observation is a shape example: use an empty observations list when
 there is no evidence, and as many observations as the sources support.
 
+The data and manifest are staged before publication. Consume an export only when
+both files exist. Ordinary publication failures remove newly published files;
+if an interruption leaves data without its manifest, rerun the same command.
+Recovery publishes the manifest only if the newly generated data matches the
+existing bytes exactly. Completed exports are never overwritten.
+
 The default `--queue plausible` evaluates a bounded grid for every selected pair:
 
 - Native artifacts and pinned conversions; `--include-estimated-artifacts` also

@@ -45,7 +45,7 @@ from state import (
     get_use_case_defs,
 )
 from web.analytics import record_event
-from web.cache import ScopedRevisionCache, combined_revision
+from web.cache import ScopedRevisionCache, scenario_fingerprint
 from web.helpers import (
     _state,
     _template_context,
@@ -171,7 +171,11 @@ def chart_data():
     scope_id = _scope_id()
     sa = get_state(scope_id)
     sb = get_compare_state(scope_id)
-    cache_key = (combined_revision(sa, sb), "AB", sa.mode)
+    cache_key = (
+        scenario_fingerprint(sa) + ":" + (scenario_fingerprint(sb) if sb else ""),
+        "AB",
+        sa.mode,
+    )
     cache: ScopedRevisionCache = current_app.extensions["chart_json_cache"]
     cached = cache.get(scope_id, cache_key)
     if cached is None:

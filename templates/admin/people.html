@@ -137,23 +137,23 @@
       case "open": return [`Opened <span class="mono">${esc(e.path || "/")}</span>`, "dim"];
       case "session_reset": return ["Cleared the scenario", "dim"];
       case "scenario_import": return ["Imported a scenario file", "key"];
-      case "gpu_add": return [`Added <b>${e.qty}× ${esc(gpuName(e.gpu))}</b>`, "key"];
-      case "gpu_qty": return [`Set ${esc(shortGpu(e.gpu))} count to <b>${e.qty}</b>`, ""];
+      case "gpu_add": return [`Added <b>${esc(e.qty)}× ${esc(gpuName(e.gpu))}</b>`, "key"];
+      case "gpu_qty": return [`Set ${esc(shortGpu(e.gpu))} count to <b>${esc(e.qty)}</b>`, ""];
       case "gpu_remove": return [`Removed ${esc(shortGpu(e.gpu))}`, ""];
-      case "gpu_cost": return [`Entered <b>$${e.usd_hr}</b>/GPU-hr for ${esc(shortGpu(e.gpu))}`, "key"];
-      case "compare_gpu": return [`Side B: <b>${e.qty}× ${esc(gpuName(e.gpu))}</b>`, ""];
+      case "gpu_cost": return [`Entered <b>$${esc(e.usd_hr)}</b>/GPU-hr for ${esc(shortGpu(e.gpu))}`, "key"];
+      case "compare_gpu": return [`Side B: <b>${esc(e.qty)}× ${esc(gpuName(e.gpu))}</b>`, ""];
       case "mode": return [`Switched to <b>${esc(MODE_LABEL[e.mode] || e.mode)}</b>`, "key"];
       case "model_add": return [`${e.auto ? "Auto-picked" : "Added"} <b>${esc(modelName(e.model))}</b> at ${esc(precLabel(e.prec))}${e.side === "B" ? " (side B)" : ""}`, "key"];
       case "model_rejected": return e.reason === "no_gpu"
         ? [`<span class="status bad">✕ Picked ${esc(shortModel(e.model))} before adding any GPU</span>`, "bad"]
         : [`<span class="status bad">✕ Couldn’t add</span> ${esc(modelName(e.model))}: ${esc(e.error)}`, "bad"];
       case "model_prec": return [`Changed ${esc(shortModel(e.model))} to <b>${esc(precLabel(e.prec))}</b>`, ""];
-      case "model_count": return [`Gave ${esc(shortModel(e.model))} <b>${e.count}</b> GPUs`, ""];
+      case "model_count": return [`Gave ${esc(shortModel(e.model))} <b>${esc(e.count)}</b> GPUs`, ""];
       case "model_remove": return [`Removed ${esc(shortModel(e.model))}`, ""];
       case "model_tune": return [`${esc(shortModel(e.model || ""))}: ${esc(e.what)}`, ""];
-      case "result": return e.fits ? [`<span class="status ok">✓ Fits</span> <span class="muted">${fmt(e.need_gb)} GB of weights on ${fmt(e.vram_gb)} GB</span>`, "ok"]
+      case "result": return e.fits == null ? ["Fit unavailable", "dim"] : e.fits ? [`<span class="status ok">✓ Fits</span> <span class="muted">${fmt(e.need_gb)} GB of weights on ${fmt(e.vram_gb)} GB</span>`, "ok"]
         : e.qty === 0 ? [`<span class="status bad">✕ Not placed</span>: no free GPU left in the pool for ${esc(shortModel(e.model))}`, "bad"]
-        : [`<span class="status bad">✕ Doesn’t fit</span>: ${esc(shortModel(e.model))} weights ${fmt(e.need_gb)} GB on ${e.qty}× ${esc(shortGpu(e.gpu))} (${fmt(e.vram_gb)} GB)`, "bad"];
+        : [`<span class="status bad">✕ Doesn’t fit</span>: ${esc(shortModel(e.model))} weights ${fmt(e.need_gb)} GB on ${esc(e.qty)}× ${esc(shortGpu(e.gpu))} (${fmt(e.vram_gb)} GB)`, "bad"];
       case "compare_duplicate": return ["Opened A/B compare", "key"];
       case "compare_close": return ["Closed compare", "dim"];
       case "econ_view": return [`Opened economics${e.page ? ` (${esc(e.page)})` : ""}`, "key"];
@@ -170,9 +170,9 @@
       case "api_call": {
         const ok = e.status < 400;
         let tx = `<span class="mono">${esc(e.endpoint)}</span>`;
-        if (e.model) tx += `: ${e.gpu ? `${e.qty || 1}× ${esc(shortGpu(e.gpu))} + ` : ""}${esc(shortModel(e.model))} ${esc(precLabel(e.prec))}`;
+        if (e.model) tx += `: ${e.gpu ? `${esc(e.qty ?? "?")}× ${esc(shortGpu(e.gpu))} + ` : ""}${esc(shortModel(e.model))} ${esc(precLabel(e.prec))}`;
         if (e.fits != null) tx += ` → ${e.fits ? '<span class="status ok">✓ runnable</span>' : '<span class="status bad">✕ not runnable</span>'}`;
-        if (!ok) tx += ` <span class="status bad">HTTP ${e.status}</span> ${esc(e.error || "")}`;
+        if (!ok) tx += ` <span class="status bad">HTTP ${esc(e.status)}</span> ${esc(e.error || "")}`;
         if (e.unknown) tx += ` <span class="tag">unknown: ${esc(e.unknown.join(", "))}</span>`;
         return [tx, ok ? "" : "bad"];
       }
@@ -210,7 +210,7 @@
 
   function planSide(title, gpus, models, fit) {
     return `<div class="side"><h3>${title}</h3>
-      ${gpus.length ? gpus.map((g) => `<div><b>${g.qty}×</b> ${esc(gpuName(g.key))}</div>`).join("") : '<div class="muted">No hardware</div>'}
+      ${gpus.length ? gpus.map((g) => `<div><b>${esc(g.qty)}×</b> ${esc(gpuName(g.key))}</div>`).join("") : '<div class="muted">No hardware</div>'}
       <div style="margin-top:6px">${models === null ? '<div class="muted">Same models as plan A</div>' : models.length ? models.map((m) => `<div>${esc(modelName(m.key))} <span class="tag">${esc(precLabel(m.prec))}</span>${m.fits === false ? ' <span class="status bad">✕</span>' : ""}</div>`).join("") : '<div class="muted">No models</div>'}</div>
       ${fit == null ? "" : `<div style="margin-top:8px">${fit ? '<span class="status ok">✓ Everything fits</span>' : '<span class="status bad">✕ Something doesn’t fit</span>'}</div>`}</div>`;
   }

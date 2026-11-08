@@ -11,6 +11,7 @@ from app_factory import create_test_app
 
 from data import GPUS
 from tracking import SnapshotStore
+from web.admin import _admin_session_token
 from web.analytics import build_admin_payload, channel_for, classify_user_agent, gpu_class
 from web.config import ADMIN_SESSION_KEY
 from web.middleware import VISITOR_COOKIE
@@ -245,7 +246,8 @@ class AdminRouteTests(unittest.TestCase):
 
     def test_pages_and_data_render_when_logged_in(self):
         with self.client.session_transaction() as session:
-            session[ADMIN_SESSION_KEY] = True
+            with self.client.application.app_context():
+                session[ADMIN_SESSION_KEY] = _admin_session_token()
         for path in (
             "/admin",
             "/admin/audience",

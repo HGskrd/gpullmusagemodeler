@@ -286,11 +286,13 @@ def _store():
     return current_app.extensions["snapshot_store"]
 
 
-def _safely(action, *args, **kwargs) -> None:
+def _safely(action, *args, **kwargs) -> bool:
     try:
         action(*args, **kwargs)
+        return True
     except Exception:  # noqa: BLE001 - analytics must never fail a request
         current_app.logger.warning("Visitor analytics write failed", exc_info=True)
+        return False
 
 
 def touch_visitor(visitor_id: Optional[str] = None, overrides: Optional[dict] = None) -> None:
@@ -305,11 +307,14 @@ def touch_visitor(visitor_id: Optional[str] = None, overrides: Optional[dict] = 
         last = _touched.get(visitor_id)
         if last is not None and now - last < _TOUCH_INTERVAL_MS:
             return
+        if not _safely(
+            _store().touch_visitor, visitor_id, request_context() | (overrides or {}), now_ms=now
+        ):
+            return
         _touched[visitor_id] = now
         _touched.move_to_end(visitor_id)
         while len(_touched) > _CACHE_LIMIT:
             _touched.popitem(last=False)
-    _safely(_store().touch_visitor, visitor_id, request_context() | (overrides or {}), now_ms=now)
 
 
 def mark_internal_if_admin() -> None:
@@ -319,8 +324,8 @@ def mark_internal_if_admin() -> None:
     with _known_lock:
         if visitor_id in _internal:
             return
-        _internal.add(visitor_id)
-    _safely(_store().mark_internal, visitor_id)
+        if _safely(_store().mark_internal, visitor_id):
+            _internal.add(visitor_id)
 
 
 # ---------------------------------------------------------------------------
@@ -458,6 +463,17 @@ def record_event(
         current_app.logger.warning("Visitor analytics event failed", exc_info=True)
 
 
+def _api_gpu_count(value: object) -> int | None:
+    """Keep positive whole counts; rejected input and legacy markup are unknown."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value > 0:
+        return value
+    if isinstance(value, float) and value > 0 and value.is_integer():
+        return int(value)
+    return None
+
+
 def record_api_call(response) -> None:
     """Log one agent-API request: endpoint, status, and the scenario it asked about.
 
@@ -475,14 +491,18 @@ def record_api_call(response) -> None:
         scenario = payload.get("scenario") if isinstance(payload, dict) else None
         panel = scenario.get("panel_a") if isinstance(scenario, dict) else None
         if isinstance(panel, dict):
+            # Validation may have rejected this request. Analytics has its own
+            # boundary, so never treat raw request values as typed event fields.
+            gpu_rows = panel.get("gpus")
+            model_rows = panel.get("models")
             gpus = [
-                [str(row.get("gpu_type", ""))[:64], row.get("count")]
-                for row in (panel.get("gpus") or [])[:8]
+                [str(row.get("gpu_type", ""))[:64], _api_gpu_count(row.get("count"))]
+                for row in (gpu_rows[:8] if isinstance(gpu_rows, list) else [])
                 if isinstance(row, dict)
             ]
             models = [
                 [str(row.get("model_key", ""))[:64], str(row.get("prec", ""))[:16]]
-                for row in (panel.get("models") or [])[:8]
+                for row in (model_rows[:8] if isinstance(model_rows, list) else [])
                 if isinstance(row, dict)
             ]
             extra["gpus"] = gpus
@@ -565,6 +585,8 @@ def _fit_result(plan: Optional[dict]) -> Optional[dict]:
             "need_gb": first["need_gb"],
             "vram_gb": round(vram),
         }
+    if any(m["fits"] is not True for m in models.values()):
+        return {"fits": None, "need_gb": None, "vram_gb": None}
     need = sum(m["need_gb"] or 0 for m in models.values())
     vram = sum(GPUS[p["key"]].mem / 1e9 * p["qty"] for p in gpus.values() if p["key"] in GPUS)
     return {"fits": True, "need_gb": round(need), "vram_gb": round(vram)}
@@ -769,6 +791,8 @@ def _normalize(raw_type: str, detail: dict, prev: dict) -> list[dict]:
         }
         if extra.get("gpus"):
             call["gpu"], call["qty"] = extra["gpus"][0][0], extra["gpus"][0][1]
+            # Previously stored events may predate the capture boundary.
+            call["qty"] = _api_gpu_count(call["qty"])
         if extra.get("models"):
             call["model"], call["prec"] = extra["models"][0][0], extra["models"][0][1]
         if "fits" in extra:
@@ -794,7 +818,8 @@ def _final(plan: Optional[dict]) -> Optional[dict]:
     gpus, models = _plan_maps(plan)
     fit = None
     if models:
-        fit = all(m["fits"] is not False for m in models.values())
+        values = [m["fits"] for m in models.values()]
+        fit = False if False in values else (True if all(v is True for v in values) else None)
     return {
         "gpus": [{"key": p["key"], "qty": p["qty"]} for p in gpus.values()],
         "models": [

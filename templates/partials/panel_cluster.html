@@ -62,7 +62,7 @@
 
   <div style="display:flex;align-items:center;gap:5px;margin-top:4px;">
     <label class="T tip" for="settings-nonkv-{{ panel }}" title="Runtime memory reserved per GPU for activations, CUDA graphs, NCCL scratch, sampler state, and other non-KV overhead not captured by weights.">Profiled non-KV</label>
-    <input id="settings-nonkv-{{ panel }}" type="range" min="0" max="32" value="{{ state.profiled_non_kv_gb|int }}" step="1" style="flex:1;"
+    <input id="settings-nonkv-{{ panel }}" type="range" min="0" max="{{ [32, state.profiled_non_kv_gb|round(0, 'ceil')|int]|max }}" value="{{ state.profiled_non_kv_gb|int }}" step="1" style="flex:1;"
            hx-post="/settings/non-kv" hx-target="#main-content" hx-trigger="change"
            hx-vals='{"panel":"{{ panel }}"}' name="value"
            data-live-target="#settings-nonkv-val-{{ panel }}"

@@ -4,6 +4,12 @@
     "avoidable_cloud_outflow_day": 0.0,
     "baseline_tokens_day": 325000000.0,
     "batch_share": 0.769230769231,
+    "capacity_by_unit": {
+      "tokens": {
+        "capacity": 2025336960.0,
+        "consumed": 328967800.743
+      }
+    },
     "co2_g_per_task_avg": 0.0398003180098,
     "co2_kg_day_total": 0.189145402972,
     "corpo_cloud": "current",
@@ -12,6 +18,7 @@
     "coverage": 6.25,
     "day_shape_label": "Enterprise workday",
     "day_shape_note": "Daytime-heavy office demand with a mild evening shoulder.",
+    "economics_complete": true,
     "fates": {
       "destroyed_pct": 23.0769230769,
       "destroyed_tokens": 75000000.0,
@@ -25,8 +32,10 @@
     },
     "has_demand": true,
     "has_supply": true,
+    "known_cost_day": 60.0,
     "latent_active_tokens_day": 0.0,
     "margin_day": 315.0,
+    "mixed_workload_units": false,
     "models": [
       {
         "am_uid": 202,
@@ -34,6 +43,7 @@
         "co2_g_per_task_night": 0.0394224254743,
         "co2_kg_day": 0.189145402972,
         "color": "#2D63C8",
+        "cost_known": true,
         "country": "FR",
         "daily_tokens_cap": 2025336960.0,
         "effective_quality": 0.766830188679,
@@ -159,7 +169,7 @@
         "baseline_tokens_day": 75000000.0,
         "cap_blocked_for_project": false,
         "capacity_blocked_for_project": false,
-        "cheapest_effective_pm": 0.0,
+        "cheapest_effective_pm": null,
         "cloud_blocked": true,
         "cloud_grid_gco2_per_kwh": 0.0,
         "cloud_label": "blocked — no compatible cloud",
@@ -219,7 +229,7 @@
           },
           "scale_locked": false,
           "scale_value": 75.0,
-          "tokens_day": 75000000,
+          "tokens_day": 75000000.0,
           "uid": 203,
           "unlock_price_per_m": 0.0,
           "workload_kind": "llm",
@@ -336,7 +346,7 @@
           },
           "scale_locked": false,
           "scale_value": 250.0,
-          "tokens_day": 250000000,
+          "tokens_day": 250000000.0,
           "uid": 204,
           "unlock_price_per_m": 0.75,
           "workload_kind": "llm",
@@ -381,14 +391,27 @@
     "value_lost_day": 375.0,
     "value_served_day": 375.0,
     "value_spilled_day": 0.0,
+    "volumes_by_unit": {
+      "tokens": {
+        "demand": 325000000.0,
+        "served": 250000000.0
+      }
+    },
     "workload_in_len": 41758,
-    "workload_out_len": 1652
+    "workload_out_len": 1652,
+    "workload_unit": "tokens"
   },
   "default_scenario": {
     "actual_served_tokens": 14151174895.7,
     "avoidable_cloud_outflow_day": 0.0,
     "baseline_tokens_day": 16005000000.0,
     "batch_share": 0.61262105592,
+    "capacity_by_unit": {
+      "tokens": {
+        "capacity": 43752547872.0,
+        "consumed": 14151174895.7
+      }
+    },
     "co2_g_per_task_avg": 0.00138862310582,
     "co2_kg_day_total": 1.17882063615,
     "corpo_cloud": "current",
@@ -397,6 +420,7 @@
     "coverage": 111.389941077,
     "day_shape_label": "Enterprise workday",
     "day_shape_note": "Daytime-heavy office demand with a mild evening shoulder.",
+    "economics_complete": true,
     "fates": {
       "destroyed_pct": 31.990003124,
       "destroyed_tokens": 5120000000.0,
@@ -410,8 +434,10 @@
     },
     "has_demand": true,
     "has_supply": true,
+    "known_cost_day": 190.08,
     "latent_active_tokens_day": 0.0,
     "margin_day": 20982.92,
+    "mixed_workload_units": false,
     "models": [
       {
         "am_uid": 2001,
@@ -419,6 +445,7 @@
         "co2_g_per_task_night": 0.00103676680208,
         "co2_kg_day": 0.00564388050025,
         "color": "#93511F",
+        "cost_known": true,
         "country": "FR",
         "daily_tokens_cap": 13888869984.0,
         "effective_quality": 0.447169811321,
@@ -539,6 +566,7 @@
         "co2_g_per_task_night": 0.0011212570865,
         "co2_kg_day": 0.229327373815,
         "color": "#8AB85C",
+        "cost_known": true,
         "country": "FR",
         "daily_tokens_cap": 13523830848.0,
         "effective_quality": 0.545283018868,
@@ -697,6 +725,7 @@
         "co2_g_per_task_night": 0.00145862857101,
         "co2_kg_day": 0.943849381839,
         "color": "#7F77DD",
+        "cost_known": true,
         "country": "FR",
         "daily_tokens_cap": 16339847040.0,
         "effective_quality": 0.667924528302,
@@ -1692,7 +1721,7 @@
         "baseline_tokens_day": 120000000.0,
         "cap_blocked_for_project": false,
         "capacity_blocked_for_project": false,
-        "cheapest_effective_pm": 0.0,
+        "cheapest_effective_pm": null,
         "cloud_blocked": true,
         "cloud_grid_gco2_per_kwh": 0.0,
         "cloud_label": "blocked — no compatible cloud",
@@ -1786,7 +1815,7 @@
         "baseline_tokens_day": 400000000.0,
         "cap_blocked_for_project": false,
         "capacity_blocked_for_project": false,
-        "cheapest_effective_pm": 0.0,
+        "cheapest_effective_pm": null,
         "cloud_blocked": true,
         "cloud_grid_gco2_per_kwh": 0.0,
         "cloud_label": "blocked — no compatible cloud",
@@ -1888,7 +1917,7 @@
         "baseline_tokens_day": 150000000.0,
         "cap_blocked_for_project": false,
         "capacity_blocked_for_project": false,
-        "cheapest_effective_pm": 0.0,
+        "cheapest_effective_pm": null,
         "cloud_blocked": true,
         "cloud_grid_gco2_per_kwh": 0.0,
         "cloud_label": "blocked — no compatible cloud",
@@ -1990,7 +2019,7 @@
         "baseline_tokens_day": 750000000.0,
         "cap_blocked_for_project": false,
         "capacity_blocked_for_project": false,
-        "cheapest_effective_pm": 0.0,
+        "cheapest_effective_pm": null,
         "cloud_blocked": true,
         "cloud_grid_gco2_per_kwh": 0.0,
         "cloud_label": "blocked — no compatible cloud",
@@ -2202,7 +2231,7 @@
         "baseline_tokens_day": 300000000.0,
         "cap_blocked_for_project": false,
         "capacity_blocked_for_project": false,
-        "cheapest_effective_pm": 0.0,
+        "cheapest_effective_pm": null,
         "cloud_blocked": true,
         "cloud_grid_gco2_per_kwh": 0.0,
         "cloud_label": "blocked — no compatible cloud",
@@ -2418,7 +2447,7 @@
         "baseline_tokens_day": 600000000.0,
         "cap_blocked_for_project": false,
         "capacity_blocked_for_project": false,
-        "cheapest_effective_pm": 0.0,
+        "cheapest_effective_pm": null,
         "cloud_blocked": true,
         "cloud_grid_gco2_per_kwh": 0.0,
         "cloud_label": "blocked — no compatible cloud",
@@ -2520,7 +2549,7 @@
         "baseline_tokens_day": 1200000000.0,
         "cap_blocked_for_project": false,
         "capacity_blocked_for_project": false,
-        "cheapest_effective_pm": 0.0,
+        "cheapest_effective_pm": null,
         "cloud_blocked": true,
         "cloud_grid_gco2_per_kwh": 0.0,
         "cloud_label": "blocked — no compatible cloud",
@@ -2622,7 +2651,7 @@
         "baseline_tokens_day": 600000000.0,
         "cap_blocked_for_project": false,
         "capacity_blocked_for_project": false,
-        "cheapest_effective_pm": 0.0,
+        "cheapest_effective_pm": null,
         "cloud_blocked": true,
         "cloud_grid_gco2_per_kwh": 0.0,
         "cloud_label": "blocked — no compatible cloud",
@@ -2726,7 +2755,7 @@
         "baseline_tokens_day": 1000000000.0,
         "cap_blocked_for_project": false,
         "capacity_blocked_for_project": false,
-        "cheapest_effective_pm": 0.0,
+        "cheapest_effective_pm": null,
         "cloud_blocked": true,
         "cloud_grid_gco2_per_kwh": 0.0,
         "cloud_label": "blocked — no compatible cloud",
@@ -2956,14 +2985,27 @@
     "value_lost_day": 29247.5,
     "value_served_day": 21173.0,
     "value_spilled_day": 0.0,
+    "volumes_by_unit": {
+      "tokens": {
+        "demand": 16005000000.0,
+        "served": 10885000000.0
+      }
+    },
     "workload_in_len": 19314,
-    "workload_out_len": 805
+    "workload_out_len": 805,
+    "workload_unit": "tokens"
   },
   "mixed_fit": {
     "actual_served_tokens": 1246017448.04,
     "avoidable_cloud_outflow_day": 0.0,
     "baseline_tokens_day": 950000000.0,
     "batch_share": 0.947368421053,
+    "capacity_by_unit": {
+      "tokens": {
+        "capacity": 64412614368.0,
+        "consumed": 1246017448.04
+      }
+    },
     "co2_g_per_task_avg": 0.000465878125991,
     "co2_kg_day_total": 0.04792598426,
     "corpo_cloud": "current",
@@ -2972,6 +3014,7 @@
     "coverage": 3.86904761905,
     "day_shape_label": "Flat 24/7",
     "day_shape_note": "Even demand across the whole day.",
+    "economics_complete": true,
     "fates": {
       "destroyed_pct": 7.84271641781e-16,
       "destroyed_tokens": 7.45058059692e-09,
@@ -2985,8 +3028,10 @@
     },
     "has_demand": true,
     "has_supply": true,
+    "known_cost_day": 168.0,
     "latent_active_tokens_day": 0.0,
     "margin_day": 482.0,
+    "mixed_workload_units": false,
     "models": [
       {
         "am_uid": 302,
@@ -2994,6 +3039,7 @@
         "co2_g_per_task_night": 0.000113665221128,
         "co2_kg_day": 0.0115787073201,
         "color": "#0E8F66",
+        "cost_known": true,
         "country": "US",
         "daily_tokens_cap": 61571006496.0,
         "effective_quality": 0.349056603774,
@@ -3132,6 +3178,7 @@
         "co2_g_per_task_night": 0.00681033473783,
         "co2_kg_day": 0.0363472769398,
         "color": "#2D63C8",
+        "cost_known": true,
         "country": "US",
         "daily_tokens_cap": 2841607872.0,
         "effective_quality": 0.766830188679,
@@ -3336,7 +3383,7 @@
           },
           "scale_locked": false,
           "scale_value": 900.0,
-          "tokens_day": 900000000,
+          "tokens_day": 900000000.0,
           "uid": 304,
           "unlock_price_per_m": 0.15,
           "workload_kind": "llm",
@@ -3452,7 +3499,7 @@
           },
           "scale_locked": false,
           "scale_value": 50.0,
-          "tokens_day": 50000000,
+          "tokens_day": 50000000.0,
           "uid": 305,
           "unlock_price_per_m": 0.0,
           "workload_kind": "llm",
@@ -3499,22 +3546,31 @@
     "value_lost_day": 2.98023223877e-14,
     "value_served_day": 650.0,
     "value_spilled_day": 0.0,
+    "volumes_by_unit": {
+      "tokens": {
+        "demand": 950000000.0,
+        "served": 950000000.0
+      }
+    },
     "workload_in_len": 9731,
-    "workload_out_len": 116
+    "workload_out_len": 116,
+    "workload_unit": "tokens"
   },
   "no_supply": {
     "actual_served_tokens": 0,
     "avoidable_cloud_outflow_day": 0.0,
     "baseline_tokens_day": 2500000.0,
     "batch_share": 0.0,
+    "capacity_by_unit": {},
     "co2_g_per_task_avg": 0.0,
     "co2_kg_day_total": 0.0,
     "corpo_cloud": "current",
     "cost_day": 0,
-    "cost_per_m_served": 0.0,
-    "coverage": 0.0,
+    "cost_per_m_served": null,
+    "coverage": null,
     "day_shape_label": "Enterprise workday",
     "day_shape_note": "Daytime-heavy office demand with a mild evening shoulder.",
+    "economics_complete": false,
     "fates": {
       "destroyed_pct": 100.0,
       "destroyed_tokens": 2500000.0,
@@ -3528,8 +3584,10 @@
     },
     "has_demand": true,
     "has_supply": false,
+    "known_cost_day": 0,
     "latent_active_tokens_day": 0.0,
     "margin_day": 0,
+    "mixed_workload_units": false,
     "models": [],
     "night_batching": true,
     "peak_factor": 1.89224704336,
@@ -3541,7 +3599,7 @@
         "baseline_tokens_day": 2500000.0,
         "cap_blocked_for_project": false,
         "capacity_blocked_for_project": false,
-        "cheapest_effective_pm": 0.0,
+        "cheapest_effective_pm": null,
         "cloud_blocked": true,
         "cloud_grid_gco2_per_kwh": 0.0,
         "cloud_label": "blocked — no compatible cloud",
@@ -3600,7 +3658,7 @@
           },
           "scale_locked": false,
           "scale_value": 2.5,
-          "tokens_day": 2500000,
+          "tokens_day": 2500000.0,
           "uid": 101,
           "unlock_price_per_m": 0.0,
           "workload_kind": "llm",
@@ -3634,7 +3692,7 @@
     ],
     "ready": false,
     "recommendations": [],
-    "revenue_multiple": 0.0,
+    "revenue_multiple": null,
     "token_coverage": 0.0,
     "total_cap_tokens_day": 0,
     "total_gpus": 0,
@@ -3647,7 +3705,14 @@
     "value_lost_day": 0.025,
     "value_served_day": 0,
     "value_spilled_day": 0.0,
+    "volumes_by_unit": {
+      "tokens": {
+        "demand": 2500000.0,
+        "served": 0.0
+      }
+    },
     "workload_in_len": 9139,
-    "workload_out_len": 775
+    "workload_out_len": 775,
+    "workload_unit": "tokens"
   }
 }

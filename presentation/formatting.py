@@ -33,6 +33,8 @@ def fmt_int(n) -> str:
 
 def fmt_money(value):
     value = float(value or 0.0)
+    if not math.isfinite(value):
+        return "—"
     sign = "-" if value < 0 else ""
     value = abs(value)
     if value >= 1e9:
@@ -51,6 +53,8 @@ def fmt_money(value):
 def fmt_price_pm(value) -> str:
     """Price per million tokens: '$1.02', '<$0.01', or '$0' only when truly zero."""
     value = float(value or 0.0)
+    if not math.isfinite(value):
+        return "—"
     if value <= 0:
         return "$0"
     if value < 0.01:
@@ -61,6 +65,8 @@ def fmt_price_pm(value) -> str:
 def fmt_mult(value) -> str:
     """Ratio such as value/cost: '96×' at or above 10, '1.4×' below."""
     value = float(value or 0.0)
+    if not math.isfinite(value):
+        return "—"
     if not math.isfinite(value):
         return "—"
     if abs(value) >= 10:

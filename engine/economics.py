@@ -53,6 +53,7 @@ from data import (
     success_rate,
 )
 from data.use_case_modalities import model_workload_kind, workload_unit
+from placement import apply_gpu_expansion
 from state import project_demand_multiplier
 
 
@@ -366,7 +367,8 @@ def _build_model_supply(state, profile, prefix_hit_rate, peak_factor_eff) -> lis
         if model_workload_kind(am.model) == "llm":
             daily_tokens_cap = peak_rps * 3600.0 * 24.0 * tokens_per_req if peak_rps > 0 else 0.0
         sellable_tokens = daily_tokens_cap / max(peak_factor_eff, 1.0)
-        gpu_cost_day = pool_rate.get(am.gpu_uid, 0.0) * am.gpu_count
+        cost_known = pool_rate.get(am.gpu_uid, 0.0) > 0
+        gpu_cost_day = pool_rate[am.gpu_uid] * am.gpu_count if cost_known else math.inf
         internal_pm = (gpu_cost_day * 1e6 / sellable_tokens) if sellable_tokens > 0 else math.inf
         country = pool_country.get(am.gpu_uid, DEFAULT_COUNTRY)
         grid_day = carbon_intensity_avg(country, day_weights)
@@ -392,6 +394,7 @@ def _build_model_supply(state, profile, prefix_hit_rate, peak_factor_eff) -> lis
                 "used_fraction": 0.0,
                 "served_tokens": 0.0,
                 "gpu_cost_day": gpu_cost_day,
+                "cost_known": cost_known,
                 "internal_pm": internal_pm,
                 # These are accumulated with each project's own task shape while routing.
                 "served_tasks": 0.0,
@@ -811,7 +814,7 @@ def allocate_capacity(context: _ProjectionContext) -> _ProjectionContext:
             "latent_unlocked": latent_unlocked,
             "latent_active_tokens": latent_active,
             "latent_activation_pct": latent_activation * 100.0,
-            "cheapest_effective_pm": (0.0 if math.isinf(cheapest_pm) else cheapest_pm),
+            "cheapest_effective_pm": (math.nan if math.isinf(cheapest_pm) else cheapest_pm),
             # Diagnostic hint: cheapest is within ~1.5× of unlock price but not yet under it.
             "latent_close_to_unlock": (
                 latent_pool > 0
@@ -882,8 +885,24 @@ def price_outcomes(context: _ProjectionContext) -> _ProjectionContext:
     value_cloud = value_spilled + value_leaked
     value_lost = value_cloud + value_destroyed
     value_opportunity = value_served + value_lost
-    cost_day = sum(pool.cost_per_gpu_hour * 24.0 * pool.count for pool in context.state.gpus)
+    known_cost_day = sum(pool.cost_per_gpu_hour * 24.0 * pool.count for pool in context.state.gpus)
+    economics_complete = bool(context.state.gpus) and all(
+        pool.cost_per_gpu_hour > 0 for pool in context.state.gpus
+    )
+    cost_day = known_cost_day if economics_complete or not context.state.gpus else math.nan
+    volumes_by_unit: dict[str, dict[str, float]] = {}
+    for row in project_rows:
+        unit = row.get("workload_unit", "tokens")
+        totals = volumes_by_unit.setdefault(unit, {"demand": 0.0, "served": 0.0})
+        totals["demand"] += row["tokens_day"]
+        totals["served"] += row["served"]
+    mixed_units = len(volumes_by_unit) > 1
     metrics = {
+        "volumes_by_unit": volumes_by_unit,
+        "mixed_workload_units": mixed_units,
+        "workload_unit": next(iter(volumes_by_unit), "tokens")
+        if not mixed_units
+        else "mixed accounting work units",
         "value_served": value_served,
         "value_spilled": value_spilled,
         "value_leaked": value_leaked,
@@ -891,10 +910,20 @@ def price_outcomes(context: _ProjectionContext) -> _ProjectionContext:
         "value_cloud": value_cloud,
         "value_lost": value_lost,
         "cost_day": cost_day,
-        "cost_per_m_served": (cost_day * 1e6 / total_served) if total_served > 0 else 0.0,
+        "known_cost_day": known_cost_day,
+        "economics_complete": economics_complete,
+        "cost_per_m_served": math.nan
+        if mixed_units or not economics_complete
+        else (cost_day * 1e6 / total_served)
+        if total_served > 0
+        else 0.0,
         "margin_day": value_served - cost_day,
-        "revenue_multiple": (value_served / cost_day) if cost_day > 0 else 0.0,
-        "token_coverage": (total_served / total_tokens) if total_tokens > 0 else 0.0,
+        "revenue_multiple": (value_served / cost_day) if economics_complete else math.nan,
+        "token_coverage": math.nan
+        if mixed_units
+        else (total_served / total_tokens)
+        if total_tokens > 0
+        else 0.0,
         "value_capture_rate": (value_served / value_opportunity if value_opportunity > 0 else 0.0),
         "baseline_tokens_total": sum(row["baseline_tokens_day"] for row in project_rows),
         "latent_active_tokens_total": sum(row["latent_active_tokens"] for row in project_rows),
@@ -948,16 +977,23 @@ def calculate_environmental_impact(context: _ProjectionContext) -> _ProjectionCo
                 "daily_tokens_cap": cap,
                 "served_tokens": row["served_tokens"],
                 "utilization": util,
-                "internal_pm": 0.0 if math.isinf(row["internal_pm"]) else row["internal_pm"],
+                "internal_pm": math.nan
+                if not row["cost_known"]
+                else (0.0 if math.isinf(row["internal_pm"]) else row["internal_pm"]),
                 "internal_input_pm": (
-                    0.0 if math.isinf(row["internal_pm"]) else row["internal_pm"]
+                    math.nan
+                    if not row["cost_known"]
+                    else (0.0 if math.isinf(row["internal_pm"]) else row["internal_pm"])
                 ),
                 "internal_output_pm": (
-                    0.0
+                    math.nan
+                    if not row["cost_known"]
+                    else 0.0
                     if math.isinf(row["internal_pm"])
                     else row["internal_pm"] / max(row["token_efficiency"], 1e-6)
                 ),
-                "gpu_cost_day": row["gpu_cost_day"],
+                "gpu_cost_day": row["gpu_cost_day"] if row["cost_known"] else math.nan,
+                "cost_known": row["cost_known"],
                 "tokens_per_task": tokens_per_task,
                 "country": row.get("country", DEFAULT_COUNTRY),
                 "grid_gco2_per_kwh_day": row.get("grid_gco2_per_kwh_day", 0.0),
@@ -994,6 +1030,17 @@ def calculate_environmental_impact(context: _ProjectionContext) -> _ProjectionCo
     )
 
 
+def _capacity_by_unit(models: tuple[ModelUtilization, ...]) -> dict[str, dict[str, float]]:
+    totals: dict[str, dict[str, float]] = {}
+    for model in models:
+        row = model.to_dict()
+        unit = workload_unit(model_workload_kind(row["model"]))
+        entry = totals.setdefault(unit, {"capacity": 0.0, "consumed": 0.0})
+        entry["capacity"] += row["daily_tokens_cap"]
+        entry["consumed"] += row["served_tokens"]
+    return totals
+
+
 def summarize_projection(
     context: _ProjectionContext, include_recommendations: bool = True
 ) -> ProjectionResult:
@@ -1009,7 +1056,7 @@ def summarize_projection(
             metrics["value_destroyed"],
             context.fates.served_tokens_day,
         )
-        if include_recommendations
+        if include_recommendations and metrics["economics_complete"]
         else []
     )
     payload = {
@@ -1033,7 +1080,13 @@ def summarize_projection(
         "value_cloud_day": metrics["value_cloud"],
         "value_lost_day": metrics["value_lost"],
         "avoidable_cloud_outflow_day": metrics["value_cloud"],
+        "volumes_by_unit": metrics["volumes_by_unit"],
+        "mixed_workload_units": metrics["mixed_workload_units"],
+        "workload_unit": metrics["workload_unit"],
+        "capacity_by_unit": _capacity_by_unit(context.model_utilizations),
         "cost_day": metrics["cost_day"],
+        "known_cost_day": metrics["known_cost_day"],
+        "economics_complete": metrics["economics_complete"],
         "cost_per_m_served": metrics["cost_per_m_served"],
         "co2_kg_day_total": metrics["co2_kg_day_total"],
         "co2_g_per_task_avg": metrics["co2_g_per_task_avg"],
@@ -1485,9 +1538,8 @@ def _marginal_gpu_recommendations(
 ) -> list[dict]:
     """Estimate the best one-GPU expansions for currently deployed models.
 
-    This stays inside calc.py to avoid importing state.py back into the module that state.py
-    already imports. It therefore simulates only growth of existing assignments and retunes
-    their topology with calc.py's local strategy helper.
+    Run the same service operation used by Apply on a detached state. Whole-system
+    purchase increments and assignment retuning are therefore priced identically.
     """
     seen: set[tuple[int, int]] = set()
     rows: list[dict] = []
@@ -1505,31 +1557,11 @@ def _marginal_gpu_recommendations(
         if sim_am is None or sim_gp is None:
             continue
 
-        sim_gp.count += 1
-        sim_am.gpu_count += 1
-        sim_spec = spec_runtime_for(sim, sim_am, sim_am.model)
-        strategy = default_strategy(
-            sim_am.model,
-            sim_am.gpu_count,
-            sim_gp.gpu,
-            sim.mu,
-            sim.profiled_non_kv_gb,
-            sim_am.prec,
-            sim_spec,
-        )
-        if not valid_strategies(
-            sim_am.model,
-            sim_am.gpu_count,
-            sim_gp.gpu,
-            sim.mu,
-            sim.profiled_non_kv_gb,
-            sim_am.prec,
-            sim_spec,
-        ):
+        try:
+            apply_gpu_expansion(sim, sim_am.uid, 1)
+        except ValueError:
+            # A pool already at its purchase limit cannot be expanded.
             continue
-        sim_am.tp, sim_am.pp, sim_am.dp = strategy
-        sim_am.prefill_tp, sim_am.prefill_pp, sim_am.prefill_dp = strategy
-
         projected = compute_revenue_projection(sim, include_recommendations=False)
         margin_gain = projected["margin_day"] - base_margin
         cloud_reduced = max(0.0, base_cloud - projected["value_cloud_day"])
@@ -1544,6 +1576,7 @@ def _marginal_gpu_recommendations(
                 "gpu_uid": sim_gp.uid,
                 "am_uid": sim_am.uid,
                 "added_gpus": 1,
+                "purchased_gpus": sim_gp.count - state.find_gpu(am.gpu_uid).count,
                 "new_gpu_count": sim_am.gpu_count,
                 "margin_gain_day": margin_gain,
                 "cloud_reduced_day": cloud_reduced,

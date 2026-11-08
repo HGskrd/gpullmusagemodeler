@@ -1,7 +1,7 @@
 """Machine placement view: how a model's TP/PP/DP layout lands on machines.
 
 Mirrors the planner's own assumptions, it does not add new physics:
-- a pool of N GPUs is ceil(N / node_size) machines of ``GPU.node_size`` GPUs;
+- TP groups are kept intact when they fit within a machine, leaving explicit empty slots;
 - GPUs are filled copy by copy, stage by stage, TP rank by TP rank;
 - inside a machine collectives use ``GPU.scale_up_collective_bw``; between
   machines ``GPU.inter_node_bw`` (pool override, default 200 Gb/s per GPU);
@@ -18,6 +18,7 @@ from calc import (
     communication_breakdown,
     compute_decode,
     compute_memory,
+    physical_placement,
     resolve_spec_runtime,
 )
 from data import GPU
@@ -43,19 +44,7 @@ def _scale_up_label(g: GPU) -> str:
 
 
 def _machines(tp: int, pp: int, dp: int, node_size: int, gpu_count: int) -> list[list[dict]]:
-    slots = []
-    for rep in range(dp):
-        for stage in range(pp):
-            for rank in range(tp):
-                slots.append({"rep": rep, "stage": stage, "rank": rank})
-    n_machines = max(1, math.ceil(gpu_count / node_size))
-    machines: list[list[dict]] = [[] for _ in range(n_machines)]
-    for i, slot in enumerate(slots):
-        machines[min(i // node_size, n_machines - 1)].append(slot)
-    for machine in machines:
-        while len(machine) < node_size:
-            machine.append({"rep": None, "stage": None, "rank": None})
-    return machines
+    return physical_placement(tp, pp, dp, node_size)
 
 
 def _layout_row(
@@ -164,7 +153,7 @@ def placement_view(state: PlannerState, info: dict) -> Optional[dict]:
     return {
         "cur": cur,
         "node_size": g.node_size,
-        "n_machines": max(1, math.ceil(am.gpu_count / g.node_size)),
+        "n_machines": len(cur["machines"]),
         "scale_up_label": _scale_up_label(g),
         "scale_up_gbs": g.scale_up_collective_bw / 1e9,
         "network_gbs": g.inter_node_bw / 1e9,

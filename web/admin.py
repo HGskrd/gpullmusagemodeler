@@ -84,8 +84,17 @@ def _admin_configuration_error() -> str | None:
     return None
 
 
+def _admin_session_token() -> str:
+    return hmac.new(
+        str(current_app.secret_key).encode(),
+        ("planner-admin:" + (_admin_password() or "")).encode(),
+        "sha256",
+    ).hexdigest()
+
+
 def _is_admin_authenticated() -> bool:
-    return bool(session.get(ADMIN_SESSION_KEY))
+    token = session.get(ADMIN_SESSION_KEY)
+    return isinstance(token, str) and hmac.compare_digest(token, _admin_session_token())
 
 
 def admin_required(view):
@@ -200,7 +209,7 @@ def admin_login():
     if not hmac.compare_digest(request.form.get("password", ""), password or ""):
         return render_template("admin_login.html", error="Invalid password."), 401
 
-    session[ADMIN_SESSION_KEY] = True
+    session[ADMIN_SESSION_KEY] = _admin_session_token()
     # Exclude this browser from visitor analytics from now on.
     mark_internal_if_admin()
     return redirect(url_for("admin.admin"))

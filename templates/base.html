@@ -39,7 +39,7 @@
 {% include "partials/assumptions_bar.html" %}
 <input id="scenarioImportInput" type="file" accept="application/json,.json" hidden onchange="importScenario(this)" />
 
-<div id="main-content" tabindex="-1" aria-label="Planner configuration">
+<div id="main-content" tabindex="-1" aria-label="Planner configuration" {% if needs_tab_sync|default(false) %}inert aria-busy="true"{% endif %}>
   {% block content %}{% endblock %}
 </div>
 

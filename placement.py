@@ -38,7 +38,9 @@ from state import (
     PlannerState,
     Project,
     _next_uid,
+    change_gpu_qty,
     normalize_auto_strategy,
+    set_model_gpu_count,
 )
 
 
@@ -820,3 +822,17 @@ def auto_select_models(state: PlannerState, strategy: Optional[str] = None):
         _seed_empty_auto_pools(state, projects, strategy)
         _grow_auto_assignments(state, strategy)
     state.auto_mode = True
+
+
+def apply_gpu_expansion(state: PlannerState, model_uid: int, added_gpus: int = 1) -> None:
+    """Grow and retune one assignment using the pool's purchase constraints."""
+    assignment = state.find_model(model_uid)
+    if assignment is None:
+        raise ValueError("Model assignment not found.")
+    added_gpus = max(1, int(added_gpus))
+    target = assignment.gpu_count + added_gpus
+    for changed in change_gpu_qty(state, assignment.gpu_uid, added_gpus):
+        _retune_model(state, changed)
+    changed = set_model_gpu_count(state, model_uid, target)
+    if changed is not None:
+        _retune_model(state, changed)

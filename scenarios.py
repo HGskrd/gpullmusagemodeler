@@ -21,15 +21,17 @@ from data import (
     normalize_quality_domain,
     normalize_quality_weights,
 )
+from data.hardware import MAX_GPU_POOLS, MAX_GPUS_PER_POOL
 from data.model_archive import ARCHIVED_MODELS, MODEL_KEY_ALIASES
 from state import (
-    ALLOWED_CAPABILITIES,
     DEFAULT_SCALE_KIND,
     GpuPool,
     ModelAssignment,
     PlannerState,
     Project,
+    _apply_preset_definition,
     _bounded_project_value,
+    _coerce_requires,
     _find_preset,
     _find_use_case_def,
     _next_uid,
@@ -40,13 +42,69 @@ from state import (
     _sync_aggregate_distribution,
     _sync_projects_from_use_case_defs,
     get_use_case_defs,
+    normalize_assignment_spec,
     normalize_auto_strategy,
     normalize_corpo_cloud,
     normalize_day_shape,
     normalize_plot_mode,
+    normalize_projects,
     scale_value_to_tokens,
     tokens_to_scale_value,
 )
+
+_IMPORT_BOOLEANS = frozenset(
+    {
+        "cloud_enabled",
+        "price_driven_demand",
+        "auto_mode",
+        "projection_night_batching",
+        "projection_include_latent",
+        "locked",
+        "scale_locked",
+        "batch_eligible",
+    }
+)
+_IMPORT_STRINGS = frozenset(
+    {
+        "gpu_type",
+        "model_key",
+        "prec",
+        "in_pre",
+        "out_pre",
+        "embedding_doc_pre",
+        "mode",
+        "auto_strategy",
+        "workload_kind",
+        "kind_key",
+        "day_shape",
+        "quality_domain",
+        "spec_method",
+    }
+)
+
+
+def validate_import_payload(value: Any, path: str = "import", depth: int = 0) -> None:
+    """Parse type-sensitive JSON boundaries before permissive legacy normalization."""
+    if depth > 64:
+        raise ValueError("Imported JSON exceeds the supported nesting depth.")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{path} must be finite.")
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key in _IMPORT_BOOLEANS and not isinstance(child, bool):
+                raise ValueError(f"{path}.{key} must be a boolean.")
+            if key in _IMPORT_STRINGS and child is not None and not isinstance(child, str):
+                raise ValueError(f"{path}.{key} must be a string.")
+            if key == "requires":
+                _coerce_requires(child)
+            if key == "auto_excluded" and (
+                not isinstance(child, list) or not all(isinstance(k, str) for k in child)
+            ):
+                raise ValueError(f"{path}.{key} must be a list of model keys.")
+            validate_import_payload(child, f"{path}.{key}", depth + 1)
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            validate_import_payload(child, f"{path}.{index}", depth + 1)
 
 
 def serialize_use_case_defs(state: PlannerState) -> dict:
@@ -58,6 +116,7 @@ def serialize_use_case_defs(state: PlannerState) -> dict:
 
 
 def replace_use_case_defs(state: PlannerState, payload: Any) -> int:
+    validate_import_payload(payload)
     if isinstance(payload, list):
         items = payload
     elif isinstance(payload, dict):
@@ -201,11 +260,7 @@ def _project_from_payload(state: PlannerState, item: dict) -> Project:
     definition = _payload_dict(item.get("definition")) or item
     scale = _payload_dict(item.get("scale")) or item
     requires_raw = definition.get("requires", base.get("requires", ()))
-    if isinstance(requires_raw, str):
-        requires_iter = (requires_raw,)
-    else:
-        requires_iter = requires_raw or ()
-    requires = frozenset(c for c in requires_iter if c in ALLOWED_CAPABILITIES)
+    requires = frozenset(_coerce_requires(requires_raw))
     scale_kind_source = definition if isinstance(definition.get("scale_kind"), dict) else base
     scale_kind = _normalize_scale_kind(scale_kind_source)
     scale_value = _payload_optional_float(scale, "value")
@@ -282,10 +337,21 @@ def _project_from_payload(state: PlannerState, item: dict) -> Project:
         in_pre=str(definition.get("in_pre", base.get("in_pre", "Chat"))),
         out_pre=str(definition.get("out_pre", base.get("out_pre", "Chat"))),
     )
+    if preset is not None:
+        inherited = copy.deepcopy(proj)
+        _apply_preset_definition(inherited, preset, preserve_scale=True)
+        # Keep explicit imports without making the library and instance compete.
+        fields = set(_project_definition_payload(proj)) - {"day_shape", "batch_eligible"}
+        if (
+            any(getattr(proj, key) != getattr(inherited, key) for key in fields)
+            or proj.name != inherited.name
+        ):
+            proj.kind_key = "custom"
     return proj
 
 
 def replace_project_set(state: PlannerState, payload: Any) -> int:
+    validate_import_payload(payload)
     if isinstance(payload, list):
         items = payload
     elif isinstance(payload, dict):
@@ -336,7 +402,7 @@ def serialize_scenario(state_a: PlannerState, state_b: Optional[PlannerState]) -
 def _scenario_float(raw: dict, key: str, default: float, lo: float, hi: float) -> float:
     try:
         value = float(raw.get(key, default))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         value = default
     if not math.isfinite(value):
         value = default
@@ -346,7 +412,7 @@ def _scenario_float(raw: dict, key: str, default: float, lo: float, hi: float) -
 def _scenario_int(raw: dict, key: str, default: int, lo: int, hi: int) -> int:
     try:
         value = int(raw.get(key, default))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         value = default
     return min(max(value, lo), hi)
 
@@ -384,6 +450,7 @@ def _scenario_dist(raw: Any, expected: int, fallback: list[int]) -> list[int]:
 
 def deserialize_planner_state(payload: Any) -> PlannerState:
     """Validate and reconstruct one panel from a scenario payload."""
+    validate_import_payload(payload)
     if not isinstance(payload, dict):
         raise ValueError("Each scenario panel must be a JSON object.")
     state = PlannerState()
@@ -403,15 +470,27 @@ def deserialize_planner_state(payload: Any) -> PlannerState:
     replace_project_set(state, {"use_cases": projects})
 
     gpu_rows = payload.get("gpus", [])
-    if not isinstance(gpu_rows, list) or len(gpu_rows) > 64:
-        raise ValueError("A scenario panel may contain at most 64 GPU pools.")
+    if not isinstance(gpu_rows, list) or len(gpu_rows) > MAX_GPU_POOLS:
+        raise ValueError(f"A scenario panel may contain at most {MAX_GPU_POOLS} GPU pools.")
     uid_map: dict[str, int] = {}
     state.gpus = []
     for row in gpu_rows:
         if not isinstance(row, dict) or row.get("gpu_type") not in GPUS:
             raise ValueError("Scenario contains an invalid GPU pool.")
         gpu_type = str(row["gpu_type"])
-        count = normalize_gpu_count(gpu_type, _scenario_int(row, "count", 1, 1, 100_000))
+        raw_count = row.get("count", 1)
+        try:
+            count = int(raw_count)
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("GPU count must be a positive whole number.") from None
+        if (
+            isinstance(raw_count, bool)
+            or count < 1
+            or count > MAX_GPUS_PER_POOL
+            or (isinstance(raw_count, float) and raw_count != count)
+        ):
+            raise ValueError(f"GPU count must be between 1 and {MAX_GPUS_PER_POOL}.")
+        count = normalize_gpu_count(gpu_type, count)
         new_uid = _next_uid()
         old_uid = str(row.get("uid", new_uid))
         if old_uid in uid_map:
@@ -557,6 +636,9 @@ def deserialize_planner_state(payload: Any) -> PlannerState:
     _sync_aggregate_distribution(state)
     # Construction/normalization writes are not user mutations. New imported
     # state starts at zero; replace_scope_states advances it past the old state.
+    normalize_projects(state)
+    for assignment in state.models:
+        normalize_assignment_spec(assignment)
     state.revision = 0
     return state
 

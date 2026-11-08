@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from placement import (
     _retune_model,
     retune_models,
 )
+from placement import apply_gpu_expansion as apply_gpu_expansion
 from scenarios import deserialize_scenario as _deserialize_scenario
 from state import (
     DEFAULT_SCENARIO_PATH,
@@ -191,14 +193,20 @@ def add_model(state: PlannerState, model_key: str) -> None:
 
 
 def add_models(state: PlannerState, model_keys: list[str]) -> list[str]:
-    existing = {assignment.model_key for assignment in state.models}
+    staged = copy.deepcopy(state)
+    existing = {assignment.model_key for assignment in staged.models}
     added = []
     for model_key in model_keys:
         if model_key in existing:
             continue
-        add_model(state, model_key)
+        add_model(staged, model_key)
         existing.add(model_key)
         added.append(model_key)
+    if added:
+        state.models = staged.models
+        state.auto_mode = staged.auto_mode
+        state.auto_excluded = staged.auto_excluded
+        state.touch()
     return added
 
 
@@ -240,17 +248,6 @@ def apply_model_swap(state: PlannerState, model_uid: int, model_key: str, precis
     """Apply a "best model swap" recommendation to the live scenario."""
     assignment = _set_model_key(state, model_uid, model_key, precision)
     _retune_model(state, assignment)
-
-
-def apply_gpu_expansion(state: PlannerState, model_uid: int, added_gpus: int = 1) -> None:
-    """Apply an "add GPUs" recommendation: grow the pool and the assignment together."""
-    assignment = state.find_model(model_uid)
-    if assignment is None:
-        raise ValueError("Model assignment not found.")
-    added_gpus = max(1, int(added_gpus))
-    target = assignment.gpu_count + added_gpus
-    change_gpu_qty(state, assignment.gpu_uid, added_gpus)
-    set_model_gpu_count(state, model_uid, target)
 
 
 def set_model_gpu_pool(state: PlannerState, model_uid: int, gpu_uid: int) -> None:

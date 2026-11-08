@@ -14,8 +14,10 @@ from flask import Flask, current_app, g, jsonify, request
 from werkzeug.security import safe_join
 
 from web.session_store import (
+    acquire_scope_lease,
     allow_visitor_scope,
     get_scope_lock,
+    release_scope_lease,
 )
 
 VISITOR_COOKIE = "planner_vid"
@@ -157,12 +159,17 @@ def _protect_and_lock_request_scope():
             return jsonify({"error": "Too many active tabs for this planner session."}), 429
         scope_lock = get_scope_lock(scope_id)
         scope_lock.acquire()
+        acquire_scope_lease(scope_id)
+        g.planner_scope_lease = scope_id
         g.planner_scope_locks = (scope_lock, visitor_lock)
     return None
 
 
 def _release_request_scope_lock(_error=None):
-    for lock in getattr(g, "planner_scope_locks", ()):
+    scope_id = g.pop("planner_scope_lease", None)
+    if scope_id is not None:
+        release_scope_lease(scope_id)
+    for lock in g.pop("planner_scope_locks", ()):
         lock.release()
 
 

@@ -388,12 +388,17 @@ function syncCurrentTabState() {
   });
 }
 
+let chartRequestEpoch = 0;
+document.addEventListener('htmx:beforeRequest', event => {
+  if (event?.detail?.requestConfig?.verb?.toLowerCase() !== 'get') chartRequestEpoch++;
+});
 function refreshChart() {
+  const requestEpoch = ++chartRequestEpoch;
   if (!document.getElementById('mc')) return;
   fetch(withTabUrl('/api/chart-data'), { headers: requestHeaders() })
-    .then(r => r.json())
-    .then(data => renderChart(data))
-    .catch(console.error);
+    .then(r => { if (!r.ok) throw new Error(`Chart request failed (${r.status})`); return r.json(); })
+    .then(data => { if (requestEpoch === chartRequestEpoch) renderChart(data); })
+    .catch(error => { if (requestEpoch === chartRequestEpoch) console.error(error); });
 }
 
 function updateChartAccessibleSummary(data) {
@@ -1335,7 +1340,7 @@ function renderChart(data) {
           .sort((a, b) => (b.data?.raw?.y ?? -Infinity) - (a.data?.raw?.y ?? -Infinity))
           .forEach(p => {
             const raw = p.data?.raw;
-            const yStr = raw?.y != null ? `${fmtRate(Number(raw.y))} req/s` : 'OOM';
+            const yStr = raw?.y != null ? `${fmtRate(Number(raw.y))} req/s` : raw?.unavailable_reason === 'context_limit' ? 'Context limit exceeded' : 'Unavailable (memory or execution limits)';
             const detail = raw?.y != null ? ` <span style="color:${theme.tc};font-size:10px;">avg in ${Number(raw.in_len).toLocaleString()} / out ${Number(raw.out_len).toLocaleString()} · ${Number(raw.tps).toLocaleString()} tok/s</span>` : '';
             const oom = raw?.y == null;
             html += `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
@@ -1656,6 +1661,7 @@ function togglePicker(btn, url) {
 }
 
 function postPartial(url, body) {
+  chartRequestEpoch++;
   return fetch(url, {
     method: 'POST',
     headers: requestHeaders({
@@ -2109,9 +2115,18 @@ document.addEventListener('DOMContentLoaded', () => {
   /* Pages without the calculator config panel (e.g. use cases) load this
    * file for shared wiring only — skip the tab-state sync and chart fetch. */
   if (!document.getElementById('main-content')) return;
+  const panel = document.getElementById('main-content');
+  panel.inert = true;
+  panel.setAttribute('aria-busy', 'true');
   syncCurrentTabState()
-    .catch(console.error)
-    .finally(refreshChart);
+    .then(() => { panel.inert = false; panel.removeAttribute('aria-busy'); refreshChart(); })
+    .catch(error => {
+      console.error(error);
+      const message = document.createElement('p');
+      message.setAttribute('role', 'alert');
+      message.textContent = 'Could not load this tab’s scenario. Reload the page to retry.';
+      panel.before(message);
+    });
 });
 
 /* ── Disclosures that survive re-renders ─────────────────────────────────

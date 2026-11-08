@@ -66,6 +66,7 @@ from presentation.model_cards import (
     tech_scorecard,
 )
 from presentation.placement_view import machine_options, placement_view
+from scenarios import validate_import_payload
 from state import (
     AUTO_MODEL_STRATEGIES,
     TECH_SAVVINESS_LABELS,
@@ -160,7 +161,12 @@ def _load_import_json(raw: str) -> object:
     def reject_constant(value: str):
         raise ValueError(f"Non-finite number {value} is not valid scenario data.")
 
-    return json.loads(raw, parse_constant=reject_constant)
+    try:
+        payload = json.loads(raw, parse_constant=reject_constant)
+    except RecursionError:
+        raise ValueError("Imported JSON exceeds the supported nesting depth.") from None
+    validate_import_payload(payload)
+    return payload
 
 
 def use_case_detail_for(definition: dict) -> dict:
@@ -317,14 +323,17 @@ def _record_snapshot(
 ):
     if not current_app.config["TRACKING_ENABLED"]:
         return
-    current_app.extensions["snapshot_store"].record_snapshot(
-        visitor_id=_visitor_id(),
-        tab_id=_tab_id() or "default",
-        reason=reason,
-        path=path or request.path,
-        state_a=state_a,
-        state_b=state_b,
-    )
+    try:
+        current_app.extensions["snapshot_store"].record_snapshot(
+            visitor_id=_visitor_id(),
+            tab_id=_tab_id() or "default",
+            reason=reason,
+            path=path or request.path,
+            state_a=state_a,
+            state_b=state_b,
+        )
+    except Exception:  # snapshots are best-effort; a completed mutation stays successful
+        current_app.logger.warning("Planner snapshot write failed", exc_info=True)
     record_event(
         reason, state_a, state_b, extra={"path": path or request.path} if reason == "open" else None
     )

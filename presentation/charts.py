@@ -26,6 +26,7 @@ from calc import (
     compute_realtime_capacity,
     compute_realtime_max_users,
     compute_user_experience,
+    context_supported,
     embedding_doc_stats,
     resolve_spec_runtime,
     spec_optimization_for,
@@ -1013,6 +1014,7 @@ def chart_processing_pareto(
         pts = []
         for bs in batch_sizes:
             total_tps = 0
+            unavailable_reasons = set()
             for am, gpu in deployed:
                 if (
                     am.model.is_decision_model
@@ -1037,6 +1039,12 @@ def chart_processing_pareto(
                 )
                 if result:
                     total_tps += result.tps
+                else:
+                    unavailable_reasons.add(
+                        "context_limit"
+                        if not context_supported(am.model, in_len, out_len)
+                        else "memory_or_execution_limit"
+                    )
             total_rps = (total_tps / tokens_per_req) if tokens_per_req > 0 else 0.0
             pts.append(
                 {
@@ -1044,6 +1052,9 @@ def chart_processing_pareto(
                     "y": round(total_rps * 100) / 100 if total_tps else None,
                     "rps": round(total_rps * 100) / 100 if total_tps else None,
                     "tps": total_tps or None,
+                    "unavailable_reason": ",".join(sorted(unavailable_reasons))
+                    if not total_tps
+                    else None,
                     "in_len": in_len,
                     "out_len": out_len,
                     "workload": preset_name,

@@ -79,24 +79,6 @@ LONG_CTX_DCP_SEQ = 32768
 BATCH_AXIS_HEADROOM = 0.12
 PROCESSING_PARETO_COLORS = ["#3266ad", "#1D9E75", "#BA7517", "#7F77DD", "#D85A30", "#A32D2D"]
 NIGHT_HOURS = frozenset({22, 23, 0, 1, 2, 3, 4, 5})
-NVIDIA_FP4_GPU_KEYS = frozenset(
-    {
-        "RTXPRO6000_BSE",
-        "RTXPRO6000_BW_WS",
-        "RTXPRO5000_BW_72",
-        "RTX5090",
-        "DGX_SPARK",
-        "GB200",
-        "B200",
-        "B300",
-        "GB300",
-        "DGX_STATION_GB300",
-        "JETSON_AGX_THOR",
-    }
-)
-MXFP4_GPU_KEYS = NVIDIA_FP4_GPU_KEYS | frozenset(
-    {"MI350X", "MI355X", "MI455X", "HELIOS_MI455X", "MI400"}
-)
 
 # Speculative decoding has a real control-plane cost even when draft weights are
 # tiny: launch the draft/verify work, schedule the block, and synchronize the
@@ -1025,11 +1007,11 @@ def _prefill_attention_work(m: Model, pr: int, seq_len: int, pp: int, causal: bo
 
 
 def gpu_supports_mxfp4(g: GPU) -> bool:
-    return g.fp4 is not None and g.key in MXFP4_GPU_KEYS
+    return g.fp4 is not None and g.fp4 > 0 and g.vendor in {"nv", "amd"}
 
 
 def gpu_supports_nvfp4(g: GPU) -> bool:
-    return g.fp4 is not None and g.key in NVIDIA_FP4_GPU_KEYS
+    return g.fp4 is not None and g.fp4 > 0 and g.vendor == "nv"
 
 
 def gpu_flops(g: GPU, prec: str) -> float:
@@ -1438,29 +1420,43 @@ def _eff_collective_bw(tp: int, g: GPU) -> float:
     return g.inter_node_bw
 
 
+def physical_placement(tp: int, pp: int, dp: int, node_size: int) -> list[list[dict]]:
+    """Pack intact TP groups; keep each replica's stage boundaries identical.
+
+    A replica that fits on one node can share it with other complete replicas.
+    Larger replicas start on a fresh node. Unused slots are explicit.
+    """
+    node_size = max(1, node_size)
+    machines: list[list[dict]] = [[]]
+    for rep in range(dp):
+        if machines[-1] and (tp * pp > node_size or len(machines[-1]) + tp * pp > node_size):
+            machines.append([])
+        for stage in range(pp):
+            if machines[-1] and (tp > node_size or len(machines[-1]) + tp > node_size):
+                machines.append([])
+            for rank in range(tp):
+                if len(machines[-1]) == node_size:
+                    machines.append([])
+                machines[-1].append({"rep": rep, "stage": stage, "rank": rank})
+    for machine in machines:
+        machine.extend(
+            {"rep": None, "stage": None, "rank": None} for _ in range(node_size - len(machine))
+        )
+    return machines
+
+
 def _pp_boundary_counts(tp: int, pp: int, g: GPU) -> tuple[int, int]:
     if pp <= 1:
         return 0, 0
     if tp > g.node_size:
         return 0, pp - 1
-
-    intra = 0
-    cross = 0
-    node_idx = 0
-    used_on_node = 0
-    prev_node = None
-    for _ in range(pp):
-        if used_on_node + tp > g.node_size:
-            node_idx += 1
-            used_on_node = 0
-        if prev_node is not None:
-            if node_idx == prev_node:
-                intra += 1
-            else:
-                cross += 1
-        prev_node = node_idx
-        used_on_node += tp
-    return intra, cross
+    stages = {}
+    for index, machine in enumerate(physical_placement(tp, pp, 1, g.node_size)):
+        for slot in machine:
+            if slot["stage"] is not None:
+                stages[slot["stage"]] = index
+    intra = sum(stages[i] == stages[i - 1] for i in range(1, pp))
+    return intra, pp - 1 - intra
 
 
 def _dense_tp_oh(

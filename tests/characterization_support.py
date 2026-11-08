@@ -218,7 +218,9 @@ def _canonical(value: Any) -> Any:
         return sorted(items, key=lambda item: json.dumps(item, sort_keys=True))
     if isinstance(value, Path):
         return str(value)
-    if isinstance(value, float) and math.isfinite(value):
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return None
         # libm and reduction order can move the final few binary digits across
         # Python versions and platforms. Goldens should catch estimator changes,
         # not differences far below the planner's observable precision.
@@ -230,7 +232,7 @@ def canonical_json(value: Any) -> str:
     return (
         json.dumps(
             _canonical(value),
-            allow_nan=True,
+            allow_nan=False,
             ensure_ascii=False,
             indent=2,
             sort_keys=True,

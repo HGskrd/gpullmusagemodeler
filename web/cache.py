@@ -12,7 +12,7 @@ from typing import Any, Optional
 from scenarios import serialize_scenario
 from state import PlannerState
 
-ChartCacheKey = tuple[int, str, str]
+ChartCacheKey = tuple[int | str, str, str]
 
 
 @dataclass(frozen=True)
@@ -22,7 +22,7 @@ class CachedJson:
 
 
 class ScopedRevisionCache:
-    """Bounded cache whose per-scope key is (revision, panel, mode)."""
+    """Bounded cache keyed by scenario content (or a legacy revision), panel and mode."""
 
     def __init__(self, max_scopes: int = 5000, max_entries_per_scope: int = 8):
         self._max_scopes = max(1, int(max_scopes))

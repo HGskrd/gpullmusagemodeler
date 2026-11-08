@@ -43,6 +43,7 @@ def _env_nonnegative_int(name: str, default: int) -> int:
 _states: dict[str, PlannerState] = {}
 _compare_states: dict[str, PlannerState] = {}
 _state_last_seen: dict[str, float] = {}
+_active_scopes: dict[str, int] = {}
 _state_guard = threading.RLock()
 _scope_locks: weakref.WeakValueDictionary[str, threading.RLock] = weakref.WeakValueDictionary()
 _STATE_TTL_SECONDS = _env_nonnegative_int("PLANNER_STATE_TTL_SECONDS", 86400)
@@ -57,6 +58,21 @@ def get_scope_lock(session_id: str) -> threading.RLock:
             lock = threading.RLock()
             _scope_locks[session_id] = lock
         return lock
+
+
+def acquire_scope_lease(session_id: str) -> None:
+    """Pin a request's state until its response and teardown have completed."""
+    with _state_guard:
+        _active_scopes[session_id] = _active_scopes.get(session_id, 0) + 1
+
+
+def release_scope_lease(session_id: str) -> None:
+    with _state_guard:
+        remaining = _active_scopes.get(session_id, 1) - 1
+        if remaining:
+            _active_scopes[session_id] = remaining
+        else:
+            _active_scopes.pop(session_id, None)
 
 
 def allow_visitor_scope(session_id: str, visitor_id: str, max_scopes: int) -> bool:
@@ -75,7 +91,7 @@ def _prune_states_locked(now: float, preserve: Optional[str] = None) -> None:
         stale = [
             key
             for key, touched in _state_last_seen.items()
-            if key != preserve and now - touched > _STATE_TTL_SECONDS
+            if key != preserve and key not in _active_scopes and now - touched > _STATE_TTL_SECONDS
         ]
         for key in stale:
             _states.pop(key, None)
@@ -85,7 +101,9 @@ def _prune_states_locked(now: float, preserve: Optional[str] = None) -> None:
     excess = len(_states) - _STATE_MAX_SCOPES
     if excess > 0:
         oldest = sorted(
-            (touched, key) for key, touched in _state_last_seen.items() if key != preserve
+            (touched, key)
+            for key, touched in _state_last_seen.items()
+            if key != preserve and key not in _active_scopes
         )[:excess]
         for _, key in oldest:
             _states.pop(key, None)

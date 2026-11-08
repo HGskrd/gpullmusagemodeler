@@ -119,43 +119,41 @@ def _slim_panel_state(panel: Optional[dict]) -> Optional[dict]:
     if panel is None:
         return None
     defs = panel.get("use_case_defs")
-    if not isinstance(defs, list) or not defs:
+    if not isinstance(defs, list):
         return panel
-    kept = []
+    kept, omitted = [], []
     for entry in defs:
-        forms = (
-            _BUILTIN_USE_CASE_FORMS.get(str(entry.get("key", "")))
-            if isinstance(entry, dict)
-            else None
-        )
+        key = str(entry.get("key", "")) if isinstance(entry, dict) else ""
+        forms = _BUILTIN_USE_CASE_FORMS.get(key)
         if forms and _json_dump(entry) in forms:
-            continue
-        kept.append(entry)
-    if len(kept) == len(defs):
-        return panel
-    slimmed = dict(panel)
-    slimmed["use_case_defs"] = kept
-    return slimmed
+            omitted.append(key)
+        else:
+            kept.append(entry)
+    return dict(panel, use_case_defs=kept, _omitted_use_case_defs=omitted)
 
 
 def _restore_panel_state(panel: Optional[dict]) -> Optional[dict]:
-    """Reattach built-in use-case defs omitted by _slim_panel_state.
+    """Restore only explicitly omitted defaults; keep user deletions intact.
 
-    Missing entries are restored from the canonical PROJECT_PRESETS so readers
-    (e.g. the admin snapshot viewer) always see the full library. Rows written
-    before payload slimming already contain every key and pass through
-    unchanged. Restored entries are the built-in definitions, which may differ
-    cosmetically from the user's normalized copies (e.g. int vs float)."""
+    Legacy snapshots did not distinguish omissions from deletions, so they
+    retain the legacy reconstruction policy. New rows record omitted keys.
+    """
     if panel is None:
         return None
     defs = panel.get("use_case_defs")
     if not isinstance(defs, list):
         return panel
     present = {str(entry.get("key", "")) for entry in defs if isinstance(entry, dict)}
-    missing = [preset for preset in PROJECT_PRESETS if str(preset.get("key", "")) not in present]
-    if not missing:
-        return panel
+    # Legacy rows lack metadata; their original deletions cannot be inferred.
+    omitted = panel.get("_omitted_use_case_defs")
+    missing = [
+        preset
+        for preset in PROJECT_PRESETS
+        if str(preset.get("key", "")) not in present
+        and (omitted is None or str(preset.get("key", "")) in omitted)
+    ]
     restored = dict(panel)
+    restored.pop("_omitted_use_case_defs", None)
     restored["use_case_defs"] = [copy.deepcopy(preset) for preset in missing] + defs
     return restored
 
