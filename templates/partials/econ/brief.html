@@ -8,6 +8,8 @@
   <h2>
     {% if f.total_tokens <= 0 %}
       No demand routed yet
+    {% elif p.mixed_workload_units %}
+      {{ (p.value_capture_rate * 100)|round(0)|int }}% of demand value is served on your GPUs: {{ p.value_served_day|fmt_money }}/day
     {% elif lost <= 0 %}
       All demand is served on your GPUs: {{ p.value_served_day|fmt_money }}/day of equivalent value
     {% else %}
@@ -15,6 +17,15 @@
     {% endif %}
   </h2>
   <div class="b-date">{{ p.day_shape_label }} day shape · {% if state.cloud_enabled %}gateway preset “{{ p.corpo_cloud_label }}”{% else %}no cloud: only your GPUs serve{% endif %}</div>
+  {% if p.mixed_workload_units %}
+  <dl aria-label="Demand by unit">
+    {% for unit, volume in p.volumes_by_unit.items() %}
+    <dt>{{ unit }}/day</dt>
+    <dd>{{ volume.served|fmt_num }} served of {{ volume.demand|fmt_num }} requested ({{ ((volume.served / volume.demand * 100) if volume.demand else 0)|round(0)|int }}%)</dd>
+    {% endfor %}
+  </dl>
+  {% endif %}
+
 
   {% if f.total_tokens > 0 %}
   <div class="ov-moves" hx-get="/econ/swaps" hx-vals='{"panel":"{{ panel }}","view":"moves"}'
@@ -122,7 +133,7 @@
     <p>No use case carries demand yet. Add use cases with demand above zero in the calculator and this brief will describe the routed market.</p>
   {% else %}
   <p>
-    The platform sees <span class="fig">{{ f.total_tokens|fmt_num }} tokens/day</span> of active demand
+    The platform sees <span class="fig">{{ f.total_tokens|fmt_num }} {{ p.workload_unit }}/day</span> of active demand
     ({{ p.baseline_tokens_day|fmt_num }} baseline + {{ p.latent_active_tokens_day|fmt_num }} activated latent demand)
     across <span class="fig">{{ p.projects|length }}</span> use case{{ 's' if p.projects|length != 1 }}.
     Priced at the cheapest compatible cloud substitute, that demand is worth
@@ -130,7 +141,7 @@
   </p>
   <p>
     Of that, <span class="fig good">{{ p.value_served_day|fmt_money }}/day</span>
-    ({{ (p.value_capture_rate * 100)|round(0)|int }}% of opportunity, {{ f.served_tokens|fmt_num }} tokens)
+    ({{ (p.value_capture_rate * 100)|round(0)|int }}% of opportunity, {{ f.served_tokens|fmt_num }} {{ p.workload_unit }})
     is served on your GPUs.
     {% if p.value_cloud_day > 0 %}
     <span class="fig warn">{{ p.value_cloud_day|fmt_money }}/day</span> goes to cloud
@@ -148,8 +159,10 @@
   <h3>The economics</h3>
   <p>
     The cluster costs <span class="fig">{{ p.cost_day|fmt_money }}/day</span>
-    ({{ p.total_gpus }} GPUs, {{ p.total_gpus_used }} assigned to models),
-    which works out to <span class="fig">{{ p.cost_per_m_served|fmt_price_pm }}/M</span> served tokens.
+    ({{ p.total_gpus }} GPUs, {{ p.total_gpus_used }} assigned to models).
+    {% if not p.mixed_workload_units %}
+    This is <span class="fig">{{ p.cost_per_m_served|fmt_price_pm }}/M</span> served {{ p.workload_unit }}.
+    {% endif %}
     Against the equivalent value served, that is a net margin of
     <span class="fig {{ 'good' if p.margin_day >= 0 else 'bad' }}">{{ p.margin_day|fmt_money }}/day</span>,
     a value-to-cost multiple of <span class="fig {{ 'good' if p.revenue_multiple >= 1.5 else ('warn' if p.revenue_multiple >= 1 else 'bad') }}">{{ p.revenue_multiple|fmt_mult }}</span>.

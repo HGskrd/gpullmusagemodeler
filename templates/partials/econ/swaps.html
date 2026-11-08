@@ -19,7 +19,7 @@
     {% endfor %}
     {% for rec in grows %}
     <span class="mt-ic grow" aria-hidden="true">+</span>
-    <span class="mt-t" title="Add {{ rec.added_gpus }} {{ rec.gpu_name }} to {{ rec.model_name }} · {{ rec.new_gpu_count }} GPUs total · +{{ rec.served_gain_tokens|fmt_num }} tok/day served">+{{ rec.added_gpus }} GPU → <b>{{ rec.model_name|short_model_name }}</b> <span class="T">{{ rec.new_gpu_count }} GPUs</span></span>
+    <span class="mt-t" title="Add {{ rec.added_gpus }} {{ rec.gpu_name }} to {{ rec.model_name }} · purchase {{ rec.purchased_gpus }} GPUs · {{ rec.new_gpu_count }} GPUs assigned · +{{ rec.served_gain_tokens|fmt_num }} tok/day served">+{{ rec.added_gpus }} assigned (buy {{ rec.purchased_gpus }}) → <b>{{ rec.model_name|short_model_name }}</b> <span class="T">{{ rec.new_gpu_count }} GPUs</span></span>
     <span class="r {{ 'good' if rec.margin_gain_day > 0 else 'bad' }}">{{ '+' if rec.margin_gain_day > 0 }}{{ rec.margin_gain_day|fmt_money }}</span>
     {% if cloud_on %}<span class="r">{{ rec.cloud_reduced_day|fmt_money if rec.cloud_reduced_day >= 1 else '—' }}</span>{% endif %}
     <span class="r">{{ rec.destroyed_reduced_day|fmt_money if rec.destroyed_reduced_day >= 1 else '—' }}</span>
@@ -49,7 +49,7 @@
   {% set rec = gpu_recs[0] %}
   <h3>Recommended next step</h3>
   <div class="b-action">
-    Add <strong>+{{ rec.added_gpus }} {{ rec.gpu_name }}</strong> to <strong>{{ rec.model_name }}</strong>:
+    Purchase <strong>{{ rec.purchased_gpus }} {{ rec.gpu_name }}</strong>, assign <strong>+{{ rec.added_gpus }}</strong> to <strong>{{ rec.model_name }}</strong>:
     modeled <span class="fig good">{{ rec.margin_gain_day|fmt_money }}/day</span> margin gain,
     <span class="fig">{{ rec.cloud_reduced_day|fmt_money }}/day</span> of cloud spend avoided, and
     <span class="fig">{{ rec.destroyed_reduced_day|fmt_money }}/day</span> of destroyed work recovered

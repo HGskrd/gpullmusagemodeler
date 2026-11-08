@@ -118,7 +118,11 @@ def index():
     if tab_id is None:
         default_a, default_b = create_default_scenario()
         return render_template(
-            "index.html", A=default_a, B=default_b, **_planner_view_context(default_a, default_b)
+            "index.html",
+            A=default_a,
+            B=default_b,
+            needs_tab_sync=True,
+            **_planner_view_context(default_a, default_b),
         )
 
     sa = get_state(_scope_id())

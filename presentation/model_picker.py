@@ -15,6 +15,7 @@ from typing import Optional
 
 from calc import compute_memory, default_strategy
 from data import GPU, PRECISION_LABELS, Model, effective_quality, required_quality
+from placement import _model_serves_project
 from planner_service import plan_model_add
 from state import PlannerState
 
@@ -50,15 +51,7 @@ class PickerRow:
 
 
 def panel_quality_floor(state: PlannerState) -> Optional[float]:
-    """Quality floor for the "Meets quality floor" chip, or None without use cases.
-
-    Definition: the *least* demanding use case's required general quality,
-    i.e. ``min(required_quality(difficulty, min_success_rate, quality_floor))``
-    over the panel's use cases. A model below it cannot clear any use case on
-    general quality alone, so dimming it is safe; passing it is a necessary,
-    not sufficient, condition (domain weights and capability gates are applied
-    later by routing and are not checked here).
-    """
+    """Display-only general-quality threshold; eligibility uses each project's profile."""
     if not state.projects:
         return None
     return min(
@@ -91,7 +84,11 @@ def picker_row(
     state: PlannerState, model: Model, quality_floor: Optional[float], is_llm: bool
 ) -> PickerRow:
     quality = effective_quality(model) if is_llm else None
-    passes_quality = quality is None or quality_floor is None or quality + 1e-9 >= quality_floor
+    passes_quality = (
+        quality is None
+        or not state.projects
+        or any(_model_serves_project(model, project) for project in state.projects)
+    )
     if not state.gpus:
         return PickerRow(
             model,

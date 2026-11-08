@@ -249,7 +249,9 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
             f"- Leaked to cloud: {_fmt_pct(f['leaked_pct'])} ({fmt_num(f['leaked_tokens'])} {short_unit})",
             f"- Cloud spend lost from on-prem: {fmt_money(p['value_cloud_day'])}/day",
             f"- Destroyed: {_fmt_pct(f['destroyed_pct'])} ({fmt_num(f['destroyed_tokens'])} {short_unit})",
-            f"- Token coverage: {_fmt_pct(p['token_coverage'] * 100)}",
+            f"- {'Token' if p['workload_unit'] == 'tokens' else p['workload_unit'].capitalize()} coverage: {_fmt_pct(p['token_coverage'] * 100)}"
+            if not p["mixed_workload_units"]
+            else "- Coverage: reported separately by workload unit (mixed portfolio).",
             f"- Value capture: {_fmt_pct(p['value_capture_rate'] * 100)}",
             f"- Revenue multiple: {p['revenue_multiple']:.2f}x"
             if p["cost_day"] > 0
@@ -259,6 +261,14 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
             else "- CO2: set GPU TDP data to see",
         ]
     )
+
+    if p["mixed_workload_units"]:
+        for volume_unit, volume in p["volumes_by_unit"].items():
+            coverage = volume["served"] / volume["demand"] * 100 if volume["demand"] else 0.0
+            lines.append(
+                f"  {volume_unit}: {fmt_num(volume['served'])} served / "
+                f"{fmt_num(volume['demand'])} requested per day ({_fmt_pct(coverage)})"
+            )
 
     if p.get("recommendations"):
         lines.extend(["", "Best Next GPU"])

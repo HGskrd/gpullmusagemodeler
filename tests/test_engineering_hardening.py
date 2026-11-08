@@ -17,6 +17,7 @@ import app as app_module
 import web.middleware as middleware
 from presentation.formatting import fmt_money, fmt_num
 from tracking import SnapshotStore
+from web.admin import _admin_session_token
 from web.config import ADMIN_SESSION_KEY
 from web.middleware import VISITOR_COOKIE
 
@@ -134,7 +135,8 @@ class EngineeringHardeningTests(unittest.TestCase):
     def test_admin_rejects_invalid_pagination(self):
         with patch.dict("os.environ", {"PLANNER_ADMIN_PASSWORD": "strong"}):
             with self.client.session_transaction() as session:
-                session[ADMIN_SESSION_KEY] = True
+                with self.client.application.app_context():
+                    session[ADMIN_SESSION_KEY] = _admin_session_token()
             response = self.client.get("/admin/snapshots?page=not-a-number")
         self.assertEqual(response.status_code, 400)
 

@@ -13,12 +13,14 @@
   <div class="kpi">
     <div class="k-label">Fleet cost / day</div>
     <div class="k-val">{{ p.cost_day|fmt_money if p.cost_day > 0 else '—' }}</div>
-    <div class="k-sub">{% if p.cost_day > 0 %}${{ '%.2f'|format(p.cost_per_m_served) }}/M served tok{% else %}set TCO to enable{% endif %}</div>
+    <div class="k-sub">{% if not p.economics_complete %}set every pool’s TCO to enable{% elif p.mixed_workload_units %}mixed units · no combined unit price{% else %}{{ p.cost_per_m_served|fmt_price_pm }}/M served {{ p.workload_unit }}{% endif %}</div>
   </div>
   <div class="kpi">
     <div class="k-label">Capacity / day</div>
-    <div class="k-val">{{ p.total_cap_tokens_day|fmt_num }}</div>
-    <div class="k-sub">tokens · {{ p.actual_served_tokens|fmt_num }} consumed</div>
+    {% for unit, volume in p.capacity_by_unit.items() %}
+    <div class="k-val">{{ volume.capacity|fmt_num }}</div>
+    <div class="k-sub">{{ unit }} · {{ volume.consumed|fmt_num }} consumed</div>
+    {% else %}<div class="k-val">0</div>{% endfor %}
   </div>
   <div class="kpi">
     <div class="k-label">CO₂ / day</div>

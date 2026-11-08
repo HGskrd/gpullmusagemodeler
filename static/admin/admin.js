@@ -86,7 +86,7 @@
             if (e.reason === "no_gpu") f.noGpu++;
             else if (e.reason === "fits_nowhere") { f.rejected.push(e.model); f.oom++; }
             break;
-          case "result": if (!e.fits) { f.oom++; lastFail = true; } else if (lastFail) { f.recovered++; lastFail = false; } break;
+          case "result": if (e.fits === false) { f.oom++; lastFail = true; } else if (e.fits === true && lastFail) { f.recovered++; lastFail = false; } break;
           case "compare_duplicate": case "compare_gpu": f.compare++; break;
           case "econ_view": f.econ++; break;
           case "use_case_add": case "use_case_edit": case "projection": case "use_cases_view": f.useCases++; break;
@@ -273,7 +273,12 @@
       const content = document.getElementById("content");
       if (content) content.hidden = false;
       render();
-    }).catch(() => {});
+    }).catch((err) => {
+      if (err.message === "login") return;
+      document.getElementById("loading")?.remove();
+      const content = document.getElementById("content");
+      if (content) content.hidden = false;
+    });
   }
 
   // ---------- tooltip ----------

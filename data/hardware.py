@@ -964,12 +964,18 @@ for _preview in PREVIEW_ASSUMPTIONS.values():
     _preview["captured_at"] = PREVIEW_ASSUMPTIONS_CAPTURED_AT
 
 
+MAX_GPU_POOLS = 64
+MAX_GPUS_PER_POOL = 100_000
+
+
 def normalize_gpu_count(gpu_type: str, count: int, allow_zero: bool = False) -> int:
-    """Snap pool sizes to set-only hardware constraints."""
+    """Snap pool sizes to purchase units, rejecting counts beyond the shared limit."""
     try:
         normalized = int(count)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         normalized = 0
+    if normalized > MAX_GPUS_PER_POOL:
+        raise ValueError(f"A GPU pool may contain at most {MAX_GPUS_PER_POOL} GPUs.")
     if allow_zero and normalized <= 0:
         return 0
 
@@ -981,6 +987,8 @@ def normalize_gpu_count(gpu_type: str, count: int, allow_zero: bool = False) -> 
     multiple = max(int(gpu.count_multiple), 1)
     if multiple > 1:
         normalized = math.ceil(normalized / multiple) * multiple
+    if normalized > MAX_GPUS_PER_POOL:
+        raise ValueError(f"Rounded pool size exceeds {MAX_GPUS_PER_POOL} GPUs.")
     return normalized
 
 

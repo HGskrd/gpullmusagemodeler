@@ -6,6 +6,7 @@ Pure: it takes planner state and returns data, with no request context.
 """
 
 import json
+import math
 
 import cloud_policy
 from data import quality_to_aa_intelligence
@@ -30,6 +31,16 @@ _PROJECT_JSON_KEYS = (
     "cloud_blocked",
     "cheapest_effective_pm",
 )
+
+
+def _finite_chart_values(value):
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: _finite_chart_values(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_finite_chart_values(item) for item in value]
+    return value
 
 
 def _chart_payload(p: dict, model_tokens: list[dict]) -> dict:
@@ -129,10 +140,12 @@ def _chart_payload(p: dict, model_tokens: list[dict]) -> dict:
         uc = f"uc{i}::{row['name']}"
         a_nodes.append({"name": uc, "c": "uc"})
         for pm in row["per_model_served"]:
-            a_links.append({"source": f"m::{pm['name']}", "target": uc, "value": pm["tokens"]})
+            a_links.append(
+                {"source": f"m{pm['am_uid']}::{pm['name']}", "target": uc, "value": pm["tokens"]}
+            )
     served_model_names = {link["source"] for link in a_links}
     for m in p["models"]:
-        name = f"m::{m['name']}"
+        name = f"m{m['am_uid']}::{m['name']}"
         if name in served_model_names:
             a_nodes.append({"name": name, "color": m["color"]})
 
@@ -162,7 +175,7 @@ def _chart_payload(p: dict, model_tokens: list[dict]) -> dict:
 
 def compute_swap_recs(state, p: dict) -> list[dict]:
     """Best same-hardware model replacements (~300ms; call lazily, not per HTMX tick)."""
-    if p["cost_day"] <= 0 or not p["has_supply"]:
+    if not p["economics_complete"] or not p["has_supply"]:
         return []
     return _marginal_model_swap_recommendations(
         state,
@@ -199,5 +212,7 @@ def econ_payload(state) -> dict:
         "model_tokens": model_tokens,
         "aa": quality_to_aa_intelligence,
         # Safe inside <script type="application/json">: escape any '<' in names.
-        "charts_json": json.dumps(charts).replace("<", "\\u003c"),
+        "charts_json": json.dumps(_finite_chart_values(charts), allow_nan=False).replace(
+            "<", "\\u003c"
+        ),
     }

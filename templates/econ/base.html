@@ -25,7 +25,7 @@
   </nav>
 </div>
 
-{% if ep.p.cost_day <= 0 %}
+{% if not ep.p.economics_complete %}
 <div class="estimate-warning" role="note" style="margin-bottom:10px;">
   <div>
     <strong>Economics incomplete.</strong>

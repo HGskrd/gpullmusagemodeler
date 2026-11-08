@@ -3,7 +3,7 @@
 <h3 style="margin:0 0 6px;">{{ label }}</h3>
 {% endif %}
 
-{% if p.cost_day <= 0 %}
+{% if not p.economics_complete %}
 <div class="estimate-warning" role="note">
   <div>
     <strong>Economics incomplete.</strong>

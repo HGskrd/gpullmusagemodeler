@@ -59,7 +59,7 @@
         trigger: 'item',
         formatter: function (x) {
           if (x.dataType === 'edge') return x.data.source + ' → ' + x.data.target + '<br><b>' + fmt(x.data.value) + '/day</b>';
-          return '<b>' + x.name.replace(/^(m|uc\d+)::/, '') + '</b>';
+          return '<b>' + x.name.replace(/^(m\d*|uc\d+)::/, '') + '</b>';
         }
       },
       series: [{
@@ -74,7 +74,7 @@
         layoutIterations: 0,
         label: {
           color: colors().fg, fontSize: 11,
-          formatter: function (x) { return x.name.replace(/^(m|uc\d+)::/, '') + (x.value ? '  ' + fmt(x.value) : ''); }
+          formatter: function (x) { return x.name.replace(/^(m\d*|uc\d+)::/, '') + (x.value ? '  ' + fmt(x.value) : ''); }
         },
         lineStyle: { color: 'gradient', curveness: 0.5, opacity: 0.32 },
         emphasis: { focus: 'adjacency' }

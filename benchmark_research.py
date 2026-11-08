@@ -7,10 +7,13 @@ Run from the repository root: python -m benchmark_research --help
 from __future__ import annotations
 
 import argparse
+import filecmp
 import hashlib
 import heapq
 import json
+import os
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
@@ -327,7 +330,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.shard_count < 1 or not 0 <= args.shard_index < args.shard_count:
         parser.error("Require shard-count >= 1 and 0 <= shard-index < shard-count")
     manifest_path = args.output.with_suffix(args.output.suffix + ".manifest.json")
-    if args.output.exists() or manifest_path.exists():
+    if manifest_path.exists():
         parser.error("Output or manifest already exists; choose a new output path")
     try:
         grid = ResearchGrid(
@@ -366,44 +369,72 @@ def main(argv: list[str] | None = None) -> int:
             yield first
         yield from tasks
 
-    with args.output.open("x", encoding="utf-8") as output:
-        for task in rows():
-            counts["selected_pairs"] += 1
-            dataset_hash.update(str(task["input_fingerprint"]).encode())
-            shard = int(hashlib.sha256(task["task_id"].encode()).hexdigest(), 16)
-            if shard % args.shard_count != args.shard_index:
-                continue
-            counts["shard_pairs"] += 1
-            if (task["task_id"], task["input_fingerprint"]) in completed:
-                counts["skipped_completed"] += 1
-                continue
-            output.write(json.dumps(task, ensure_ascii=False, allow_nan=False) + "\n")
-            counts["written"] += 1
-    manifest = {
-        "schema_version": SCHEMA_VERSION,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "catalog_values_are": "Unverified planner inputs, not measured benchmark evidence",
-        "pair_scope": "GPUS × MODELS; separate retired records and hosted-only APIs are excluded",
-        "configuration_scope": "One workload-feasible planner-sorted topology per artifact/backend/count/batch cell",
-        "queue": args.queue,
-        "screening_counts": screening_counts,
-        "screening_assumptions": grid.assumptions() if args.queue != "all" else None,
-        "selection": {
-            "hardware": sorted(set(args.hardware)) if args.hardware else None,
-            "models": sorted(set(args.model)) if args.model else None,
-            "visible_only": args.visible_only,
-            "include_estimated_artifacts": args.include_estimated_artifacts,
-            "shard_count": args.shard_count,
-            "shard_index": args.shard_index,
-            "exploratory_limit": args.exploratory_limit if args.queue == "exploratory" else None,
-        },
-        "selected_inputs_sha256": dataset_hash.hexdigest(),
-        "counts": counts,
-        "agent_instructions": RESEARCH_INSTRUCTIONS,
-        "result_template": RESULT_TEMPLATE,
-    }
-    with manifest_path.open("x", encoding="utf-8") as output:
-        output.write(json.dumps(manifest, indent=2, ensure_ascii=False, allow_nan=False) + "\n")
+    with tempfile.TemporaryDirectory(
+        prefix=".benchmark-export-", dir=args.output.parent
+    ) as staging:
+        staged_data = Path(staging) / args.output.name
+        staged_manifest = Path(staging) / manifest_path.name
+        with staged_data.open("x", encoding="utf-8") as output:
+            for task in rows():
+                counts["selected_pairs"] += 1
+                dataset_hash.update(str(task["input_fingerprint"]).encode())
+                shard = int(hashlib.sha256(task["task_id"].encode()).hexdigest(), 16)
+                if shard % args.shard_count != args.shard_index:
+                    continue
+                counts["shard_pairs"] += 1
+                if (task["task_id"], task["input_fingerprint"]) in completed:
+                    counts["skipped_completed"] += 1
+                    continue
+                output.write(json.dumps(task, ensure_ascii=False, allow_nan=False) + "\n")
+                counts["written"] += 1
+        manifest = {
+            "schema_version": SCHEMA_VERSION,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "catalog_values_are": "Unverified planner inputs, not measured benchmark evidence",
+            "pair_scope": "GPUS × MODELS; separate retired records and hosted-only APIs are excluded",
+            "configuration_scope": "One workload-feasible planner-sorted topology per artifact/backend/count/batch cell",
+            "queue": args.queue,
+            "screening_counts": screening_counts,
+            "screening_assumptions": grid.assumptions() if args.queue != "all" else None,
+            "selection": {
+                "hardware": sorted(set(args.hardware)) if args.hardware else None,
+                "models": sorted(set(args.model)) if args.model else None,
+                "visible_only": args.visible_only,
+                "include_estimated_artifacts": args.include_estimated_artifacts,
+                "shard_count": args.shard_count,
+                "shard_index": args.shard_index,
+                "exploratory_limit": args.exploratory_limit
+                if args.queue == "exploratory"
+                else None,
+            },
+            "selected_inputs_sha256": dataset_hash.hexdigest(),
+            "counts": counts,
+            "agent_instructions": RESEARCH_INSTRUCTIONS,
+            "result_template": RESULT_TEMPLATE,
+        }
+        with staged_manifest.open("x", encoding="utf-8") as output:
+            output.write(json.dumps(manifest, indent=2, ensure_ascii=False, allow_nan=False) + "\n")
+        published = []
+        try:
+            # Hard links publish complete files without overwriting another writer.
+            for source, destination in (
+                (staged_data, args.output),
+                (staged_manifest, manifest_path),
+            ):
+                if destination == args.output and destination.exists():
+                    # An uncatchable interruption may leave the complete data file
+                    # without its completion manifest. Resume only identical bytes.
+                    if not filecmp.cmp(source, destination, shallow=False):
+                        raise ValueError(
+                            "Output already exists with different content; choose a new path."
+                        )
+                    continue
+                os.link(source, destination)
+                published.append(destination)
+        except BaseException:
+            for destination in reversed(published):
+                destination.unlink()
+            raise
     print(json.dumps({**counts, "screening": screening_counts}), file=sys.stderr)
     return 0
 

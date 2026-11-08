@@ -880,6 +880,7 @@
           "out_len": 775,
           "rps": 3.8,
           "tps": 37684,
+          "unavailable_reason": null,
           "workload": "Chat",
           "x": 1,
           "y": 3.8
@@ -889,6 +890,7 @@
           "out_len": 775,
           "rps": 12.33,
           "tps": 122196,
+          "unavailable_reason": null,
           "workload": "Chat",
           "x": 4,
           "y": 12.33
@@ -898,6 +900,7 @@
           "out_len": 775,
           "rps": 27.98,
           "tps": 277388,
+          "unavailable_reason": null,
           "workload": "Chat",
           "x": 16,
           "y": 27.98
@@ -921,6 +924,7 @@
           "out_len": 977,
           "rps": 2.76,
           "tps": 62449,
+          "unavailable_reason": null,
           "workload": "RAG",
           "x": 1,
           "y": 2.76
@@ -930,6 +934,7 @@
           "out_len": 977,
           "rps": 7.76,
           "tps": 175784,
+          "unavailable_reason": null,
           "workload": "RAG",
           "x": 4,
           "y": 7.76
@@ -939,6 +944,7 @@
           "out_len": 977,
           "rps": 14.31,
           "tps": 324092,
+          "unavailable_reason": null,
           "workload": "RAG",
           "x": 16,
           "y": 14.31
@@ -962,6 +968,7 @@
           "out_len": 1813,
           "rps": 1.27,
           "tps": 67428,
+          "unavailable_reason": null,
           "workload": "Long doc",
           "x": 1,
           "y": 1.27
@@ -971,6 +978,7 @@
           "out_len": 1813,
           "rps": 2.92,
           "tps": 154585,
+          "unavailable_reason": null,
           "workload": "Long doc",
           "x": 4,
           "y": 2.92
@@ -980,6 +988,7 @@
           "out_len": 1813,
           "rps": 4.52,
           "tps": 239385,
+          "unavailable_reason": null,
           "workload": "Long doc",
           "x": 16,
           "y": 4.52
@@ -1003,6 +1012,7 @@
           "out_len": 1212,
           "rps": 2.37,
           "tps": 32124,
+          "unavailable_reason": null,
           "workload": "Code",
           "x": 1,
           "y": 2.37
@@ -1012,6 +1022,7 @@
           "out_len": 1212,
           "rps": 7.33,
           "tps": 99140,
+          "unavailable_reason": null,
           "workload": "Code",
           "x": 4,
           "y": 7.33
@@ -1021,6 +1032,7 @@
           "out_len": 1212,
           "rps": 15.47,
           "tps": 209273,
+          "unavailable_reason": null,
           "workload": "Code",
           "x": 16,
           "y": 15.47
@@ -1044,6 +1056,7 @@
           "out_len": 86,
           "rps": 34.25,
           "tps": 341500,
+          "unavailable_reason": null,
           "workload": "Classify",
           "x": 1,
           "y": 34.25
@@ -1053,6 +1066,7 @@
           "out_len": 86,
           "rps": 79.35,
           "tps": 791106,
+          "unavailable_reason": null,
           "workload": "Classify",
           "x": 4,
           "y": 79.35
@@ -1062,6 +1076,7 @@
           "out_len": 86,
           "rps": 79.35,
           "tps": 791109,
+          "unavailable_reason": null,
           "workload": "Classify",
           "x": 16,
           "y": 79.35

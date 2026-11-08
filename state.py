@@ -46,6 +46,7 @@ from data import (
     validate_runtime,
     validate_settings,
 )
+from data.hardware import MAX_GPU_POOLS
 from data.use_case_modalities import normalize_workload_kind
 
 _uid_counter = 0
@@ -319,6 +320,8 @@ class Project:
         else:
             self.scale_value = max(0.0, float(self.scale_value))
             self.tokens_day = scale_value_to_tokens(self.scale_value, self.scale_kind)
+        self.tokens_day = _bounded_project_value("tokens_day", self.tokens_day)
+        self.scale_value = tokens_to_scale_value(self.tokens_day, self.scale_kind)
         self.quality_floor = min(max(float(getattr(self, "quality_floor", 0.0)), 0.0), 1.0)
         self.day_shape = normalize_day_shape(getattr(self, "day_shape", DEFAULT_DAY_SHAPE))
         self.prefix_hit_rate = min(max(float(getattr(self, "prefix_hit_rate", 0.0)), 0.0), 1.0)
@@ -428,6 +431,35 @@ class ModelAssignmentProxy:
         return getattr(self._assignment, name)
 
 
+def normalize_assignment_spec(am: ModelAssignment) -> None:
+    model = MODELS.get(am.model_key)
+    allowed = {"off"}
+    if model is not None:
+        allowed.update(p.method for p in model.speculative_profiles)
+        if not model.is_asr_model and not model.is_embedding_model and not model.is_decision_model:
+            allowed.add("ngram")
+    am.spec_method = str(getattr(am, "spec_method", "off") or "off")
+    if am.spec_method not in allowed:
+        am.spec_method = "off"
+    try:
+        am.spec_k = min(max(int(getattr(am, "spec_k", 0)), 0), 32)
+    except (TypeError, ValueError):
+        am.spec_k = 0
+    if am.spec_method == "off":
+        am.spec_k = 0
+    elif am.spec_k > 0 and model is not None and am.spec_method != "ngram":
+        profile = next(
+            (p for p in model.speculative_profiles if p.method == am.spec_method),
+            None,
+        )
+        supported_ks = tuple(getattr(profile, "supported_ks", ()) or ())
+        if supported_ks and am.spec_k not in supported_ks:
+            # Imported scenarios may predate per-profile depth bounds.
+            # Preserve the method but migrate the stale manual value to
+            # Auto instead of silently snapping to a nearby depth.
+            am.spec_k = 0
+
+
 @dataclass
 class PlannerState:
     gpus: list[GpuPool] = field(default_factory=list)
@@ -531,36 +563,7 @@ class PlannerState:
         except (TypeError, ValueError):
             self.spec_acceptance = 0.0
         for am in self.models:
-            model = MODELS.get(am.model_key)
-            allowed = {"off"}
-            if model is not None:
-                allowed.update(p.method for p in model.speculative_profiles)
-                if (
-                    not model.is_asr_model
-                    and not model.is_embedding_model
-                    and not model.is_decision_model
-                ):
-                    allowed.add("ngram")
-            am.spec_method = str(getattr(am, "spec_method", "off") or "off")
-            if am.spec_method not in allowed:
-                am.spec_method = "off"
-            try:
-                am.spec_k = min(max(int(getattr(am, "spec_k", 0)), 0), 32)
-            except (TypeError, ValueError):
-                am.spec_k = 0
-            if am.spec_method == "off":
-                am.spec_k = 0
-            elif am.spec_k > 0 and model is not None and am.spec_method != "ngram":
-                profile = next(
-                    (p for p in model.speculative_profiles if p.method == am.spec_method),
-                    None,
-                )
-                supported_ks = tuple(getattr(profile, "supported_ks", ()) or ())
-                if supported_ks and am.spec_k not in supported_ks:
-                    # Imported scenarios may predate per-profile depth bounds.
-                    # Preserve the method but migrate the stale manual value to
-                    # Auto instead of silently snapping to a nearby depth.
-                    am.spec_k = 0
+            normalize_assignment_spec(am)
         if self.projects:
             _sync_aggregate_distribution(self)
 
@@ -810,8 +813,14 @@ def _bounded_def_value(field_name: str, value: float) -> float:
 def _coerce_requires(value: Any) -> tuple[str, ...]:
     if isinstance(value, str):
         values = (value,)
+    elif value is None:
+        values = ()
+    elif isinstance(value, (list, tuple, set, frozenset)) and all(
+        isinstance(c, str) for c in value
+    ):
+        values = value
     else:
-        values = value or ()
+        raise ValueError("requires must be a string or a collection of capability strings.")
     return tuple(c for c in values if c in ALLOWED_CAPABILITIES)
 
 
@@ -1132,6 +1141,11 @@ def set_project_field(state: PlannerState, project_uid: int, field_name: str, va
     numeric = float(value)
     if not math.isfinite(numeric):
         raise ValueError(f"{field_name} must be finite.")
+    if (
+        field_name not in {"tokens_day", "latent_jobs_day"}
+        and _find_use_case_def(state, proj.kind_key) is not None
+    ):
+        proj.kind_key = "custom"
     setattr(proj, field_name, min(max(numeric, lo), hi))
     if field_name == "tokens_day":
         proj.scale_value = tokens_to_scale_value(proj.tokens_day, getattr(proj, "scale_kind", {}))
@@ -1152,6 +1166,7 @@ def set_project_scale_value(state: PlannerState, project_uid: int, value: float)
     proj.tokens_day = _bounded_project_value(
         "tokens_day", scale_value_to_tokens(proj.scale_value, proj.scale_kind)
     )
+    proj.scale_value = tokens_to_scale_value(proj.tokens_day, proj.scale_kind)
     _sync_aggregate_distribution(state)
 
 
@@ -1160,6 +1175,7 @@ def set_project_dist_preset(state: PlannerState, project_uid: int, kind: str, pr
     proj = state.find_project(project_uid)
     if proj is None or preset_key not in DIST_PRESETS:
         return
+    proj.kind_key = "custom"
     if kind == "in":
         proj.in_pre = preset_key
     elif kind == "out":
@@ -1495,6 +1511,8 @@ def add_gpu(state: PlannerState, gpu_type: str, count: int = 8):
     if existing:
         existing.count = normalize_gpu_count(gpu_type, existing.count + count)
     else:
+        if len(state.gpus) >= MAX_GPU_POOLS:
+            raise ValueError(f"A scenario may contain at most {MAX_GPU_POOLS} GPU pools.")
         state.gpus.append(
             GpuPool(
                 _next_uid(),
@@ -1713,6 +1731,7 @@ def set_model_key(state: PlannerState, model_uid: int, model_key: str, precision
     am.model_key = model_key
     am.prec = precision
     am.artifact_id = default_artifact_id(model, precision)
+    normalize_assignment_spec(am)
     return am
 
 
@@ -1828,7 +1847,7 @@ def set_model_strat(
         # Optionally could set to default or keep current
         return
 
-    if getattr(model, "embedding_profile", None) is not None:
+    if model.is_decision_model or getattr(model, "embedding_profile", None) is not None:
         am.prefill_tp = tp
         am.prefill_pp = pp
         am.prefill_dp = dp

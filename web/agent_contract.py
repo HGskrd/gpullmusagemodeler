@@ -16,6 +16,7 @@ from data import (
     PRECISIONS,
     QUALITY_DOMAIN_LABELS,
 )
+from data.hardware import MAX_GPU_POOLS, MAX_GPUS_PER_POOL
 from state import ALLOWED_AUTO_MODEL_STRATEGIES, ALLOWED_CAPABILITIES, ALLOWED_PLOT_MODES
 
 
@@ -95,7 +96,7 @@ GPU_POOL = obj(
     {
         "uid": UID,
         "gpu_type": choices(GPUS),
-        "count": number(1, 100_000, integer=True),
+        "count": number(1, MAX_GPUS_PER_POOL, integer=True),
         "cost_per_gpu_hour": number(0, 1_000_000),
         "country": choices(COUNTRIES),
         "gpus_per_machine": number(0, 1024, integer=True),
@@ -118,7 +119,7 @@ MODEL_ASSIGNMENT = obj(
         "runtime_version": {"type": "string", "maxLength": 64},
         **dict.fromkeys(
             ("tp", "pp", "dp", "prefill_tp", "prefill_pp", "prefill_dp"),
-            number(1, 100_000, integer=True),
+            number(1, MAX_GPUS_PER_POOL, integer=True),
         ),
         "spec_method": TEXT,
         "spec_k": number(0, 32, integer=True),
@@ -126,7 +127,7 @@ MODEL_ASSIGNMENT = obj(
     ("model_key", "gpu_uid", "gpu_count", "prec"),
 )
 PANEL_FIELDS = {
-    "gpus": array(GPU_POOL, 64),
+    "gpus": array(GPU_POOL, MAX_GPU_POOLS),
     "models": array(MODEL_ASSIGNMENT, 512),
     "projects": array(PROJECT, 256),
     "use_case_defs": array(obj({**PROJECT_FIELDS, "key": TEXT, "scale_hint": TEXT}), 256),

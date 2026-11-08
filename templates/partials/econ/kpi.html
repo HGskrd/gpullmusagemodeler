@@ -1,6 +1,5 @@
-{% set native = state.projects|rejectattr("workload_kind", "equalto", "llm")|list %}
-{% set unit = "work units" if native else "tokens" %}
 {% set p = ep.p %}
+{% set unit = p.workload_unit %}
 {% set f = ep.f %}
 {% set cloud_on = state.cloud_enabled if state is defined and state else true %}
 {# Six headline numbers, no cards, then the day's demand value split by fate. #}
@@ -19,8 +18,8 @@
   {% else %}
   <div>
     <div class="kn-k">Served on your GPUs</div>
-    <div class="kn-v">{{ f.served_pct|round(0)|int }}%</div>
-    <div class="kn-s">of {{ f.total_tokens|fmt_num }} {{ unit }}/day · no cloud</div>
+    <div class="kn-v">{{ ((p.value_capture_rate * 100) if p.mixed_workload_units else f.served_pct)|round(0)|int }}%</div>
+    <div class="kn-s">{% if p.mixed_workload_units %}of equivalent demand value · mixed units{% else %}of {{ f.total_tokens|fmt_num }} {{ unit }}/day{% endif %} · no cloud</div>
   </div>
   {% endif %}
   <div>
