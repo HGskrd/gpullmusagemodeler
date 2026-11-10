@@ -126,6 +126,19 @@ class ModelCatalogTests(unittest.TestCase):
                 self.assertRegex(source.revision, r"^[0-9a-f]{40}$")
                 self.assertIn(source.revision, source.config_url)
 
+    def test_every_visible_model_has_pinned_sources_or_an_explicit_unpublished_reason(self):
+        from data.model_sources import UNPUBLISHED_MODEL_ARCHITECTURE_SOURCES
+
+        visible = {key for key, model in MODELS.items() if not model.hidden}
+        self.assertEqual(
+            visible - OPEN_MODEL_ARCHITECTURE_SOURCES.keys(),
+            UNPUBLISHED_MODEL_ARCHITECTURE_SOURCES.keys(),
+        )
+        for source in UNPUBLISHED_MODEL_ARCHITECTURE_SOURCES.values():
+            self.assertIsNone(source["revision"])
+            self.assertTrue(source["repository"].startswith("https://docs."))
+            self.assertIn("proxy", source["note"].replace("proxies", "proxy"))
+
     def test_aa_quality_transform_round_trips_and_does_not_flatten_catalog_scores(self):
         for score in (7.0, 32.0, 51.0, 54.0, 60.0):
             with self.subTest(score=score):

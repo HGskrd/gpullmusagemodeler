@@ -8,7 +8,10 @@
 <div class="panel">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;gap:8px;">
     <h2 style="margin:0;">Use cases{% if label %} · {{ label }}{% endif %}</h2>
-    <div class="flex" style="gap:6px;">
+    <div class="flex" style="gap:6px;flex-wrap:wrap;justify-content:flex-end;">
+      <button type="button" class="ghost sm" onclick="exportUseCases('{{ panel }}')" aria-label="Export use cases {{ panel }}">Export</button>
+      <button type="button" class="ghost sm" onclick="document.getElementById('use-cases-import-{{ panel }}').click()" aria-label="Import use cases {{ panel }}">Import</button>
+      <input type="file" id="use-cases-import-{{ panel }}" accept=".json,application/json" hidden onchange="importUseCases('{{ panel }}', this)">
       <a href="{{ url_for('use_cases.use_cases') }}" class="button-like sm" title="Edit use-case definitions: task mix, SLO, quality floor, prefix reuse">Edit definitions</a>
       <div class="picker-wrap">
         <button class="acc sm" data-picker="project" aria-expanded="false" onclick="togglePicker(this, '/picker/project?panel={{ panel }}')">+ Add use case</button>

@@ -2185,16 +2185,42 @@ document.addEventListener('change', e => {
   });
 });
 
-/* Pool machine shape: "Compare shapes" show/hide, kept across re-renders. */
+/* Pool comparisons load on expansion and refresh after scenario re-renders. */
 (function () {
   let open = false;
   try { open = localStorage.getItem('pmGrid') === '1'; } catch (e) { /* storage unavailable */ }
+  const load = async grid => {
+    if (grid.dataset.pmLoaded || grid.dataset.pmLoading) return;
+    grid.dataset.pmLoading = '1';
+    grid.textContent = 'Comparing machine shapes…';
+    try {
+      const response = await fetch(withTabUrl(grid.dataset.pmUrl), { headers: requestHeaders() });
+      if (!response.ok) throw new Error('Comparison unavailable.');
+      const html = await response.text();
+      if (!grid.isConnected) return;
+      grid.dataset.pmLoaded = '1';
+      replaceHtml(grid, html);
+    } catch (err) {
+      if (!grid.isConnected) return;
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.className = 'ghost sm';
+      retry.dataset.pmRetry = '';
+      retry.textContent = 'Comparison unavailable. Retry';
+      grid.replaceChildren(retry);
+    } finally {
+      delete grid.dataset.pmLoading;
+    }
+  };
   const apply = () => {
     document.documentElement.dataset.pmGrid = open ? '1' : '0';
     document.querySelectorAll('[data-pm-toggle]').forEach(b => b.setAttribute('aria-expanded', String(open)));
+    if (open) document.querySelectorAll('[data-pm-url]').forEach(load);
   };
   apply();
   document.addEventListener('click', e => {
+    const retry = e.target.closest('[data-pm-retry]');
+    if (retry) { load(retry.closest('[data-pm-url]')); return; }
     if (!e.target.closest('[data-pm-toggle]')) return;
     open = !open;
     try { localStorage.setItem('pmGrid', open ? '1' : '0'); } catch (err) { /* storage unavailable */ }

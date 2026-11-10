@@ -175,6 +175,30 @@ def _best_on(state: PlannerState, am: ModelAssignment, g: GPU) -> Optional[dict]
     return row if row["peak_tps"] > 0 else None
 
 
+def machine_controls(state: PlannerState, gp: GpuPool) -> dict:
+    """Cheap control metadata; shape comparisons are calculated only on demand."""
+    base = pool_gpu(gp.gpu_type)
+    cur = gp.gpu
+    sizes = sorted({s for s in SHAPE_SIZES if s <= gp.count} | {base.node_size, cur.node_size})
+    sizes = [s for s in sizes if s <= max(gp.count, cur.node_size)]
+    return {
+        "sizes": sizes,
+        "networks": sorted(set(NETWORK_GBPS) | {cur.inter_node_bw * 8 / 1e9}),
+        "default_size": base.node_size,
+        "default_net": base.inter_node_bw * 8 / 1e9,
+        "cur_size": cur.node_size,
+        "cur_net": cur.inter_node_bw * 8 / 1e9,
+        "has_models": any(
+            am.gpu_uid == gp.uid
+            and am.gpu_count > 0
+            and not (
+                am.model.is_embedding_model or am.model.is_asr_model or am.model.is_decision_model
+            )
+            for am in state.models
+        ),
+    }
+
+
 def machine_options(state: PlannerState, gp: GpuPool) -> dict:
     """Machine shapes for one pool and what each does to its deployed models.
 
@@ -185,9 +209,9 @@ def machine_options(state: PlannerState, gp: GpuPool) -> dict:
     """
     base = pool_gpu(gp.gpu_type)
     cur = gp.gpu
-    sizes = sorted({s for s in SHAPE_SIZES if s <= gp.count} | {base.node_size, cur.node_size})
-    sizes = [s for s in sizes if s <= max(gp.count, cur.node_size)]
-    networks = sorted(set(NETWORK_GBPS) | {cur.inter_node_bw * 8 / 1e9})
+    controls = machine_controls(state, gp)
+    sizes = controls["sizes"]
+    networks = controls["networks"]
     models = [am for am in state.models if am.gpu_uid == gp.uid and am.gpu_count > 0]
     llms = [
         am

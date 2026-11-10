@@ -100,7 +100,7 @@ class DerivedResponseCacheTests(unittest.TestCase):
             self.assertEqual(first.data, second.data)
             self.assertEqual(compute.call_count, 1)
 
-            self._state().projection_demand_level = 0.72
+            self._state().company_size = 120
             third = self.client.get("/econ/swaps?panel=A&view=table", headers=self.headers)
 
             self.assertEqual(third.status_code, 200)

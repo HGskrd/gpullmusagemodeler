@@ -24,6 +24,26 @@ Discover valid identifiers from `GET /api/v1/catalog` before constructing your
 own request. GPU and model keys are case-sensitive. The catalog describes the
 installed version; it is not a live pricing or availability feed.
 
+Each visible model has a `source` and `source_status`. `pinned` identifies an
+immutable official release reference; the source note states when it was captured
+and whether it is a provenance backfill rather than a geometry audit. `unpublished`
+identifies a hosted model with no public architecture checkpoint: its source links
+the vendor documentation, `revision` is null, and the note labels local capacity as
+a proxy. These references do not turn closed-form estimates into benchmarks.
+
+Legacy night-batching settings (`projection_night_batching`,
+`projection_night_discount`, `projection_batch_eligible`, `projection_elasticity`
+and `projection_demand_level`) are accepted and ignored when importing old v1/v2
+scenarios or replaying them through this API. They never affected engine results
+and are omitted from new exports/defaults. The OpenAPI input fields are marked
+`deprecated`; per-use-case batch eligibility and day shapes remain active.
+
+The browser's `/model/add-many` and `/model/prec` form routes remain as compatibility
+adapters; new programmatic clients should use this versioned JSON API. Use-case
+Export/Import controls exchange the active panel's workload set. The User guide
+remains available from the navigation bar.
+
+
 ## Endpoints
 
 | Method | Path | Result |

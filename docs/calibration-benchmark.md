@@ -1,9 +1,9 @@
 # Calibration benchmark specification
 
-Status: proposal, written 2026-10-20 against commit `3820dd6`. Line numbers
-below refer to that commit and will drift; the function names are the stable
-reference. Nothing here has been measured yet. Every planner number today
-comes from the hand-set priors in `state.py:401-424`, so it is a closed-form
+Status: proposal, written 2026-10-20; code references refreshed 2026-11-10.
+References use module and symbol names so edits do not invalidate them.
+Nothing here has been measured yet. Every planner number today comes from
+the hand-set priors in `state.PlannerState`, so it is a closed-form
 estimate, not a benchmark result (AGENTS.md, "Catalog and planner correctness").
 
 This document specifies:
@@ -28,80 +28,82 @@ version under test before the harness is written.
 
 ### 1.1 Where the knobs live
 
-- Defaults: `PlannerState` fields, `state.py:401-424`.
-- They are packed into two `EfficiencyParams` objects (`calc.py:113-123`) by
-  `PlannerState.prefill_efficiency` (`state.py:504`) and
-  `PlannerState.decode_efficiency` (`state.py:517`). `kv_slack`,
+- Defaults: `PlannerState` fields, `state.py::PlannerState`.
+- They are packed into two `EfficiencyParams` objects (`calc.py`) by
+  `PlannerState.prefill_efficiency` (`state.py::prefill_efficiency`) and
+  `PlannerState.decode_efficiency` (`state.py::decode_efficiency`). `kv_slack`,
   `moe_imbalance` and `pd_interference` go into **both** objects;
   `sched_budget` goes into the decode object only.
 - UI bounds: `EFFICIENCY_SETTING_BOUNDS` and `INTEGER_SETTING_BOUNDS`
-  (`web/config.py:95-112`), enforced in `web/planner.py:425-450`. Scenario
-  import uses its own, wider bounds (`scenarios.py:474-496`). Fits must use the
+  (`web/config.py`), enforced in `web/planner.py`. Scenario
+  import uses its own, wider bounds (`scenarios.py::deserialize_planner_state`). Fits must use the
   `web/config.py` bounds, because the UI cannot represent a value outside them.
 - Scope: the knobs are **global per planner state**. Every assignment, model
   and GPU pool in a scenario shares one `EfficiencyParams` pair (see the
-  callers in `placement.py:128-199`, `engine/economics.py:317`,
-  `presentation/charts.py:123-319`). Per-(model, GPU) fitted values therefore
+  callers in `placement.py::_preferred_strategy`, `engine/economics.py::_build_model_supply`,
+  `presentation/charts.py::chart_embedding_quality`). Per-(model, GPU) fitted values therefore
   need a code change before the planner can use them. See section 5.6.
 
 ### 1.2 The planner equations the fit is compared against
 
 Decode step time, one replica, `pr` running sequences
-(`_decode_step_time`, `calc.py:1475-1583`; spec terms omitted):
+(`_decode_step_time`, `calc.py::_decode_step_time`; spec terms omitted):
 
 ```
 mb      = ceil(pr / pp)
-wt      = (W_active * f_pp / tp) / (BW * bw_eff)                      # calc.py:1500
-kv_time = mb * KVread(avg_seq) / (BW * bw_eff)                         # calc.py:1515
-ct      = compute_seconds(2*P_active*mb*f_pp, attn) / (tp * comp_eff)  # calc.py:1528
-stage   = (max(wt + kv_time, ct) + comm_tp) * pp + comm_pp             # calc.py:1547
-step    = stage * (1 + overhead + paged_oh_eff) * moe_mult             # calc.py:1582-1583
+wt      = (W_active * f_pp / tp) / (BW * bw_eff)                      # calc.py::_decode_step_time
+kv_time = mb * KVread(avg_seq) / (BW * bw_eff)                         # calc.py::_decode_step_time
+ct      = compute_seconds(2*P_active*mb*f_pp, attn) / (tp * comp_eff)  # calc.py::_decode_step_time
+stage   = (max(wt + kv_time, ct) + comm_tp) * pp + comm_pp             # calc.py::_decode_step_time
+step    = stage * (1 + overhead + paged_oh_eff) * moe_mult             # calc.py::_decode_step_time
 ```
 
-- `BW` is `GPU.effective_bw` (`data/hardware.py:49`): `planner_bw` if set,
+- `BW` is `GPU.effective_bw` (`data/hardware.py::effective_bw`): `planner_bw` if set,
   else the published `bw`.
-- `avg_seq = avg_in + avg_out/2` (`calc.py:1638`), the mean resident context
+- `avg_seq = avg_in + avg_out/2` (`calc.py::_compute_decode_core`), the mean resident context
   of a sequence over its lifetime.
-- `comm_tp` is `_dense_tp_oh` (`calc.py:1413-1426`): two ring all-reduces per
-  layer at `scale_up_collective_bw * bw_eff`, plus 3 µs latency each, scaled
-  by `(1 - ar_overlap)`. The memory-bandwidth efficiency is also applied to the
+- `comm_tp` is `_dense_tp_oh` (`calc.py::_dense_tp_oh`): two ring all-reduces per
+  layer at `calc._eff_collective_bw(tp, g) * bw_eff`, plus 3 µs latency each,
+  scaled by `(1 - ar_overlap)`. The bandwidth is the GPU’s scale-up collective
+  bandwidth within one machine and the pool’s `inter_node_bw` across machines.
+  The memory-bandwidth efficiency is also applied to the
   interconnect bandwidth. That is a modelling simplification, and it couples
   `bw_eff` and `ar_overlap`.
 - `moe_mult = moe_imbalance` for MoE models, else 1 (`_moe_tail_multiplier`,
-  `calc.py:1467`).
+  `calc.py::_moe_tail_multiplier`).
 - Decode throughput is `pr * tau / step` and per-token latency is
-  `step / tau` (`calc.py:1659-1664`). The returned `DecodeResult.lat` and
+  `step / tau` (`calc.py::_compute_decode_core`). The returned `DecodeResult.lat` and
   `step_ms` are rounded to 0.01 ms, and `tps` to an integer
-  (`calc.py:1671-1678`). The fitter must call the unrounded internals.
+  (`calc.py::_compute_decode_core`). The fitter must call the unrounded internals.
 
 Prefill service time for `pr` prompts of `seq_len` uncached tokens
-(`compute_prefill`, `calc.py:1871-1957`):
+(`compute_prefill`, `calc.py::compute_prefill`):
 
 ```
-ct   = compute_seconds(ffn, attn, "prefill") / (tp * comp_eff)            # calc.py:1938
-mt   = (W_active_prefill * f_pp / tp) / (BW * bw_eff)                     # calc.py:1945
-base = max(ct, mt) * (1 + (pp-1)/pr)                                       # calc.py:1948
-t    = (base + comm_total) * (1 + 1.3*overhead + fixed_paged_oh(L, 0.35))  # calc.py:1949
+ct   = compute_seconds(ffn, attn, "prefill") / (tp * comp_eff)            # calc.py::compute_prefill
+mt   = (W_active_prefill * f_pp / tp) / (BW * bw_eff)                     # calc.py::compute_prefill
+base = max(ct, mt) * (1 + (pp-1)/pr)                                       # calc.py::compute_prefill
+t    = (base + comm_total) * (1 + 1.3*overhead + fixed_paged_oh(L, 0.35))  # calc.py::compute_prefill
 t   *= moe_mult
 ```
 
 `t` is the makespan of the whole prompt batch. The planner reports it as TTFT,
 which is the last user's first token, a p100-style number
-(`calc.py:2431-2434`). Prefill has no chunk-size term: vLLM's
+(`calc.py::compute_user_experience`). Prefill has no chunk-size term: vLLM's
 `--max-num-batched-tokens` chunking is not modelled.
 
-Memory (`compute_memory`, `calc.py:1274-1307`):
+Memory (`compute_memory`, `calc.py::compute_memory`):
 
 ```
 requested   = GPU.mem * mu                                     # GPU.mem is decimal bytes, e.g. 80e9
-non_kv      = weights_per_gpu + profiled_non_kv_gb*1e9*(1 + 0.12*log2(tp))   # calc.py:1207-1212
+non_kv      = weights_per_gpu + profiled_non_kv_gb*1e9*(1 + 0.12*log2(tp))   # calc.py::profiled_non_kv_bytes
 kv_reserved = requested - non_kv
-kv_budget   = kv_reserved * (1 - kv_slack)                     # calc.py:1299
-max_slots   = min(floor(kv_budget / KV(avg_seq)), sched_budget)  # calc.py:1644-1646
+kv_budget   = kv_reserved * (1 - kv_slack)                     # calc.py::compute_memory
+max_slots   = min(floor(kv_budget / KV(avg_seq)), sched_budget)  # calc.py::_compute_decode_core
 ```
 
-Mixed prefill and decode (`compute_data`, `calc.py:2235-2307`;
-`compute_user_experience`, `calc.py:2372-2447`):
+Mixed prefill and decode (`compute_data`, `calc.py::compute_data`;
+`compute_user_experience`, `calc.py::compute_user_experience`):
 
 ```
 total = max(t_pf, t_dec) + (t_pf + t_dec - max(t_pf, t_dec)) * pd_interference
@@ -110,55 +112,55 @@ rps   = bs / total
 
 `pd_interference = 0` means prefill fully overlaps decode; `1` means they run
 serially. Note that `compute_data` uses `fixed_paged_oh(in+out/2)`
-(`calc.py:2292`), while `compute_decode` uses the distribution-aware
-`decode_paged_oh` (`calc.py:1183-1191`). The same fixed-length workload
+(`calc.py::compute_data`), while `compute_decode` uses the distribution-aware
+`decode_paged_oh` (`calc.py::decode_paged_oh`). The same fixed-length workload
 therefore gets slightly different paged overhead on the two paths. The fitter
 must use the path that matches the view being calibrated.
 
 Prefix reuse: `effective_prefill_length = ceil(L * (1 - hit_rate))`
-(`calc.py:1199-1204`). Compute is reduced; KV residency is still charged at
-the full prompt length (`calc.py:1897-1902`).
+(`calc.py::effective_prefill_length`). Compute is reduced; KV residency is still charged at
+the full prompt length (`calc.py::compute_prefill`).
 
 Speculative decoding: `tau = (1 - α^(k+1)) / (1 - α)` (`spec_acceptance_len`,
-`calc.py:153`), corrected for finite outputs by `spec_finite_output_tau`
-(`calc.py:167`). A non-zero global `spec_acceptance` overrides the profile's
-`acceptance_alpha` and `acceptance_alpha_by_k` (`calc.py:212-214`).
+`calc.py::spec_acceptance_len`), corrected for finite outputs by `spec_finite_output_tau`
+(`calc.py::spec_finite_output_tau`). A non-zero global `spec_acceptance` overrides the profile's
+`acceptance_alpha` and `acceptance_alpha_by_k` (`calc.py::resolve_spec_runtime`).
 
 ### 1.3 Knob table
 
 | Knob (state field) | Default | UI bound | Applied at | Physical meaning | Identifying measurement |
 |---|---|---|---|---|---|
-| `mu` | 0.90 | n/a (scenario 0.01-1.0) | `calc.py:1287` | vLLM `--gpu-memory-utilization` | **Set, not fit.** Copy the configured flag value. |
-| `profiled_non_kv_gb` | 4.0 | n/a (scenario 0-4096) | `calc.py:1207-1212`, `1294` | Activation peak, CUDA graphs, NCCL buffers, allocator and non-torch memory, per GPU at TP=1 | vLLM startup log: available KV memory vs. `mu * total` minus weights (section 1.4.1). |
-| `kv_slack` | 0.02 | 0.00-0.10 | `calc.py:1299` | KV that is reserved but unusable (block rounding, fragmentation, watermark) | Max concurrency reached without preemption vs. reported KV token capacity (1.4.1). |
-| `decode_sched_budget` | 16384 | 2048-65536 (int) | `calc.py:1645-1646` | Cap on running sequences per replica | **Set, not fit.** Maps to `--max-num-seqs` [check version]. See open question Q1. |
-| `decode_bw_eff` | 0.80 | 0.50-1.00 | `calc.py:1500`, `1515`, `1418` | Achieved fraction of `effective_bw` in decode GEMV, KV reads, and (by coupling) collectives | Low-concurrency decode, short context, TP=1, dense (1.4.2). |
-| `decode_comp_eff` | 0.75 | 0.50-1.00 | `calc.py:1528-1530` | Achieved fraction of tensor peak in decode | High-concurrency decode past the roofline knee (1.4.2). |
-| `decode_overhead` | 0.08 | 0.00-0.25 | `calc.py:1582` | Proportional non-GPU-work tax per step: launch, scheduling, sampling, gaps | GPU busy fraction from a profiler trace; otherwise held at the prior (1.4.2, gauge). |
-| `decode_paged_oh` | 0.10 | 0.00-0.25 | `calc.py:1183-1191`, `1582` | Paged-attention indirection cost, scaled by `_paged_kv_pressure` (0.45-2.0) | Residual vs. context length and length heterogeneity at fixed batch (1.4.2). |
-| `decode_ar_overlap` | 0.30 | 0.00-0.80 | `calc.py:1426` | Fraction of TP all-reduce hidden under compute | TP>1 decode minus the TP=1-fitted prediction (1.4.4). |
-| `prefill_bw_eff` | 0.80 | 0.50-1.00 | `calc.py:1945` | Weight-streaming efficiency in prefill | Weight-bound prefill: 1 request, ≤256 tokens (1.4.3). |
-| `prefill_comp_eff` | 0.75 | 0.50-1.00 | `calc.py:1938` | Achieved fraction of tensor peak in prefill | Long-prompt prefill, 4k-16k tokens (1.4.3). |
-| `prefill_overhead` | 0.08 | 0.00-0.25 | `calc.py:1949` (×1.3) | Proportional prefill tax | Profiler trace; otherwise prior (gauge). |
-| `prefill_paged_oh` | 0.10 | 0.00-0.25 | `calc.py:1194-1196`, `1949` (×0.35) | Paged-KV write overhead in prefill | Weakly identified; fit only if residuals trend with L (1.4.3). |
-| `prefill_ar_overlap` | 0.30 | 0.00-0.80 | `calc.py:1426` via `communication_breakdown` | All-reduce overlap in prefill | TP>1 long-prompt prefill (1.4.4). |
-| `moe_imbalance` | 1.15 | 1.00-2.00 | `calc.py:1467`, `1583`, `1950` | Expert load-imbalance tail multiplier | MoE runs after the dense knobs are fixed on the same GPU, precision and runtime (1.4.5). |
-| `pd_interference` | 0.0 | 0.00-1.00 | `calc.py:2299-2301`, `2437-2439` | Serialisation fraction between prefill and decode | Mixed open-loop run vs. isolated prefill and decode times (1.4.6). |
-| `spec_acceptance` | 0.0 (use profile) | 0.00-0.99 | `calc.py:214` | Per-token acceptance α of the chain model | vLLM spec-decode acceptance counters (1.4.7). |
-| `prefix_hit_rate` (per use case, `data/use_cases.py:523`) | 0.10-0.50 | 0-1 | `calc.py:1199` | Fraction of prompt tokens served from the prefix cache | `prefix_cache_hits / prefix_cache_queries` from production-like traffic (1.4.8). |
+| `mu` | 0.90 | n/a (scenario 0.01-1.0) | `calc.py::compute_memory` | vLLM `--gpu-memory-utilization` | **Set, not fit.** Copy the configured flag value. |
+| `profiled_non_kv_gb` | 4.0 | n/a (scenario 0-4096) | `calc.py::profiled_non_kv_bytes` | Activation peak, CUDA graphs, NCCL buffers, allocator and non-torch memory, per GPU at TP=1 | vLLM startup log: available KV memory vs. `mu * total` minus weights (section 1.4.1). |
+| `kv_slack` | 0.02 | 0.00-0.10 | `calc.py::compute_memory` | KV that is reserved but unusable (block rounding, fragmentation, watermark) | Max concurrency reached without preemption vs. reported KV token capacity (1.4.1). |
+| `decode_sched_budget` | 16384 | 2048-65536 (int) | `calc.py::_compute_decode_core` | Cap on running sequences per replica | **Set, not fit.** Maps to `--max-num-seqs` [check version]. See open question Q1. |
+| `decode_bw_eff` | 0.80 | 0.50-1.00 | `calc.py::_decode_step_time`, `1418` | Achieved fraction of `effective_bw` in decode GEMV, KV reads, and (by coupling) collectives | Low-concurrency decode, short context, TP=1, dense (1.4.2). |
+| `decode_comp_eff` | 0.75 | 0.50-1.00 | `calc.py::_decode_step_time` | Achieved fraction of tensor peak in decode | High-concurrency decode past the roofline knee (1.4.2). |
+| `decode_overhead` | 0.08 | 0.00-0.25 | `calc.py::_decode_step_time` | Proportional non-GPU-work tax per step: launch, scheduling, sampling, gaps | GPU busy fraction from a profiler trace; otherwise held at the prior (1.4.2, gauge). |
+| `decode_paged_oh` | 0.10 | 0.00-0.25 | `calc.py::decode_paged_oh` | Paged-attention indirection cost, scaled by `_paged_kv_pressure` (0.45-2.0) | Residual vs. context length and length heterogeneity at fixed batch (1.4.2). |
+| `decode_ar_overlap` | 0.30 | 0.00-0.80 | `calc.py::_dense_tp_oh` | Fraction of TP all-reduce hidden under compute | TP>1 decode minus the TP=1-fitted prediction (1.4.4). |
+| `prefill_bw_eff` | 0.80 | 0.50-1.00 | `calc.py::compute_prefill` | Weight-streaming efficiency in prefill | Weight-bound prefill: 1 request, ≤256 tokens (1.4.3). |
+| `prefill_comp_eff` | 0.75 | 0.50-1.00 | `calc.py::compute_prefill` | Achieved fraction of tensor peak in prefill | Long-prompt prefill, 4k-16k tokens (1.4.3). |
+| `prefill_overhead` | 0.08 | 0.00-0.25 | `calc.py::compute_prefill` (×1.3) | Proportional prefill tax | Profiler trace; otherwise prior (gauge). |
+| `prefill_paged_oh` | 0.10 | 0.00-0.25 | `calc.py::fixed_paged_oh` (×0.35) | Paged-KV write overhead in prefill | Weakly identified; fit only if residuals trend with L (1.4.3). |
+| `prefill_ar_overlap` | 0.30 | 0.00-0.80 | `calc.py::_dense_tp_oh` via `communication_breakdown` | All-reduce overlap in prefill | TP>1 long-prompt prefill (1.4.4). |
+| `moe_imbalance` | 1.15 | 1.00-2.00 | `calc.py::_moe_tail_multiplier`, `1950` | Expert load-imbalance tail multiplier | MoE runs after the dense knobs are fixed on the same GPU, precision and runtime (1.4.5). |
+| `pd_interference` | 0.0 | 0.00-1.00 | `calc.py::compute_data` | Serialisation fraction between prefill and decode | Mixed open-loop run vs. isolated prefill and decode times (1.4.6). |
+| `spec_acceptance` | 0.0 (use profile) | 0.00-0.99 | `calc.py::resolve_spec_runtime` | Per-token acceptance α of the chain model | vLLM spec-decode acceptance counters (1.4.7). |
+| `prefix_hit_rate` (per use case, `data/use_cases.py`) | 0.10-0.50 | 0-1 | `calc.py::effective_prefill_length` | Fraction of prompt tokens served from the prefix cache | `prefix_cache_hits / prefix_cache_queries` from production-like traffic (1.4.8). |
 
 ### 1.4 Identification, knob by knob
 
 #### 1.4.1 Memory: `profiled_non_kv_gb`, `kv_slack`
 
 Gate check before any fitting (a catalog check, not a knob): compare the
-planner's KV bytes per token, `MemoryResult.kv_per_token` (`calc.py:1306`),
+planner's KV bytes per token, `MemoryResult.kv_per_token` (`calc.py::compute_memory`),
 with vLLM's figure, `available_kv_bytes / kv_capacity_tokens`. vLLM logs both
 at startup ("Available KV cache memory: X GiB" and "GPU KV cache size: N
 tokens") [check version]. If they disagree by more than 2%, the model geometry,
 KV dtype or artifact is wrong in the catalog. Fix that first, because no knob
 should absorb a geometry error. Do the same for weights: compare the planner's
-`weights` (`calc.py:1289`) with "Model loading took X GiB" [check version].
+`weights` (`calc.py::compute_memory`) with "Model loading took X GiB" [check version].
 
 `profiled_non_kv_gb`. vLLM computes
 `kv_reserved_measured = mu * total_device_memory - (weights + peak_activation + non_torch + cudagraph)`.
@@ -172,7 +174,7 @@ Two unit traps:
 
 - vLLM logs GiB (2^30). Convert to bytes.
 - `GPU.mem` is the catalog's decimal nominal capacity (H100: `80e9`,
-  `data/hardware.py:92`). The physical device reports its own total
+  `data/hardware.py`). The physical device reports its own total
   (`torch.cuda.mem_get_info()[1]`, roughly 85.0e9 bytes on an H100 80GB
   [check on hardware]).
 
@@ -198,7 +200,7 @@ kv_slack = 1 - (C_max * KV_planner(in + out)) / kv_reserved_measured
 
 Peak residency (in + out) is used here, not `avg_seq`. A synchronized cohort
 peaks at in + out, and the planner's slot count is an average-occupancy figure
-(`calc.py:1632-1637`). Report both `C_max` and the planner's
+(`calc.py::_compute_decode_core`). Report both `C_max` and the planner's
 `max_slots(avg_seq)`. The difference is a modelling choice, not slack. It is
 inference that block rounding dominates the slack: with block_size 16 and
 4608-token sequences, rounding alone is under 0.4%.
@@ -231,7 +233,7 @@ step at `avg_seq = L_in + L_out/2`. This is exact for the linear model.
 **Gauge problem.** Scaling `bw_eff` and `comp_eff` by the same factor `s`
 while setting `(1 + overhead + p) → s·(1 + overhead + p)` leaves every
 decode prediction unchanged. The only exceptions are the fixed spec
-constants (`calc.py:105-107`) and the 3 µs collective latency. Throughput and
+constants (`calc.py`) and the 3 µs collective latency. Throughput and
 latency data alone therefore **cannot** separate `overhead` from the two
 efficiencies. Resolve it in one of two ways:
 
@@ -248,7 +250,7 @@ which the planner does not model: it only has proportional overhead. Report
 that intercept as a structural gap instead of folding it into `overhead`.
 
 `decode_paged_oh`: its effective value is `paged_oh * _paged_kv_pressure(...)`
-(`calc.py:1176-1181`). The pressure term varies with mean context and length
+(`calc.py::_paged_kv_pressure`). The pressure term varies with mean context and length
 heterogeneity between 0.45 and 2.0. With the efficiencies fixed, fit
 `paged_oh` from the residual trend across L_in ∈ {256, 4096, 16384}, plus one
 mixed-length run (section 2, S-dec-mix). If the trend is not significant,
@@ -266,10 +268,10 @@ validation-only.
 - `prefill_bw_eff`: N = 1, L ∈ {32, 128, 256}. Here `mt > ct` (planner
   inference for BF16 8B on H100: mt ≈ 6 ms, ct ≈ 1.4 ms at 64 tokens).
 - `prefill_comp_eff`: N ∈ {1, 4}, L ∈ {4096, 16384}. Here `ct` dominates.
-  Attention FLOPs are charged at `g.bf16` (`calc.py:1131-1132`), so long-L
+  Attention FLOPs are charged at `g.bf16` (`calc.py::operator_compute_seconds`), so long-L
   points also test the attention-rate assumption.
 - The overhead gauge is the same as in decode, with factor 1.3
-  (`calc.py:1949`). Use a profiler trace or the prior.
+  (`calc.py::compute_prefill`). Use a profiler trace or the prior.
 - `prefill_paged_oh` enters at ×0.35 times pressure. Fit it only when residuals
   trend with L after the efficiencies are fixed. Expect "not identified".
 
@@ -285,11 +287,14 @@ measured_step = stage_noncomm(tp) * (1+oh+p) + comm_raw(tp) * (1 - ar_overlap) *
 This is linear in `ar_overlap`, so it has a closed-form least-squares
 solution. Decode uses the C = 1-64 points; prefill uses L = 4096. If the model
 does not fit at TP=1, use the smallest TP that fits for the base fit, and only
-larger TPs for overlap. Cross-node TP uses the fixed 25 GB/s
-`INTER_NODE_COLLECTIVE_BW` (`calc.py:30`). That is out of scope for the
-minimum matrix.
+larger TPs for overlap. Cross-node TP uses the pool GPU’s `inter_node_bw`
+through `calc._eff_collective_bw`. `state.pool_gpu` applies the network setting
+in Gb/s per GPU, converts it to bytes/s, and caps it at the larger of the
+catalog peer-collective bandwidth and default inter-node bandwidth. The default
+is hardware-specific (often 25 GB/s = 200 Gb/s). Cross-node calibration must
+record the machine size and network setting; it is outside the minimum matrix.
 
-Because `bw_eff` multiplies the interconnect bandwidth (`calc.py:1418`), a
+Because `bw_eff` multiplies the interconnect bandwidth (`calc.py::_dense_tp_oh`), a
 fitted overlap is conditional on the fitted `bw_eff`. Store it with that
 dependency recorded.
 
@@ -302,17 +307,17 @@ the planner prediction with `moe_imbalance = 1`, and set
 separately, even though the planner has one shared knob.
 
 "Matched active parameters" is not required. The planner already uses active
-weight bytes (`calc.py:1471`). Pick a dense model with similar active params
+weight bytes (`calc.py::_active_weight_bytes`). Pick a dense model with similar active params
 only to keep the regime (weight-bound vs. compute-bound) comparable.
 
 Expected structural gap (inference): decode weight bytes are
-batch-independent (`Model.active_weight_bytes`, `data/model_class.py:663`).
+batch-independent (`Model.active_weight_bytes`, `data/model_class.py::active_weight_bytes`).
 Real MoE decode reads more distinct experts as batch grows, up to all experts.
 The fitted ratio will therefore rise with C. Report the ratio per C bucket. If
 it spans more than 1.3× across C, the single multiplier is the wrong shape;
 document that and do not tune it away.
 
-Expert parallel is flagged as unmodelled (`calc.py:1458`). Run MoE without
+Expert parallel is flagged as unmodelled (`calc.py::communication_breakdown`). Run MoE without
 `--enable-expert-parallel` for the fit, or record that it was on and treat
 the run as validation-only.
 
@@ -353,7 +358,7 @@ GPU. Store it per (model, spec method, k, dataset class, temperature) as
 `acceptance_alpha_by_k`-style data. The global `spec_acceptance` override is
 a single number and the wrong place for it. Measure throughput speedup at
 C ∈ {1, 8, 32, 128} as a validation of the whole spec cost model
-(`calc.py:1548-1581`), not as a fit target.
+(`calc.py::_decode_step_time`), not as a fit target.
 
 #### 1.4.8 Prefix reuse: `prefix_hit_rate`
 
@@ -367,7 +372,7 @@ hit_rate = Δhits / Δqueries
 ```
 
 Compute it from production or replayed traffic per use case, and use it to
-replace `USE_CASE_PREFIX_HIT_RATES` (`data/use_cases.py:523`). The benchmark
+replace `USE_CASE_PREFIX_HIT_RATES` (`data/use_cases.py`). The benchmark
 only validates `effective_prefill_length`: with synthetic prefix-share
 s ∈ {0, 0.5, 0.9}, the measured prefill time should match the planner's time
 at `ceil(L·(1-hit))`, with `hit` taken from the counters. It should not be
@@ -392,7 +397,7 @@ fallbacks (section 5.5).
 | D2 | `l8`, an FP8 artifact (or `estimate:fp8`), TP=1 | Precision-specific efficiencies | Yes, if FP8 is served |
 | D3 | `llama33-70b`, FP8 or BF16, TP ∈ {2,4,8} | `ar_overlap`, TP scaling of non-KV memory | Yes, if multi-GPU TP is planned |
 | M1 | an MoE such as `q35` or `mx87` at the same precision as D1/D2 | `moe_imbalance` | Yes, if MoE is planned |
-| S1 | `l8` with its EAGLE-3 profile (`data/models_text.py:79-89`) | α, spec cost validation | Yes, if spec decode is planned |
+| S1 | `l8` with its EAGLE-3 profile (`data/models_text.py`) | α, spec cost validation | Yes, if spec decode is planned |
 | P1 | D3 model at PP=2 | PP bubble and boundary validation | Optional |
 | R1 | D1 with DP=2 | Replica independence validation | Optional |
 
@@ -402,9 +407,9 @@ invalidates fits (section 5.5).
 ### 2.3 Sweeps per cell
 
 Input and output lengths are chosen from `INPUT_BUCKETS` / `OUTPUT_BUCKETS`
-(`data/presets.py:13-30`). That way a one-hot distribution reproduces the
+(`data/presets.py`). That way a one-hot distribution reproduces the
 exact planner input, because `avg_dist` returns the bucket length
-(`calc.py:1139-1141`).
+(`calc.py::avg_dist`).
 
 | Sweep | Cells | Variables | Fits / validates | Required |
 |---|---|---|---|---|
@@ -439,7 +444,7 @@ an estimate, not a measurement.
 - `ignore_eos`, `min_tokens`, temperature, top_p, and the dataset id (with a
   hash of the prompt file).
 - Prefix-share setting and prefix length; whether prompts were unique per run.
-- Spec config: method (one of `SPEC_METHODS`, `data/model_class.py:90`), k,
+- Spec config: method (one of `SPEC_METHODS`, `data/model_class.py`), k,
   and draft artifact.
 - Isolation mode: `cohort_decode`, `prefill_only`, `mixed_closed`,
   `mixed_poisson`, `capacity_probe`, `startup_only`.
@@ -530,7 +535,7 @@ Sample every 500 ms. Use `nvidia-smi
 `DCGM_FI_PROF_PIPE_TENSOR_ACTIVE`) [check version]. `DRAM_ACTIVE` in the
 decode window is an independent check on `decode_bw_eff`. Energy per run in
 joules feeds the CO2 math, which uses `tdp_watts` today
-(`data/hardware.py:27`).
+(`data/hardware.py::GPU`).
 
 ---
 
@@ -549,16 +554,16 @@ joules feeds the CO2 math, which uses `tdp_watts` today
 - Timestamps are ISO 8601 UTC.
 - Keys must match planner catalog keys exactly:
   - `model_key` is in `MODELS` (`data/models.py`).
-  - `gpu_key` is in `GPUS` (`data/hardware.py:84`).
+  - `gpu_key` is in `GPUS` (`data/hardware.py`).
   - `precision` is in `PRECISIONS` = `bf16|fp8|nvfp4|mxfp4`
-    (`data/specs.py:229-262`).
+    (`data/specs.py`).
   - `artifact_id` is `native:<prec>`, `estimate:<prec>` or
-    `hf:<repo>@<revision>` (`data/artifacts.py:26-29`, `data/specs.py:183`).
+    `hf:<repo>@<revision>` (`data/artifacts.py`, `data/specs.py::artifact_id`).
   - `serving_runtime` is in `SERVING_RUNTIMES` = `generic|vllm|sglang|trtllm`
-    (`data/specs.py:89`).
+    (`data/specs.py`).
   - `kv_precision` is in `CACHE_PRECISIONS`, `execution_backend` in
-    `EXECUTION_BACKENDS` (`data/specs.py:90-91`).
-  - `spec.method` is in `SPEC_METHODS` (`data/model_class.py:90`).
+    `EXECUTION_BACKENDS` (`data/specs.py`).
+  - `spec.method` is in `SPEC_METHODS` (`data/model_class.py`).
 - `measured` and `derived` are separate objects. Anything computed by the
   harness rather than read from the client, server or log goes under
   `derived`, with a `method` string. This keeps measured facts apart from
@@ -749,7 +754,7 @@ each valid record:
 - `mixed_closed`: `compute_data(...)`; compare `rps`.
 
 `m` is built with `configured_model(model_key, artifact_id, execution_backend,
-kv_precision, ...)` (`data/artifacts.py:61`), so artifact-specific weight bytes
+kv_precision, ...)` (`data/artifacts.py::configured_model`), so artifact-specific weight bytes
 and compute shares are used. Records whose keys do not resolve are rejected.
 
 ### 5.2 Loss and optimizer
@@ -855,7 +860,7 @@ different runtime minor version never matches levels 1-3.
 
 ### 5.6 Integration (code change, out of scope here)
 
-`EfficiencyParams` is global per state today (`state.py:504-528`). To use the
+`EfficiencyParams` is global per state today (`state.py::prefill_efficiency`). To use the
 fits, the planner needs:
 
 - a resolver `efficiency_for(state, assignment, gpu, phase)` that merges
@@ -865,9 +870,9 @@ fits, the planner needs:
   `state.prefill_efficiency` / `state.decode_efficiency` to that resolver.
 
 `pd_interference` is resolved per assignment as `max(prefill, decode)` today
-(`calc.py:2299`), which keeps working. The UI should label each knob's source
+(`calc.py::compute_data`), which keeps working. The UI should label each knob's source
 ("measured fit, 2026-11-03", "default prior", "user override"), following the
-existing `alpha_source` pattern in `presentation/model_cards.py:274-289`. A
+existing `alpha_source` pattern in `presentation/model_cards.py::_build_model_info`. A
 planner-math change like this needs before-and-after planner reports
 (AGENTS.md, "Math changes").
 
@@ -952,7 +957,7 @@ The harness should check each of these automatically and write failures into
   `kv_cache_usage_perc` is a 0-1 fraction despite its name. Convert at
   ingestion, never in the fitter.
 - **Planner rounding.** `DecodeResult` and `UserExperienceResult` are rounded
-  (`calc.py:1671-1678`, `2440-2446`). Fit against the unrounded internals.
+  (`calc.py::_compute_decode_core`). Fit against the unrounded internals.
 - **Multi-GPU topology.** Record `nvidia-smi topo -m`. TP over PCIe vs.
   NVLink on the same `gpu_key` will produce very different `ar_overlap`, and
   the catalog's `scale_up_p2p_bw_bidir` assumes the catalog topology.
@@ -966,24 +971,24 @@ The harness should check each of these automatically and write failures into
 ## 7. Open questions
 
 - **Q1. `decode_sched_budget` semantics.** The code uses it as a cap on running
-  sequences per replica (`calc.py:1645-1646`), which corresponds to vLLM
+  sequences per replica (`calc.py::_compute_decode_core`), which corresponds to vLLM
   `--max-num-seqs`. The name suggests a token budget
   (`--max-num-batched-tokens`), and the UI bound starts at 2048
-  (`web/config.py:112`), above vLLM's usual `max_num_seqs` of 256-1024
+  (`web/config.py`), above vLLM's usual `max_num_seqs` of 256-1024
   [check version]. A measured config therefore cannot be entered through the
   UI. This needs a decision: either lower the bound and document it as
   max-num-seqs, or add a separate token-budget term.
 - **Q2. The overhead gauge** (1.4.2). This proposal fixes it with a profiler
   trace. If traces are not available on the target hardware, all
   efficiencies are relative to the 0.08 prior.
-- **Q3. Coupling of `bw_eff` and interconnect** (`calc.py:1418`, `1436-1437`).
+- **Q3. Coupling of `bw_eff` and interconnect** (`calc.py::_dense_tp_oh`).
   Fitted `ar_overlap` is conditional on `bw_eff`. A separate interconnect
   efficiency would make the fit cleaner, but that is a math change.
 - **Q4. Batch-dependent MoE weight reads** (1.4.5). If the fitted
   `moe_imbalance` rises strongly with C, the planner needs an expert-coverage
   term rather than a constant multiplier.
 - **Q5. The two paged-overhead paths** (`decode_paged_oh` vs.
-  `fixed_paged_oh` for the same fixed-length workload, `calc.py:1711` vs.
+  `fixed_paged_oh` for the same fixed-length workload, `calc.py::compute_decode` vs.
   `2292`). Should these be unified before fitting `paged_oh`?
 - **Q6. Whether vLLM's `prompt_tokens_total` includes prefix-cached tokens**
   in the target version. This decides whether prefill throughput comes from
