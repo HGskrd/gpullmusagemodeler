@@ -274,6 +274,26 @@ class AdminRouteTests(unittest.TestCase):
         (row,) = self.store.list_analytics(since_ms=0)["visitors"]
         self.assertEqual((row["visitor_id"], row["internal"]), (visitor_id, 1))
 
+    def test_login_accepts_unicode_password(self):
+        with patch.dict("os.environ", {"PLANNER_ADMIN_PASSWORD": "café🔐"}):
+            response = self.client.post("/admin/login", data={"password": "café🔐"})
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(self.client.get("/admin/data.json").status_code, 200)
+
+    def test_login_rejects_incorrect_unicode_passwords(self):
+        for configured, submitted in (
+            ("strong", "café🔐"),
+            ("café🔐", "strong"),
+            ("café🔐", "cafe🔐"),
+            ("café🔐", ""),
+        ):
+            with self.subTest(configured=configured, submitted=submitted):
+                with patch.dict("os.environ", {"PLANNER_ADMIN_PASSWORD": configured}):
+                    response = self.client.post("/admin/login", data={"password": submitted})
+                    self.assertEqual(response.status_code, 401)
+                    self.assertIn(b"Invalid password.", response.data)
+                    self.assertEqual(self.client.get("/admin/data.json").status_code, 401)
+
 
 if __name__ == "__main__":
     unittest.main()
