@@ -14,7 +14,6 @@ from characterization_support import (
 )
 from flask import render_template
 
-from data import INPUT_BUCKETS
 from presentation.econ import _chart_payload, econ_payload
 from presentation.model_cards import get_model_info, get_model_infos
 from use_case_evidence import (
@@ -111,6 +110,13 @@ class PartialRenderSmokeTests(unittest.TestCase):
                     )
                 ]
                 responses.append(self.client.post("/compare/duplicate", headers=headers))
+                from web.session_store import _states
+
+                scope = next(key for key in _states if key.endswith(f":{tab_id}"))
+                gpu_uid = _states[scope].gpus[0].uid
+                responses.append(
+                    self.client.get(f"/gpu/machine-options?panel=A&uid={gpu_uid}", headers=headers)
+                )
 
                 state = chart_state()
                 state.mode = "data"
@@ -127,21 +133,6 @@ class PartialRenderSmokeTests(unittest.TestCase):
                 environment.cache.clear()
                 responses.append(self.client.get("/healthz"))
 
-                def render_distribution_partial():
-                    return render_template(
-                        "partials/distribution.html",
-                        dist=state.in_dist,
-                        dist_label="Input",
-                        pre=state.in_pre,
-                        panel="A",
-                        kind="in",
-                        buckets=INPUT_BUCKETS,
-                        **_template_context(),
-                    )
-
-                self.app.view_functions["api.healthz"] = render_distribution_partial
-                environment.cache.clear()
-                responses.append(self.client.get("/healthz"))
             finally:
                 self.app.view_functions["api.healthz"] = original_healthz
 

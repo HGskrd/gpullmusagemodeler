@@ -44,6 +44,7 @@ from planner_service import (
     set_model_prec,
     set_model_spec,
 )
+from presentation.placement_view import machine_options
 from scenarios import (
     replace_project_set,
     serialize_project_set,
@@ -76,9 +77,6 @@ from state import (
     set_project_name,
     set_project_scale_locked,
     set_project_scale_value,
-    set_projection_choice,
-    set_projection_pct,
-    set_projection_toggle,
     set_tech_savviness,
 )
 from web.analytics import record_event
@@ -149,6 +147,27 @@ def gpu_add(s):
 
     add_gpu(s, gpu_type, count)
     return _tracked_htmx_response("gpu_add", s)
+
+
+@planner_bp.get("/gpu/machine-options")
+def gpu_machine_options():
+    state = _request_state()
+    if state is None:
+        return jsonify({"error": "No state found"}), 404
+    gpu = state.find_gpu(_bounded_int(request.args.get("uid"), name="uid", lo=1, hi=2**53 - 1))
+    if gpu is None:
+        return jsonify({"error": "GPU pool not found"}), 404
+    response = make_response(
+        render_template(
+            "partials/pool_machine_options.html",
+            mo=machine_options(state, gpu),
+            cur_g=gpu.gpu,
+            gp=gpu,
+            panel="B" if request.args.get("panel") == "B" else "A",
+        )
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @planner_bp.route("/gpu/qty", methods=["POST"])
@@ -503,34 +522,6 @@ def settings_int(s):
     setattr(s, key, value)
     retune_models(s, preserve_existing=False)
     return _tracked_htmx_response("settings_int", s)
-
-
-@planner_bp.route("/projection/pct", methods=["POST"])
-@with_planner_state
-def projection_pct(s):
-    key = request.form.get("key", "")
-    value = _form_int("value") / 100
-    set_projection_pct(s, key, value)
-    return _tracked_htmx_response("projection_pct", s)
-
-
-@planner_bp.route("/projection/choice", methods=["POST"])
-@with_planner_state
-def projection_choice(s):
-    key = request.form.get("key", "")
-    value = request.form.get("value", "")
-    set_projection_choice(s, key, value)
-    return _tracked_htmx_response("projection_choice", s)
-
-
-@planner_bp.route("/projection/toggle", methods=["POST"])
-@with_planner_state
-def projection_toggle(s):
-    key = request.form.get("key", "")
-    # HTMX sends a form-encoded value only when the checkbox is checked.
-    value = request.form.get("value") in ("on", "true", "1")
-    set_projection_toggle(s, key, value)
-    return _tracked_htmx_response("projection_toggle", s)
 
 
 @planner_bp.route("/workload/company", methods=["POST"])

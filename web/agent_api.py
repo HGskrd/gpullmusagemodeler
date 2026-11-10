@@ -28,6 +28,7 @@ from data import (
     artifact_options,
 )
 from data.groups import _model_kind
+from data.model_sources import UNPUBLISHED_MODEL_ARCHITECTURE_SOURCES
 from engine.economics import compute_revenue_projection
 from planner_service import deserialize_scenario
 from presentation.model_cards import get_model_infos
@@ -177,7 +178,11 @@ def catalog():
                 },
                 "system_ram_weight_bytes_per_copy": model.system_ram_weight_bytes,
                 "architecture_note": model.architecture_note,
-                "source": OPEN_MODEL_ARCHITECTURE_SOURCES.get(key),
+                "source": OPEN_MODEL_ARCHITECTURE_SOURCES.get(key)
+                or UNPUBLISHED_MODEL_ARCHITECTURE_SOURCES.get(key),
+                "source_status": (
+                    "pinned" if key in OPEN_MODEL_ARCHITECTURE_SOURCES else "unpublished"
+                ),
             }
         )
     return jsonify(

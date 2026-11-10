@@ -79,6 +79,40 @@ def test_catalog_keys_match_calculator_and_documented_defaults(client):
     )
 
 
+def test_old_exports_with_inactive_settings_remain_replayable(client):
+    payload = copy.deepcopy(EXAMPLE_REQUEST)
+    legacy = {
+        "projection_night_batching": True,
+        "projection_demand_level": 0.9,
+        "projection_night_discount": 0.4,
+        "projection_batch_eligible": 0.5,
+        "projection_elasticity": 3,
+    }
+    baseline = client.post("/api/v1/calculate", json=payload).get_json()
+    payload["scenario"]["panel_a"].update(legacy)
+    response = client.post("/api/v1/calculate", json=payload)
+    assert response.status_code == 200
+    result = response.get_json()
+    assert result["report"] == baseline["report"]
+    projection = result["results"]["panel_a"]["projection"]
+    expected = baseline["results"]["panel_a"]["projection"]
+    for key in ("cost_day", "margin_day", "total_cap_tokens_day", "token_coverage"):
+        assert projection[key] == expected[key]
+    assert set(legacy).isdisjoint(result["scenario"]["panel_a"])
+
+
+def test_catalog_sources_never_silently_omit_provenance(client):
+    models = client.get("/api/v1/catalog").get_json()["models"]
+    for model in models:
+        assert model["source"]
+        if model["source_status"] == "pinned":
+            assert re.fullmatch(r"[0-9a-f]{40}", model["source"]["revision"])
+        else:
+            assert model["source_status"] == "unpublished"
+            assert model["source"]["revision"] is None
+            assert model["source"]["note"]
+
+
 def test_current_browser_export_is_valid_api_input(client):
     export = client.get("/scenario/export").get_json()
     Draft202012Validator(CALCULATE_REQUEST).validate({"scenario": export})

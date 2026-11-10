@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-OPEN_MODEL_ARCHITECTURE_CAPTURED_AT = "2026-10-17"
+OPEN_MODEL_ARCHITECTURE_CAPTURED_AT = "2026-11-10"
 
 
 @dataclass(frozen=True)
@@ -325,3 +325,517 @@ OPEN_MODEL_ARCHITECTURE_SOURCES["pplx-decider-flash-v1.2"] = ModelArchitectureSo
     "6d771ad7b5ecff5e93b8fc7b90d4c5ccc341954d",
     "Qwen3.5-4B backbone with joint per-question marker readout; noncausal full attention and native causal linear layers. Released max_length defaults to 262,144 positions, including images and question/option templates; training covered about 32k. Longer inputs require task validation. Recursive multi-question splitting, image encoder latency, compilation, CUDA graphs and optional FP8 fast-path gains are not simulated. Text-only closed-form capacity estimate, not a benchmark; quality uncalibrated and no generation economics.",
 )
+
+
+# Provenance backfill. These references do not claim a fresh geometry/calibration audit.
+_PROVENANCE_BACKFILL_NOTE = "Captured 2026-11-10: official Hub release identity and pinned metadata; provenance backfill only, existing geometry and throughput assumptions were not re-audited."
+OPEN_MODEL_ARCHITECTURE_SOURCES.update(
+    {
+        "nvidia-nemotron-3-embed-8b": ModelArchitectureSource(
+            "https://huggingface.co/nvidia/Nemotron-3-Embed-8B-BF16",
+            "d1f2f25730bbd775b99b29185134bc86653bf2d1",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "nvidia-nemotron-3-embed-1b": ModelArchitectureSource(
+            "https://huggingface.co/nvidia/Nemotron-3-Embed-1B-BF16",
+            "c0c9fea93ea424587517f2c59e20db9f1d6bf615",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "denseon": ModelArchitectureSource(
+            "https://huggingface.co/lightonai/DenseOn",
+            "cb9947ebccb33862d24e3c7ca2edb25e51acd887",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "lateon": ModelArchitectureSource(
+            "https://huggingface.co/lightonai/LateOn",
+            "62911e105059585d244384c7d17826e35f669c17",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "bge-m3": ModelArchitectureSource(
+            "https://huggingface.co/BAAI/bge-m3",
+            "5617a9f61b028005a4858fdac845db406aefb181",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "mxbai-embed-large-v1": ModelArchitectureSource(
+            "https://huggingface.co/mixedbread-ai/mxbai-embed-large-v1",
+            "b33106f585b9ce46904ad7443a3b52b7a63e231c",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "mxbai-embed-2d-large-v1": ModelArchitectureSource(
+            "https://huggingface.co/mixedbread-ai/mxbai-embed-2d-large-v1",
+            "416c45d154ee4e435b6d19f6bd54440f38a12ee9",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "mxbai-embed-xsmall-v1": ModelArchitectureSource(
+            "https://huggingface.co/mixedbread-ai/mxbai-embed-xsmall-v1",
+            "e6ac24e5d6efb8782b59de1647b3ececb4ece94e",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "deepset-mxbai-embed-de-large-v1": ModelArchitectureSource(
+            "https://huggingface.co/mixedbread-ai/deepset-mxbai-embed-de-large-v1",
+            "cbbec43ebdf8b2d8304d3093781eee56a8cdfb69",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "mxbai-edge-colbert-v0-17m": ModelArchitectureSource(
+            "https://huggingface.co/mixedbread-ai/mxbai-edge-colbert-v0-17m",
+            "592c6417c1c6687572043408ed1ae5196bce16b1",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "mxbai-edge-colbert-v0-32m": ModelArchitectureSource(
+            "https://huggingface.co/mixedbread-ai/mxbai-edge-colbert-v0-32m",
+            "bb13a29ec9b1e7edd4ba8f7a0776c48b55cbad66",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "modernbert-embed-base": ModelArchitectureSource(
+            "https://huggingface.co/nomic-ai/modernbert-embed-base",
+            "d556a88e332558790b210f7bdbe87da2fa94a8d8",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "kalm-mini-it-v15": ModelArchitectureSource(
+            "https://huggingface.co/HIT-TMG/KaLM-embedding-multilingual-mini-instruct-v1.5",
+            "fcff2f8a54e4cd96b7766fef1ee960a43d42bb3c",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "pplx-embed-v1-0.6b": ModelArchitectureSource(
+            "https://huggingface.co/perplexity-ai/pplx-embed-v1-0.6b",
+            "2c4d510dd4a732063c31a0f70193e35067b51fd8",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "pplx-embed-v1-4b": ModelArchitectureSource(
+            "https://huggingface.co/perplexity-ai/pplx-embed-v1-4b",
+            "06456497a00540a582918fe8dcd3a5eabb207772",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "l8": ModelArchitectureSource(
+            "https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct",
+            "0e9e39f249a16976918f6564b8830bc894c89659",
+            note=_PROVENANCE_BACKFILL_NOTE
+            + " Config access is gated; its contents were not inspected.",
+            config_path="config.json",
+        ),
+        "ge2": ModelArchitectureSource(
+            "https://huggingface.co/google/gemma-4-E2B-it",
+            "4adf15748de9e1a0097b6274cee9c15836c41c37",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "ge4": ModelArchitectureSource(
+            "https://huggingface.co/google/gemma-4-E4B-it",
+            "4ecc2ba63bcac23ba4a767fc87025b1450f84c9c",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "g12": ModelArchitectureSource(
+            "https://huggingface.co/google/gemma-4-12B-it",
+            "43c9d014b231474fa7212dbb48a762566c2b255d",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "g26": ModelArchitectureSource(
+            "https://huggingface.co/google/gemma-4-26B-A4B-it",
+            "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "g31": ModelArchitectureSource(
+            "https://huggingface.co/google/gemma-4-31B-it",
+            "842da3794eaa0b77d5f08bae87a17459d91ff475",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "lfm2.5-350m": ModelArchitectureSource(
+            "https://huggingface.co/LiquidAI/LFM2.5-350M",
+            "9921cd4d82c0e3986887aa4b376f9446729ef8a3",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "lfm2.5-1.2b-instruct": ModelArchitectureSource(
+            "https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct",
+            "b9d816ab510f9a28dca37cb182e9da8b0226e13c",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "lfm2.5-1.2b-thinking": ModelArchitectureSource(
+            "https://huggingface.co/LiquidAI/LFM2.5-1.2B-Thinking",
+            "fa4681e33c27d2861d1eacc9d29ccb68840344a0",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "q08": ModelArchitectureSource(
+            "https://huggingface.co/Qwen/Qwen3.5-0.8B",
+            "2fc06364715b967f1860aea9cf38778875588b17",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "q2": ModelArchitectureSource(
+            "https://huggingface.co/Qwen/Qwen3.5-2B",
+            "15852e8c16360a2fea060d615a32b45270f8a8fc",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "q4": ModelArchitectureSource(
+            "https://huggingface.co/Qwen/Qwen3.5-4B",
+            "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "q9": ModelArchitectureSource(
+            "https://huggingface.co/Qwen/Qwen3.5-9B",
+            "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "q35": ModelArchitectureSource(
+            "https://huggingface.co/Qwen/Qwen3.5-35B-A3B",
+            "59d61f3ce65a6d9863b86d2e96597125219dc754",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "glm45a": ModelArchitectureSource(
+            "https://huggingface.co/zai-org/GLM-4.5-Air",
+            "a24ceef6ce4f3536971efe9b778bdaa1bab18daa",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "glm47": ModelArchitectureSource(
+            "https://huggingface.co/zai-org/GLM-4.7",
+            "602d01efcdd332c5238ca4bcede555defbe83eb7",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "glm47f": ModelArchitectureSource(
+            "https://huggingface.co/zai-org/GLM-4.7-Flash",
+            "7dd20894a642a0aa287e9827cb1a1f7f91386b67",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "kimi-k3": ModelArchitectureSource(
+            "https://huggingface.co/moonshotai/Kimi-K3",
+            "f831ab66814297da540d832a5235f8e904f29d06",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "kimi-linear-48b": ModelArchitectureSource(
+            "https://huggingface.co/moonshotai/Kimi-Linear-48B-A3B-Instruct",
+            "e1df551a447157d4658b573f9a695d57658590e9",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "inkling": ModelArchitectureSource(
+            "https://huggingface.co/thinkingmachines/Inkling",
+            "828496eeae4c243ff1a22f7f28ff83694f2f7bc9",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "inkling-small-preview": ModelArchitectureSource(
+            "https://huggingface.co/thinkingmachines/Inkling-Small",
+            "8cc5877b44d343f88b92086aa1fb72897950f06a",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "command-a-plus-05-2026": ModelArchitectureSource(
+            "https://huggingface.co/CohereLabs/command-a-plus-05-2026",
+            "5fb6fde5fd12ff89356aae552e11883bc49f069b",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "command-r7b-12-2024": ModelArchitectureSource(
+            "https://huggingface.co/CohereForAI/c4ai-command-r7b-12-2024",
+            "4f3d0aa6856e322f2f4480fe65420d5d53d297b8",
+            note=_PROVENANCE_BACKFILL_NOTE
+            + " Config access is gated; its contents were not inspected.",
+            config_path="config.json",
+        ),
+        "north-mini-code-1-0": ModelArchitectureSource(
+            "https://huggingface.co/CohereLabs/north-mini-code-1.0",
+            "d11e61a842617a22dc328552fa5bb86231ee4f37",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "tiny-aya-global": ModelArchitectureSource(
+            "https://huggingface.co/CohereLabs/tiny-aya-global",
+            "af89d219b53ed9b13b8a4645f9c8028973510324",
+            note=_PROVENANCE_BACKFILL_NOTE
+            + " Config access is gated; its contents were not inspected.",
+            config_path="config.json",
+        ),
+        "tiny-aya-earth": ModelArchitectureSource(
+            "https://huggingface.co/CohereLabs/tiny-aya-earth",
+            "0624fafbe200f930b89566fc4ec4da314ba48d89",
+            note=_PROVENANCE_BACKFILL_NOTE
+            + " Config access is gated; its contents were not inspected.",
+            config_path="config.json",
+        ),
+        "tiny-aya-fire": ModelArchitectureSource(
+            "https://huggingface.co/CohereLabs/tiny-aya-fire",
+            "73500c80fcb6c8bea3e830c21d5d2920249a0e1a",
+            note=_PROVENANCE_BACKFILL_NOTE
+            + " Config access is gated; its contents were not inspected.",
+            config_path="config.json",
+        ),
+        "tiny-aya-water": ModelArchitectureSource(
+            "https://huggingface.co/CohereLabs/tiny-aya-water",
+            "41a99216d12b3ef4881df762934186e5e4d2bbc1",
+            note=_PROVENANCE_BACKFILL_NOTE
+            + " Config access is gated; its contents were not inspected.",
+            config_path="config.json",
+        ),
+        "minimax3": ModelArchitectureSource(
+            "https://huggingface.co/MiniMaxAI/MiniMax-M3",
+            "d95e30cb912fe3021bb9c2ba66a8ce60b6c937a9",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "nem3s": ModelArchitectureSource(
+            "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16",
+            "2dc98e2afe4face0e4ce40972a915c45368bd34a",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "nem3no": ModelArchitectureSource(
+            "https://huggingface.co/nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16",
+            "e5e9932441de940c9a62185c870ea5bcd4cd24e2",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "mi7": ModelArchitectureSource(
+            "https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3",
+            "c170c708c41dac9275d15a8fff4eca08d52bab71",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "mx87": ModelArchitectureSource(
+            "https://huggingface.co/mistralai/Mixtral-8x7B-Instruct-v0.1",
+            "eba92302a2861cdc0098cc54bc9f17cb2c47eb61",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "cs22": ModelArchitectureSource(
+            "https://huggingface.co/mistralai/Codestral-22B-v0.1",
+            "28b1c1a51dabe9d86ca8c41420ada1984632498f",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "voxtral-realtime-mini-4b": ModelArchitectureSource(
+            "https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602",
+            "2769294da9567371363522aac9bbcfdd19447add",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "mimo-v2.5-asr": ModelArchitectureSource(
+            "https://huggingface.co/XiaomiMiMo/MiMo-V2.5-ASR",
+            "227ce4c5e64e356007ad948781f0e8b55a1beba0",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "nvidia-nemotron-speech-streaming-0.6b": ModelArchitectureSource(
+            "https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b",
+            "ebe59e5a817142986528bbbee5dba8db7b38ed50",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "nvidia-nemotron-3.5-asr-streaming-0.6b": ModelArchitectureSource(
+            "https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b",
+            "ea30d66debe3740a08b573244286791d423d6b3e",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "nvidia-parakeet-unified-0.6b": ModelArchitectureSource(
+            "https://huggingface.co/nvidia/parakeet-unified-en-0.6b",
+            "fe53cd885760c96b6a5f51a0bfd362cb4584a98b",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="README.md",
+        ),
+        "nvidia-parakeet-realtime-eou-120m": ModelArchitectureSource(
+            "https://huggingface.co/nvidia/parakeet_realtime_eou_120m-v1",
+            "a7e2b4629593dce0ec19f600e00e9904353fda2d",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="README.md",
+        ),
+        "nvidia-multitalker-parakeet-streaming-0.6b": ModelArchitectureSource(
+            "https://huggingface.co/nvidia/multitalker-parakeet-streaming-0.6b-v1",
+            "8749fc71fd6e2d88ef230159bbf2aea69b524ee1",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="README.md",
+        ),
+        "kyutai-stt-1b-en-fr": ModelArchitectureSource(
+            "https://huggingface.co/kyutai/stt-1b-en_fr",
+            "1c34c6b4f7e9299bb61985f145052ff131005dde",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "kyutai-stt-2.6b-en": ModelArchitectureSource(
+            "https://huggingface.co/kyutai/stt-2.6b-en",
+            "a07aec56d22be5589cd0bc8709c75b6cf3e3039d",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "moonshine-streaming-tiny": ModelArchitectureSource(
+            "https://huggingface.co/UsefulSensors/moonshine-streaming-tiny",
+            "f8e9dfd8c562c257c151a907b7b7f2fe8ff8511a",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "moonshine-streaming-small": ModelArchitectureSource(
+            "https://huggingface.co/UsefulSensors/moonshine-streaming-small",
+            "2c036506f23a09c18df5a50057599ba6d9280999",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "moonshine-streaming-medium": ModelArchitectureSource(
+            "https://huggingface.co/UsefulSensors/moonshine-streaming-medium",
+            "57b843633a8c183cadf6699ffa761377a933a866",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "fun-asr-nano-2512": ModelArchitectureSource(
+            "https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512",
+            "272c57b82523ada6fd87095e955f8e29100979ab",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="README.md",
+        ),
+        "granite-4.0-1b-speech": ModelArchitectureSource(
+            "https://huggingface.co/ibm-granite/granite-4.0-1b-speech",
+            "bd87ab862416353633ea431fe49b1614003623c5",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "cohere-transcribe-03-2026": ModelArchitectureSource(
+            "https://huggingface.co/CohereLabs/cohere-transcribe-03-2026",
+            "d552dadc2922ba6f6c1f994f8db904d52dcaf942",
+            note=_PROVENANCE_BACKFILL_NOTE
+            + " Config access is gated; its contents were not inspected.",
+            config_path="config.json",
+        ),
+        "nvidia-parakeet-tdt-0.6b-v3": ModelArchitectureSource(
+            "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3",
+            "541d1f99c6b0c3cd0b11a95167540bb8edefd82b",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "n3": ModelArchitectureSource(
+            "https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512",
+            "b35d4dfe56c142746f54dbd64f579faab2744308",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "n8": ModelArchitectureSource(
+            "https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512",
+            "5b26027e7b19eeb4b7352e1fed3926375dd2cb4d",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "n14": ModelArchitectureSource(
+            "https://huggingface.co/mistralai/Ministral-3-14B-Instruct-2512",
+            "29439f81c2be264d8d393273f99e7db9c0961120",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "dv24": ModelArchitectureSource(
+            "https://huggingface.co/mistralai/Devstral-Small-2-24B-Instruct-2512",
+            "55c5b41e98c2dbd21b0c8afffc540dcfc9eb5128",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "dv123": ModelArchitectureSource(
+            "https://huggingface.co/mistralai/Devstral-2-123B-Instruct-2512",
+            "1613bf01adb5e1c6fdc196b46e6b173eae75eb4a",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "zaya1-8b": ModelArchitectureSource(
+            "https://huggingface.co/Zyphra/ZAYA1-8B",
+            "67d34da515b30409ee8daa67c3605c4402d03f6f",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "laguna-m1": ModelArchitectureSource(
+            "https://huggingface.co/poolside/Laguna-M.1",
+            "2bf8a4ab6d2e8e1e0d92a41318532a0fee1640d6",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "laguna-xs-2-1": ModelArchitectureSource(
+            "https://huggingface.co/Poolside/laguna-xs-2.1",
+            "c5f36269bbdbd3f27fddc9a9f9dbae0cf2cf57db",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "laguna-s-2-1": ModelArchitectureSource(
+            "https://huggingface.co/Poolside/laguna-s-2.1",
+            "0f573140834b11cfac0c2af97a101a7a69a13e22",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "cr13": ModelArchitectureSource(
+            "https://huggingface.co/croissantllm/CroissantLLMChat-v0.1",
+            "f05665c340c868ce48cebdf997cfafb7dbfef2b3",
+            note=_PROVENANCE_BACKFILL_NOTE,
+            config_path="config.json",
+        ),
+        "inkling-asr": ModelArchitectureSource(
+            "https://huggingface.co/thinkingmachines/Inkling",
+            "828496eeae4c243ff1a22f7f28ff83694f2f7bc9",
+            note=_PROVENANCE_BACKFILL_NOTE
+            + " ASR variant of inkling; backbone source, not an independent ASR benchmark.",
+            config_path="config.json",
+        ),
+        "inkling-small-asr": ModelArchitectureSource(
+            "https://huggingface.co/thinkingmachines/Inkling-Small",
+            "8cc5877b44d343f88b92086aa1fb72897950f06a",
+            note=_PROVENANCE_BACKFILL_NOTE
+            + " ASR variant of inkling-small-preview; backbone source, not an independent ASR benchmark.",
+            config_path="config.json",
+        ),
+        "gemma-4-e2b-asr": ModelArchitectureSource(
+            "https://huggingface.co/google/gemma-4-E2B-it",
+            "4adf15748de9e1a0097b6274cee9c15836c41c37",
+            note=_PROVENANCE_BACKFILL_NOTE
+            + " ASR variant of ge2; backbone source, not an independent ASR benchmark.",
+            config_path="config.json",
+        ),
+        "gemma-4-e4b-asr": ModelArchitectureSource(
+            "https://huggingface.co/google/gemma-4-E4B-it",
+            "4ecc2ba63bcac23ba4a767fc87025b1450f84c9c",
+            note=_PROVENANCE_BACKFILL_NOTE
+            + " ASR variant of ge4; backbone source, not an independent ASR benchmark.",
+            config_path="config.json",
+        ),
+        "gemma-4-12b-unified-asr": ModelArchitectureSource(
+            "https://huggingface.co/google/gemma-4-12B-it",
+            "43c9d014b231474fa7212dbb48a762566c2b255d",
+            note=_PROVENANCE_BACKFILL_NOTE
+            + " ASR variant of g12; backbone source, not an independent ASR benchmark.",
+            config_path="config.json",
+        ),
+    }
+)
+
+# Hosted/proxy entries must explain why immutable open architecture is unavailable.
+UNPUBLISHED_MODEL_ARCHITECTURE_SOURCES = {
+    "cohere-embed-v4-0": {
+        "repository": "https://docs.cohere.com/v1/docs/cohere-embed",
+        "revision": None,
+        "note": "Captured 2026-11-10: hosted model; no public checkpoint/config is available. Catalog geometry and local capacity are proxies, not a deployable Cohere artifact.",
+    },
+    "mm31": {
+        "repository": "https://docs.mistral.ai/models/mistral-medium-3-1-25-08",
+        "revision": None,
+        "note": "Captured 2026-11-10: legacy hosted model; no public checkpoint/config is available. Retained catalog geometry is a capacity proxy, not verified architecture.",
+    },
+}

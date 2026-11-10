@@ -99,7 +99,6 @@ def projection_cases() -> dict[str, PlannerState]:
                 quality_domain="long_context",
             ),
         ],
-        projection_night_batching=True,
     )
     retune_models(constrained, preserve_existing=False)
 

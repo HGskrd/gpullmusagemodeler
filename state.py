@@ -7,6 +7,7 @@ import math
 import os
 import re
 import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from functools import wraps
 from pathlib import Path
@@ -121,17 +122,6 @@ DEFAULT_SCALE_KIND = {
     "step": 10.0,
     "formula": "millions of tokens/day",
 }
-PROJECTION_PCT_BOUNDS = {
-    # Average share of peak capacity that internal users actually book. Values above 100%
-    # represent oversubscribed demand that routing will spill once modeled capacity is full.
-    "projection_demand_level": (0.05, 1.20),
-    # Discount offered to users who batch overnight. Drives demand shift via elasticity.
-    "projection_night_discount": (0.0, 0.80),
-    # Fraction of demand that is batch-eligible (not real-time/interactive).
-    "projection_batch_eligible": (0.0, 1.0),
-    # How responsive internal users are to the discount. shift = min(1, elasticity * discount).
-    "projection_elasticity": (0.0, 4.0),
-}
 
 
 def _next_uid() -> int:
@@ -197,30 +187,36 @@ def normalize_embedding_doc_distribution(state: "PlannerState"):
     )
 
 
-_POOL_GPU_CACHE: dict[tuple[str, int, float], GPU] = {}
+_POOL_GPU_CACHE_MAXSIZE = 256
+_POOL_GPU_CACHE: OrderedDict[tuple[str, int, float], tuple[GPU, GPU]] = OrderedDict()
+_POOL_GPU_CACHE_LOCK = threading.Lock()
 
 
 def pool_gpu(gpu_type: str, gpus_per_machine: int = 0, network_gbps: float = 0.0) -> GPU:
-    """Catalog GPU with the pool's machine shape applied (node size, scale-out bandwidth)."""
+    """Catalog GPU with a bounded LRU of effective machine/network overrides."""
     base = GPUS[gpu_type]
+    if not math.isfinite(network_gbps):
+        raise ValueError("Network speed must be finite.")
     if gpus_per_machine <= 0 and network_gbps <= 0:
         return base
-    key = (gpu_type, int(gpus_per_machine), float(network_gbps))
-    cached = _POOL_GPU_CACHE.get(key)
-    if cached is None:
-        cached = replace(
-            base,
-            node_size=int(gpus_per_machine) if gpus_per_machine > 0 else base.node_size,
-            # A per-GPU NIC hangs off the same host link, so scale-out cannot beat
-            # the GPU's own peer bandwidth (PCIe on RTX PRO / L40S class cards).
-            inter_node_bw=(
-                min(network_gbps * 1e9 / 8, max(base.scale_up_collective_bw, base.inter_node_bw))
-                if network_gbps > 0
-                else base.inter_node_bw
-            ),
-        )
-        _POOL_GPU_CACHE[key] = cached
-    return cached
+    size = int(gpus_per_machine) if gpus_per_machine > 0 else base.node_size
+    # The NIC shares the host link, so scale-out cannot beat peer bandwidth.
+    bandwidth = (
+        min(network_gbps * 1e9 / 8, max(base.scale_up_collective_bw, base.inter_node_bw))
+        if network_gbps > 0
+        else base.inter_node_bw
+    )
+    key = (gpu_type, size, bandwidth)
+    with _POOL_GPU_CACHE_LOCK:
+        cached = _POOL_GPU_CACHE.get(key)
+        # Catalog replacements must not reuse a derived GPU from the old entry.
+        if cached is None or cached[0] is not base:
+            cached = (base, replace(base, node_size=size, inter_node_bw=bandwidth))
+            _POOL_GPU_CACHE[key] = cached
+        _POOL_GPU_CACHE.move_to_end(key)
+        if len(_POOL_GPU_CACHE) > _POOL_GPU_CACHE_MAXSIZE:
+            _POOL_GPU_CACHE.popitem(last=False)
+        return cached[1]
 
 
 @dataclass
@@ -511,10 +507,6 @@ class PlannerState:
     # "advocated" = what we'd unlock by getting more vendors approved (drives the demand-
     # destruction story when no compatible cloud exists).
     corpo_cloud: str = CORPO_CLOUD_DEFAULT
-    # Average booked demand as fraction of planner peak capacity.
-    projection_demand_level: float = 0.65
-    # Night-batching lever (the "tick the box in LiteLLM" scenario).
-    projection_night_batching: bool = False
     # False scores demand at baseline only, ignoring latent demand the deployment's
     # prices would activate. Compare mode sets it on both configs so A and B are
     # judged against identical demand ("equal demand").
@@ -530,9 +522,6 @@ class PlannerState:
     tech_savviness: str = "typical"
     # False models a deployment with no cloud fallback: demand the GPUs cannot serve is lost.
     cloud_enabled: bool = False
-    projection_night_discount: float = 0.30
-    projection_batch_eligible: float = 0.35
-    projection_elasticity: float = 2.0
     # Monotonic process-local version used to invalidate derived presentation
     # caches. It is intentionally omitted from exported scenario JSON.
     revision: int = field(default=0, compare=False)
@@ -1235,6 +1224,7 @@ def set_project_name(state: PlannerState, project_uid: int, name: str):
     proj = state.find_project(project_uid)
     if proj is None:
         return
+    proj.kind_key = "custom"
     proj.name = (name or "").strip()[:60] or proj.name
 
 
@@ -1251,6 +1241,7 @@ def set_project_capability(state: PlannerState, project_uid: int, capability: st
     proj = state.find_project(project_uid)
     if proj is None or capability not in ALLOWED_CAPABILITIES:
         return
+    proj.kind_key = "custom"
     if required:
         proj.requires = proj.requires | {capability}
     else:
@@ -1937,19 +1928,8 @@ def set_projection_choice(state: PlannerState, key: str, value: str):
 
 
 @bumps_revision
-def set_projection_pct(state: PlannerState, key: str, value: float):
-    bounds = PROJECTION_PCT_BOUNDS.get(key)
-    if not bounds:
-        return
-    lo, hi = bounds
-    setattr(state, key, min(max(value, lo), hi))
-
-
-@bumps_revision
 def set_projection_toggle(state: PlannerState, key: str, value: bool):
-    if key == "projection_night_batching":
-        state.projection_night_batching = bool(value)
-    elif key == "projection_include_latent":
+    if key == "projection_include_latent":
         state.projection_include_latent = bool(value)
 
 

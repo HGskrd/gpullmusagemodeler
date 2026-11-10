@@ -580,10 +580,6 @@ def deserialize_planner_state(payload: Any) -> PlannerState:
         ("decode_overhead", 0.08, 0.0, 1.0),
         ("decode_paged_oh", 0.10, 0.0, 1.0),
         ("decode_ar_overlap", 0.30, 0.0, 1.0),
-        ("projection_demand_level", 0.65, 0.05, 1.20),
-        ("projection_night_discount", 0.30, 0.0, 0.80),
-        ("projection_batch_eligible", 0.35, 0.0, 1.0),
-        ("projection_elasticity", 2.0, 0.0, 4.0),
     ):
         setattr(state, key, _scenario_float(payload, key, default, lo, hi))
     state.decode_sched_budget = _scenario_int(payload, "decode_sched_budget", 16384, 1, 10_000_000)
@@ -614,7 +610,6 @@ def deserialize_planner_state(payload: Any) -> PlannerState:
     state.mode = normalize_plot_mode(payload.get("mode"))
     state.projection_day_shape = normalize_day_shape(payload.get("projection_day_shape"))
     state.corpo_cloud = normalize_corpo_cloud(payload.get("corpo_cloud"))
-    state.projection_night_batching = bool(payload.get("projection_night_batching", False))
     state.projection_include_latent = bool(payload.get("projection_include_latent", True))
     state.company_size = _scenario_int(payload, "company_size", 100, 1, 10_000_000)
     state.tech_savviness = (

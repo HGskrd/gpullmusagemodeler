@@ -184,11 +184,13 @@ def _mutations():
         ("state.set_dist_preset", lambda s: S.set_dist_preset(s, "in", "Code")),
         ("state.set_dist_value", lambda s: S.set_dist_value(s, "in", 0, 12)),
         ("state.set_spec_acceptance", lambda s: S.set_spec_acceptance(s, 0.7)),
-        ("state.set_projection_choice", lambda s: S.set_projection_choice(s, "day_shape", "flat")),
-        ("state.set_projection_pct", lambda s: S.set_projection_pct(s, "demand_level", 0.4)),
+        (
+            "state.set_projection_choice",
+            lambda s: S.set_projection_choice(s, "projection_day_shape", "flat"),
+        ),
         (
             "state.set_projection_toggle",
-            lambda s: S.set_projection_toggle(s, "night_batching", True),
+            lambda s: S.set_projection_toggle(s, "projection_include_latent", False),
         ),
         # --- scalar attribute writes ------------------------------------
         ("PlannerState.mode", lambda s: setattr(s, "mode", "processingpareto")),

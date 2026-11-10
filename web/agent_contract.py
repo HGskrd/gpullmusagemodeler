@@ -145,7 +145,6 @@ PANEL_FIELDS = {
     "mode": choices(ALLOWED_PLOT_MODES),
     "projection_day_shape": choices(DAY_SHAPES),
     "corpo_cloud": choices(cloud_policy.corpo_presets()),
-    "projection_night_batching": {"type": "boolean"},
     "projection_include_latent": {"type": "boolean"},
     "company_size": number(1, 10_000_000, integer=True),
     "tech_savviness": choices(("low", "typical", "high")),
@@ -163,16 +162,33 @@ for _key, _lo, _hi in (
     ("pd_interference", 0, 1),
     ("prefix_hit_rate", 0, 1),
     ("spec_acceptance", 0, 0.99),
-    ("projection_demand_level", 0.05, 1.2),
-    ("projection_night_discount", 0, 0.8),
-    ("projection_batch_eligible", 0, 1),
-    ("projection_elasticity", 0, 4),
 ):
     PANEL_FIELDS[_key] = number(_lo, _hi)
 for _phase in ("prefill", "decode"):
     for _knob in ("bw_eff", "comp_eff", "overhead", "paged_oh", "ar_overlap"):
         PANEL_FIELDS[f"{_phase}_{_knob}"] = number(0.01 if _knob.endswith("eff") else 0, 1)
-PANEL = obj(PANEL_FIELDS)
+# Accept obsolete settings only when replaying legacy exports. They have no
+# effect and are omitted from defaults and normalized output.
+LEGACY_PANEL_FIELDS = {
+    "projection_night_batching": {"type": "boolean"},
+    "projection_demand_level": number(0.05, 1.2),
+    "projection_night_discount": number(0, 0.8),
+    "projection_batch_eligible": number(0, 1),
+    "projection_elasticity": number(0, 4),
+}
+PANEL = obj(
+    {
+        **PANEL_FIELDS,
+        **{
+            key: {
+                **schema,
+                "deprecated": True,
+                "description": "Ignored legacy setting; omitted from output.",
+            }
+            for key, schema in LEGACY_PANEL_FIELDS.items()
+        },
+    }
+)
 SCENARIO = obj(
     {
         "type": {"const": "gpullm-scenario"},
