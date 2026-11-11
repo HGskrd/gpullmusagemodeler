@@ -104,7 +104,7 @@
   {% endfor %}
   </span>
   {% elif am.gpu_count > 0 %}
-  <span class="mr-bad" title="No feasible {{ PRECISION_LABELS[am.prec] }} layout on {{ am.gpu_count }} GPUs under the current memory budget">doesn't fit</span>
+  <span class="mr-bad" title="No feasible {{ m.weight_precision_display(am.prec) }} layout on {{ am.gpu_count }} GPUs under the current memory budget">doesn't fit</span>
   {% else %}
   <span class="T">not deployed</span>
   {% endif %}
@@ -196,7 +196,7 @@
         <select class="prec-select" name="serving_runtime" aria-label="Serving runtime for {{ m.name }}"
                 hx-post="/model/artifact" hx-target="#main-content" hx-trigger="change" hx-include="closest .artifact-runtime"
                 hx-vals='{"panel":"{{ panel }}","uid":"{{ am.uid }}","artifact_id":"{{ am.artifact_id }}"}'>
-          {% for key, label in [('generic','Unspecified / estimate'),('vllm','vLLM'),('sglang','SGLang'),('trtllm','TensorRT-LLM')] %}
+          {% for key, label in [('generic','Unspecified / estimate'),('vllm','vLLM'),('sglang','SGLang'),('trtllm','TensorRT-LLM'),('mlx','MLX / MLX-VLM')] %}
           <option value="{{ key }}" {{ 'selected' if am.serving_runtime == key else '' }}>{{ label }}</option>
           {% endfor %}
         </select>
@@ -342,7 +342,7 @@
   {% if am.gpu_count == 0 %}
     <div class="T">Not deployed</div>
     {% if info.selected_pool_min_gpu_count %}
-    <div class="T">{{ PRECISION_LABELS[am.prec] }} needs at least {{ info.selected_pool_min_gpu_count }} GPUs on this pool.</div>
+    <div class="T">{{ m.weight_precision_display(am.prec) }} needs at least {{ info.selected_pool_min_gpu_count }} GPUs on this pool.</div>
     {% elif info.alt_prec and info.alt_pool_min_gpu_count %}
     <div class="T">{{ PRECISION_LABELS[info.alt_prec] }} needs at least {{ info.alt_pool_min_gpu_count }} GPUs on this pool.</div>
     {% endif %}

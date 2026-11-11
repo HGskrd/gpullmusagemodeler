@@ -9,15 +9,15 @@
       "data": [
         {
           "x": 1,
-          "y": 2785
+          "y": 2929
         },
         {
           "x": 4,
-          "y": 9027
+          "y": 9400
         },
         {
           "x": 16,
-          "y": 20705
+          "y": 21173
         }
       ],
       "fill": true,
@@ -33,15 +33,15 @@
       "data": [
         {
           "x": 1,
-          "y": 2485
+          "y": 2629
         },
         {
           "x": 4,
-          "y": 8034
+          "y": 8407
         },
         {
           "x": 16,
-          "y": 18193
+          "y": 18661
         }
       ],
       "fill": false,
@@ -171,15 +171,15 @@
       "data": [
         {
           "x": 1,
-          "y": 180556
+          "y": 191176
         },
         {
           "x": 4,
-          "y": 666667
+          "y": 702703
         },
         {
           "x": 16,
-          "y": 797768
+          "y": 846317
         }
       ],
       "fill": true,
@@ -252,15 +252,15 @@
       "data": [
         {
           "x": 1,
-          "y": 202212
+          "y": 212832
         },
         {
           "x": 4,
-          "y": 748445
+          "y": 784481
         },
         {
           "x": 16,
-          "y": 891999
+          "y": 940548
         }
       ],
       "fill": false,
@@ -287,7 +287,7 @@
           "spec_reason": "",
           "spec_speedup": 1.0,
           "x": 1,
-          "y": 2485
+          "y": 2629
         },
         {
           "spec_alpha": 0.0,
@@ -299,7 +299,7 @@
           "spec_reason": "",
           "spec_speedup": 1.0,
           "x": 4,
-          "y": 8034
+          "y": 8407
         },
         {
           "spec_alpha": 0.0,
@@ -311,7 +311,7 @@
           "spec_reason": "",
           "spec_speedup": 1.0,
           "x": 16,
-          "y": 18193
+          "y": 18661
         }
       ],
       "fill": true,
@@ -607,8 +607,8 @@
           "spec_probe_concurrency": 0,
           "spec_reason": "",
           "spec_speedup": 1.0,
-          "x": 0.4,
-          "y": 2485
+          "x": 0.38,
+          "y": 2629
         },
         {
           "bs": 2,
@@ -620,8 +620,8 @@
           "spec_probe_concurrency": 0,
           "spec_reason": "",
           "spec_speedup": 1.0,
-          "x": 0.43,
-          "y": 4606
+          "x": 0.41,
+          "y": 4852
         },
         {
           "bs": 4,
@@ -633,8 +633,8 @@
           "spec_probe_concurrency": 0,
           "spec_reason": "",
           "spec_speedup": 1.0,
-          "x": 0.5,
-          "y": 8034
+          "x": 0.48,
+          "y": 8407
         },
         {
           "bs": 8,
@@ -646,8 +646,8 @@
           "spec_probe_concurrency": 0,
           "spec_reason": "",
           "spec_speedup": 1.0,
-          "x": 0.63,
-          "y": 12799
+          "x": 0.6,
+          "y": 13267
         },
         {
           "bs": 16,
@@ -659,8 +659,8 @@
           "spec_probe_concurrency": 0,
           "spec_reason": "",
           "spec_speedup": 1.0,
-          "x": 0.88,
-          "y": 18193
+          "x": 0.86,
+          "y": 18661
         },
         {
           "bs": 32,
@@ -672,8 +672,8 @@
           "spec_probe_concurrency": 0,
           "spec_reason": "",
           "spec_speedup": 1.0,
-          "x": 1.39,
-          "y": 23051
+          "x": 1.37,
+          "y": 23423
         },
         {
           "bs": 64,
@@ -685,8 +685,8 @@
           "spec_probe_concurrency": 0,
           "spec_reason": "",
           "spec_speedup": 1.0,
-          "x": 2.41,
-          "y": 26602
+          "x": 2.38,
+          "y": 26849
         },
         {
           "bs": 128,
@@ -698,8 +698,8 @@
           "spec_probe_concurrency": 0,
           "spec_reason": "",
           "spec_speedup": 1.0,
-          "x": 4.44,
-          "y": 28823
+          "x": 4.42,
+          "y": 28967
         },
         {
           "bs": 256,
@@ -711,8 +711,8 @@
           "spec_probe_concurrency": 0,
           "spec_reason": "",
           "spec_speedup": 1.0,
-          "x": 8.51,
-          "y": 30078
+          "x": 8.49,
+          "y": 30156
         },
         {
           "bs": 512,
@@ -724,8 +724,8 @@
           "spec_probe_concurrency": 0,
           "spec_reason": "",
           "spec_speedup": 1.0,
-          "x": 16.65,
-          "y": 30748
+          "x": 16.63,
+          "y": 30788
         },
         {
           "bs": 1024,
@@ -737,8 +737,8 @@
           "spec_probe_concurrency": 0,
           "spec_reason": "",
           "spec_speedup": 1.0,
-          "x": 32.93,
-          "y": 31094
+          "x": 32.91,
+          "y": 31114
         }
       ],
       "hardware": "1× H100 80GB SXM",
@@ -878,32 +878,32 @@
         {
           "in_len": 9139,
           "out_len": 775,
-          "rps": 3.8,
-          "tps": 37684,
+          "rps": 3.99,
+          "tps": 39554,
           "unavailable_reason": null,
           "workload": "Chat",
           "x": 1,
-          "y": 3.8
+          "y": 3.99
         },
         {
           "in_len": 9139,
           "out_len": 775,
-          "rps": 12.33,
-          "tps": 122196,
+          "rps": 12.81,
+          "tps": 127035,
           "unavailable_reason": null,
           "workload": "Chat",
           "x": 4,
-          "y": 12.33
+          "y": 12.81
         },
         {
           "in_len": 9139,
           "out_len": 775,
-          "rps": 27.98,
-          "tps": 277388,
+          "rps": 28.58,
+          "tps": 283331,
           "unavailable_reason": null,
           "workload": "Chat",
           "x": 16,
-          "y": 27.98
+          "y": 28.58
         }
       ],
       "fill": false,
@@ -922,32 +922,32 @@
         {
           "in_len": 21670,
           "out_len": 977,
-          "rps": 2.76,
-          "tps": 62449,
+          "rps": 2.88,
+          "tps": 65208,
           "unavailable_reason": null,
           "workload": "RAG",
           "x": 1,
-          "y": 2.76
+          "y": 2.88
         },
         {
           "in_len": 21670,
           "out_len": 977,
-          "rps": 7.76,
-          "tps": 175784,
+          "rps": 7.99,
+          "tps": 180937,
           "unavailable_reason": null,
           "workload": "RAG",
           "x": 4,
-          "y": 7.76
+          "y": 7.99
         },
         {
           "in_len": 21670,
           "out_len": 977,
-          "rps": 14.31,
-          "tps": 324092,
+          "rps": 14.48,
+          "tps": 327987,
           "unavailable_reason": null,
           "workload": "RAG",
           "x": 16,
-          "y": 14.31
+          "y": 14.48
         }
       ],
       "fill": false,
@@ -966,32 +966,32 @@
         {
           "in_len": 51092,
           "out_len": 1813,
-          "rps": 1.27,
-          "tps": 67428,
+          "rps": 1.32,
+          "tps": 69860,
           "unavailable_reason": null,
           "workload": "Long doc",
           "x": 1,
-          "y": 1.27
+          "y": 1.32
         },
         {
           "in_len": 51092,
           "out_len": 1813,
-          "rps": 2.92,
-          "tps": 154585,
+          "rps": 2.97,
+          "tps": 157344,
           "unavailable_reason": null,
           "workload": "Long doc",
           "x": 4,
-          "y": 2.92
+          "y": 2.97
         },
         {
           "in_len": 51092,
           "out_len": 1813,
-          "rps": 4.52,
-          "tps": 239385,
+          "rps": 4.55,
+          "tps": 240695,
           "unavailable_reason": null,
           "workload": "Long doc",
           "x": 16,
-          "y": 4.52
+          "y": 4.55
         }
       ],
       "fill": false,
@@ -1010,32 +1010,32 @@
         {
           "in_len": 12319,
           "out_len": 1212,
-          "rps": 2.37,
-          "tps": 32124,
+          "rps": 2.49,
+          "tps": 33671,
           "unavailable_reason": null,
           "workload": "Code",
           "x": 1,
-          "y": 2.37
+          "y": 2.49
         },
         {
           "in_len": 12319,
           "out_len": 1212,
-          "rps": 7.33,
-          "tps": 99140,
+          "rps": 7.59,
+          "tps": 102714,
           "unavailable_reason": null,
           "workload": "Code",
           "x": 4,
-          "y": 7.33
+          "y": 7.59
         },
         {
           "in_len": 12319,
           "out_len": 1212,
-          "rps": 15.47,
-          "tps": 209273,
+          "rps": 15.74,
+          "tps": 212994,
           "unavailable_reason": null,
           "workload": "Code",
           "x": 16,
-          "y": 15.47
+          "y": 15.74
         }
       ],
       "fill": false,
@@ -1054,32 +1054,32 @@
         {
           "in_len": 9884,
           "out_len": 86,
-          "rps": 34.25,
-          "tps": 341500,
+          "rps": 35.95,
+          "tps": 358448,
           "unavailable_reason": null,
           "workload": "Classify",
           "x": 1,
-          "y": 34.25
+          "y": 35.95
         },
         {
           "in_len": 9884,
           "out_len": 86,
-          "rps": 79.35,
-          "tps": 791106,
+          "rps": 83.2,
+          "tps": 829517,
           "unavailable_reason": null,
           "workload": "Classify",
           "x": 4,
-          "y": 79.35
+          "y": 83.2
         },
         {
           "in_len": 9884,
           "out_len": 86,
-          "rps": 79.35,
-          "tps": 791109,
+          "rps": 83.2,
+          "tps": 829520,
           "unavailable_reason": null,
           "workload": "Classify",
           "x": 16,
-          "y": 79.35
+          "y": 83.2
         }
       ],
       "fill": false,
@@ -1150,166 +1150,166 @@
       "borderWidth": 2,
       "data": [
         {
-          "arrival_rps": 3.23,
-          "decode_step_ms": 0.4,
+          "arrival_rps": 3.4,
+          "decode_step_ms": 0.38,
           "inflight": 1.0,
-          "response_s": 0.32,
-          "ttft_ms": 12.9,
-          "x": 3.23,
-          "y": 0.32
+          "response_s": 0.31,
+          "ttft_ms": 12.2,
+          "x": 3.4,
+          "y": 0.31
         },
         {
-          "arrival_rps": 6.0,
-          "decode_step_ms": 0.43,
+          "arrival_rps": 6.29,
+          "decode_step_ms": 0.41,
           "inflight": 2.0,
-          "response_s": 0.36,
-          "ttft_ms": 25.7,
-          "x": 6.0,
-          "y": 0.36
+          "response_s": 0.34,
+          "ttft_ms": 24.4,
+          "x": 6.29,
+          "y": 0.34
         },
         {
-          "arrival_rps": 10.32,
-          "decode_step_ms": 0.5,
+          "arrival_rps": 10.75,
+          "decode_step_ms": 0.48,
           "inflight": 4.0,
-          "response_s": 0.44,
-          "ttft_ms": 51.5,
-          "x": 10.32,
-          "y": 0.44
+          "response_s": 0.42,
+          "ttft_ms": 48.8,
+          "x": 10.75,
+          "y": 0.42
         },
         {
-          "arrival_rps": 16.39,
-          "decode_step_ms": 0.63,
+          "arrival_rps": 17.2,
+          "decode_step_ms": 0.6,
           "inflight": 8.0,
-          "response_s": 0.59,
-          "ttft_ms": 103.0,
-          "x": 16.39,
-          "y": 0.59
+          "response_s": 0.56,
+          "ttft_ms": 97.6,
+          "x": 17.2,
+          "y": 0.56
         },
         {
-          "arrival_rps": 20.65,
-          "decode_step_ms": 0.75,
+          "arrival_rps": 21.21,
+          "decode_step_ms": 0.73,
           "inflight": 12.0,
-          "response_s": 0.74,
-          "ttft_ms": 154.5,
-          "x": 20.65,
-          "y": 0.74
+          "response_s": 0.71,
+          "ttft_ms": 146.5,
+          "x": 21.21,
+          "y": 0.71
         },
         {
-          "arrival_rps": 23.46,
-          "decode_step_ms": 0.88,
+          "arrival_rps": 24.01,
+          "decode_step_ms": 0.86,
           "inflight": 16.0,
-          "response_s": 0.89,
-          "ttft_ms": 206.0,
-          "x": 23.46,
-          "y": 0.89
+          "response_s": 0.86,
+          "ttft_ms": 195.3,
+          "x": 24.01,
+          "y": 0.86
         },
         {
-          "arrival_rps": 27.41,
-          "decode_step_ms": 1.13,
+          "arrival_rps": 27.9,
+          "decode_step_ms": 1.11,
           "inflight": 24.0,
-          "response_s": 1.18,
-          "ttft_ms": 309.0,
-          "x": 27.41,
-          "y": 1.18
+          "response_s": 1.15,
+          "ttft_ms": 292.9,
+          "x": 27.9,
+          "y": 1.15
         },
         {
-          "arrival_rps": 29.71,
-          "decode_step_ms": 1.39,
+          "arrival_rps": 30.14,
+          "decode_step_ms": 1.37,
           "inflight": 32.0,
-          "response_s": 1.49,
-          "ttft_ms": 412.0,
-          "x": 29.71,
-          "y": 1.49
+          "response_s": 1.45,
+          "ttft_ms": 390.6,
+          "x": 30.14,
+          "y": 1.45
         },
         {
-          "arrival_rps": 32.6,
-          "decode_step_ms": 1.9,
+          "arrival_rps": 33.12,
+          "decode_step_ms": 1.87,
           "inflight": 48.0,
-          "response_s": 2.09,
-          "ttft_ms": 618.0,
-          "x": 32.6,
-          "y": 2.09
+          "response_s": 2.04,
+          "ttft_ms": 585.9,
+          "x": 33.12,
+          "y": 2.04
         },
         {
-          "arrival_rps": 34.27,
-          "decode_step_ms": 2.41,
+          "arrival_rps": 34.7,
+          "decode_step_ms": 2.38,
           "inflight": 64.0,
-          "response_s": 2.69,
-          "ttft_ms": 824.0,
-          "x": 34.27,
-          "y": 2.69
+          "response_s": 2.63,
+          "ttft_ms": 781.2,
+          "x": 34.7,
+          "y": 2.63
         },
         {
-          "arrival_rps": 36.22,
-          "decode_step_ms": 3.42,
+          "arrival_rps": 36.43,
+          "decode_step_ms": 3.4,
           "inflight": 96.0,
-          "response_s": 3.89,
-          "ttft_ms": 1236.0,
-          "x": 36.22,
-          "y": 3.89
+          "response_s": 3.81,
+          "ttft_ms": 1171.8,
+          "x": 36.43,
+          "y": 3.81
         },
         {
-          "arrival_rps": 37.2,
-          "decode_step_ms": 4.44,
+          "arrival_rps": 37.37,
+          "decode_step_ms": 4.42,
           "inflight": 128.0,
-          "response_s": 5.09,
-          "ttft_ms": 1647.9,
-          "x": 37.2,
-          "y": 5.09
+          "response_s": 4.99,
+          "ttft_ms": 1562.4,
+          "x": 37.37,
+          "y": 4.99
         },
         {
-          "arrival_rps": 38.23,
-          "decode_step_ms": 6.48,
+          "arrival_rps": 38.41,
+          "decode_step_ms": 6.45,
           "inflight": 192.0,
-          "response_s": 7.49,
-          "ttft_ms": 2471.9,
-          "x": 38.23,
-          "y": 7.49
+          "response_s": 7.34,
+          "ttft_ms": 2343.6,
+          "x": 38.41,
+          "y": 7.34
         },
         {
-          "arrival_rps": 38.82,
-          "decode_step_ms": 8.51,
+          "arrival_rps": 38.91,
+          "decode_step_ms": 8.49,
           "inflight": 256.0,
-          "response_s": 9.89,
-          "ttft_ms": 3295.9,
-          "x": 38.82,
-          "y": 9.89
+          "response_s": 9.7,
+          "ttft_ms": 3124.8,
+          "x": 38.91,
+          "y": 9.7
         },
         {
-          "arrival_rps": 39.39,
-          "decode_step_ms": 12.58,
+          "arrival_rps": 39.45,
+          "decode_step_ms": 12.56,
           "inflight": 384.0,
-          "response_s": 14.69,
-          "ttft_ms": 4943.8,
-          "x": 39.39,
-          "y": 14.69
+          "response_s": 14.42,
+          "ttft_ms": 4687.2,
+          "x": 39.45,
+          "y": 14.42
         },
         {
-          "arrival_rps": 39.68,
-          "decode_step_ms": 16.65,
+          "arrival_rps": 39.73,
+          "decode_step_ms": 16.63,
           "inflight": 512.0,
-          "response_s": 19.5,
-          "ttft_ms": 6591.8,
-          "x": 39.68,
-          "y": 19.5
+          "response_s": 19.14,
+          "ttft_ms": 6249.5,
+          "x": 39.73,
+          "y": 19.14
         },
         {
-          "arrival_rps": 39.97,
-          "decode_step_ms": 24.79,
+          "arrival_rps": 40.01,
+          "decode_step_ms": 24.77,
           "inflight": 768.0,
-          "response_s": 29.1,
-          "ttft_ms": 9887.6,
-          "x": 39.97,
-          "y": 29.1
+          "response_s": 28.57,
+          "ttft_ms": 9374.3,
+          "x": 40.01,
+          "y": 28.57
         },
         {
-          "arrival_rps": 40.12,
-          "decode_step_ms": 32.93,
+          "arrival_rps": 40.15,
+          "decode_step_ms": 32.91,
           "inflight": 1024.0,
-          "response_s": 38.7,
-          "ttft_ms": 13183.5,
-          "x": 40.12,
-          "y": 38.7
+          "response_s": 38.0,
+          "ttft_ms": 12499.1,
+          "x": 40.15,
+          "y": 38.0
         }
       ],
       "fill": false,
@@ -1528,7 +1528,7 @@
       "borderWidth": 2,
       "data": [
         {
-          "lat": 0.4,
+          "lat": 0.38,
           "spec_alpha": 0.0,
           "spec_auto": false,
           "spec_beneficial": false,
@@ -1537,13 +1537,13 @@
           "spec_probe_concurrency": 0,
           "spec_reason": "",
           "spec_speedup": 1.0,
-          "total_tps": 2485,
+          "total_tps": 2629,
           "users": 1,
           "x": 1,
-          "y": 2485.0
+          "y": 2629.0
         },
         {
-          "lat": 0.5,
+          "lat": 0.48,
           "spec_alpha": 0.0,
           "spec_auto": false,
           "spec_beneficial": false,
@@ -1552,13 +1552,13 @@
           "spec_probe_concurrency": 0,
           "spec_reason": "",
           "spec_speedup": 1.0,
-          "total_tps": 8034,
+          "total_tps": 8407,
           "users": 4,
           "x": 4,
-          "y": 2008.5
+          "y": 2101.75
         },
         {
-          "lat": 0.88,
+          "lat": 0.86,
           "spec_alpha": 0.0,
           "spec_auto": false,
           "spec_beneficial": false,
@@ -1567,10 +1567,10 @@
           "spec_probe_concurrency": 0,
           "spec_reason": "",
           "spec_speedup": 1.0,
-          "total_tps": 18193,
+          "total_tps": 18661,
           "users": 16,
           "x": 16,
-          "y": 1137.06
+          "y": 1166.31
         }
       ],
       "hardware": "1× H100 80GB SXM",

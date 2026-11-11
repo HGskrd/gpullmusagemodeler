@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-11-11
+
+- Corrected MiMo V2.6 unequal K/V widths, Gemma E2B/E4B full residency and shared
+  caches, Gemma12B context, and exact Qwen3.5 target/drafter footprints.
+- Added Mistral Large4, PPLX contextual embeddings, Granite470M TurboCTC and
+  PPLX Decider v1.2, plus pinned LFM3VL MLX and Nanbeige integer/FP8 artifacts.
+- Added eight hosted identities and a separate November gateway preset. Enforced
+  actual-token limits, TTL/component-specific cache billing, dated Mistral prices
+  and bounded DeepSeek holiday pricing; refreshed sourced caps/storage prices.
+- Updated Tinybox six-R9700 power limits, Galaxy acquisition price, Intel D270
+  bandwidth and Rubin availability. See the [source/assumption ledger](docs/catalog-audit-2026-11-11.md).
+
 - Added Gemma 4 E2B, E4B, and 12B Unified as separate non-streaming multilingual ASR catalog entries while retaining their general-purpose LLM entries. The ASR profiles use Google's published 40 ms audio-token rate, 30-second input limit, E2B/E4B 305M Conformer encoder metadata, encoder-free 12B projection, and English/French FLEURS WER.
 
 All notable changes to this project will be documented in this file.

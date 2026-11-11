@@ -41,6 +41,8 @@ class RealtimeProfile:
     cross_attention: bool = False
     audio_replay_factor: float = 1.0
     prefill_replay_factor: float = 1.0
+    # (parameter-equivalent work, input frames/s, attention layers), before subsampling.
+    audio_encoder_stages: tuple[tuple[float, float, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -74,6 +76,8 @@ class EmbeddingProfile:
     storage_format: str = "FP32"
     pooling: str = ""
     causal_attention: bool = False
+    # Explicit workload chunk-size assumption for one full-document contextual pass.
+    contextual_chunk_tokens: int = 0
 
     @property
     def supports_single_vector(self) -> bool:
@@ -85,6 +89,8 @@ class EmbeddingProfile:
 
     @property
     def mode_label(self) -> str:
+        if self.contextual_chunk_tokens > 0:
+            return "contextual chunk vectors"
         if self.kind == "hybrid":
             return "single-vector + late interaction"
         if self.kind == "late":
@@ -337,6 +343,8 @@ class Model:
     local_attention_head_dim: int = 0
     local_kv_heads: int = 0
     local_kv_head_dim: int = 0
+    # Explicit value width for unequal K/V projections; zero keeps equal widths.
+    kv_value_head_dim: int = 0
     global_kv_heads: int = 0
     global_head_dim: int = 0
     shared_key_value: bool = False
@@ -405,6 +413,7 @@ class Model:
     prefill_active_params: float = 0.0
     conditional_memory_params: float = 0.0
     conditional_memory_weight_bytes: float = 0.0
+    conditional_memory_lookup_bytes_per_token: float = 0.0
     conditional_memory_layers: tuple[int, ...] = ()
     # Offloaded tables keep their stored precision independently of backbone weights.
     conditional_memory_on_host: bool = False
@@ -674,7 +683,9 @@ class Model:
             else self.active_params
         )
         if not self.is_moe:
-            params = self.total_params - self.conditional_memory_params
+            params = self.active_weight_params or (
+                self.total_params - self.conditional_memory_params
+            )
         shares = self.compute_shares(prec, phase)
         return tuple(
             WeightComponent(
@@ -704,6 +715,8 @@ class Model:
             bpp = (
                 profile.active_weight_bytes_per_param(self.total_params)
                 if profile is not None
+                else PRECISION_SPECS[normalize_precision(prec)].effective_weight_bytes_per_param
+                if self.conditional_memory_params > 0
                 else self.weight_bytes_per_param(prec)
             )
             return self.active_weight_params * bpp
@@ -766,6 +779,13 @@ class Model:
             if self.selected_artifact_id == f"estimate:{normalize_precision(prec)}":
                 return None
         return get_quantization_profile(self.key, prec)
+
+    def weight_precision_display(self, prec: str, fallback: str = "") -> str:
+        """Keep integer checkpoint formats distinct from their legacy float slot."""
+        profile = self.quantization_profile(prec)
+        if profile and "INT" in profile.format_scheme.encoding:
+            return profile.format_scheme.encoding
+        return fallback or PRECISION_SPECS[normalize_precision(prec)].label
 
     @property
     def native_precision_key(self) -> str:

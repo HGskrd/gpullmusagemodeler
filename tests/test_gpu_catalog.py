@@ -49,7 +49,7 @@ class GPUCatalogTests(unittest.TestCase):
         crescent = GPUS["CrescentIsland"]
         self.assertEqual((crescent.mem, crescent.tdp_watts), (480e9, 350.0))
         self.assertIn(
-            "bandwidth", " ".join(PREVIEW_ASSUMPTIONS["gpu:CrescentIsland"]["assumptions"])
+            "1.5 TB/s", " ".join(PREVIEW_ASSUMPTIONS["gpu:CrescentIsland"]["assumptions"])
         )
 
         self.assertEqual(GPUS["MAC_STUDIO_M5_MAX"].mem, 128e9)
@@ -117,7 +117,7 @@ class GPUCatalogTests(unittest.TestCase):
         self.assertEqual(gpu.tdp_watts, 0.0)
         self.assertIn("RUBIN_NVL72", picker_keys)
         self.assertIn("gpu:RUBIN_NVL72", PREVIEW_ASSUMPTIONS)
-        self.assertIn("preliminary", PREVIEW_ASSUMPTIONS["gpu:RUBIN_NVL72"]["assumptions"][0])
+        self.assertIn("available now", PREVIEW_ASSUMPTIONS["gpu:RUBIN_NVL72"]["status"])
 
     def test_mi455x_profile_uses_named_helios_accelerator(self):
         gpu = GPUS["MI455X"]

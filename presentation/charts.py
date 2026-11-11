@@ -695,11 +695,12 @@ def _label(
                 f" · Spec off (Auto {spec_meta['spec_method'].upper()} @"
                 f"{spec_meta['spec_probe_concurrency']}, best k={spec_meta['spec_k']})"
             )
+    precision_label = model.weight_precision_display(am.prec, am.prec.upper())
     if include_prefill:
         prefill_label = strategy_label(am.prefill_tp, am.prefill_pp, am.prefill_dp)
         if prefill_label != decode_label:
-            return f"{model.name} P {prefill_label} / D {decode_label} {am.prec.upper()}{spec_suffix}{panel_suffix}"
-    return f"{model.name} {decode_label} {am.prec.upper()}{spec_suffix}{panel_suffix}"
+            return f"{model.name} P {prefill_label} / D {decode_label} {precision_label}{spec_suffix}{panel_suffix}"
+    return f"{model.name} {decode_label} {precision_label}{spec_suffix}{panel_suffix}"
 
 
 def chart_user_experience(state, panel_suffix: str = "") -> list[dict]:

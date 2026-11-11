@@ -115,7 +115,7 @@ MODEL_ASSIGNMENT = obj(
         "execution_backend": choices(("legacy", "auto", "native", "w4a16", "expanded")),
         "kv_precision": choices(("legacy", "auto", "bf16", "fp8")),
         "recurrent_precision": choices(("legacy", "auto", "bf16", "fp32")),
-        "serving_runtime": choices(("generic", "vllm", "sglang", "trtllm")),
+        "serving_runtime": choices(("generic", "vllm", "sglang", "trtllm", "mlx")),
         "runtime_version": {"type": "string", "maxLength": 64},
         **dict.fromkeys(
             ("tp", "pp", "dp", "prefill_tp", "prefill_pp", "prefill_dp"),

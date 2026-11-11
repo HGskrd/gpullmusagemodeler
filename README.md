@@ -1,6 +1,8 @@
 # GPU/LLM Usage Modeler
 
-The [27 October release ledger](docs/model-releases-2026-10-27.md) records the latest
+The [11 November audit ledger](docs/catalog-audit-2026-11-11.md) records capacity
+and billing corrections, five local models, eight hosted choices and exact artifacts.
+The [27 October release ledger](docs/model-releases-2026-10-27.md) records the prior
 47 model/mode additions, pinned sources, artifact sizes and capacity assumptions.
 
 A Flask web application for planning and modeling multi-model LLM deployments across GPUs and AI accelerators. It lets you configure accelerator pools, LLM workloads, and traffic distributions to project infrastructure costs and throughput.
@@ -65,7 +67,7 @@ DeepSeek V4.1 Flash uses a separate CED/CSA2 path: 8B active prefill plus a boun
 
 The V4.1 native 510.286 GB checkpoint includes 196B Engram parameters, vision, and DSpark tensors. Engram occupies system RAM at FP8 (202.758 GB including scales per model copy) in every weight mode, leaving 307.528 GB of native GPU weights. Host tables are excluded from VRAM fit, pipeline-stage weights, and memory bars, while complete checkpoint storage remains unchanged. Provision host RAM separately, including runtime/loader overhead and any additional table copies required by the serving topology; host capacity, lookup buffers and RDMA/UVA transfer latency are not simulated. On unified-memory devices, host tables still consume the shared physical memory pool; the GPU-only fit is not a whole-system capacity check. Vision-encoder latency, persistent SSD cache, and DSpark speedup require runtime calibration and are not simulated. Placement corrected 2026-09-29 using [the inference description](https://arxiv.org/html/2609.19969v1#S2.SS4.SSS2) and [vLLM CPU-offload recipes](https://github.com/vllm-project/recipes/blob/main/models/deepseek-ai/DeepSeek-V4.1-Flash.yaml). Native active compute/traffic uses exact routed-expert geometry with remaining operators conservatively charged as BF16. Quality and verbosity retain a low-confidence V4 Flash family proxy pending comparable evidence. Sources captured 2026-09-10: [official report](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash/blob/df42c109f1defefcbfcedbe7d905718a12266e40/DeepSeek_V41_Tech_Report.pdf) and config/index at the same revision.
 
-Cloud entries may define an input-length threshold and a second set of long-context input, cached-input, and output rates. The calculator switches tiers only when the request input is strictly above the published threshold.
+Cloud entries may define an input-length threshold and a second set of long-context input, cached-input, and output rates. Tier selection honors each provider's inclusive or exclusive threshold. Context/output eligibility uses actual generated tokens after the verbosity assumption; cost comparisons retain useful-work units. Explicit billing profiles can select cache-write TTL, service tier, region and pricing date. Token discounts and storage charges are independent. The November ledger documents dated histories, holiday coverage and unsupported continuation billing.
 
 To export hardware/model combinations for a web-search agent, see the
 [benchmark research queue](docs/benchmark-research.md). The offline CLI generates

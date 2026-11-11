@@ -86,7 +86,7 @@ QUANTIZATION_SCHEMES = {
     "mxfp4": QuantizationScheme("E2M1", (32,), "E8M0"),
     "nvfp4": QuantizationScheme("E2M1", (16,), "E4M3 block + FP32 tensor scale"),
 }
-SERVING_RUNTIMES = ("generic", "vllm", "sglang", "trtllm")
+SERVING_RUNTIMES = ("generic", "vllm", "sglang", "trtllm", "mlx")
 EXECUTION_BACKENDS = ("legacy", "auto", "native", "w4a16", "expanded")
 CACHE_PRECISIONS = ("legacy", "auto", "bf16", "fp8")
 RECURRENT_PRECISIONS = ("legacy", "auto", "bf16", "fp32")

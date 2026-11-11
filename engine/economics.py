@@ -1376,6 +1376,24 @@ def _scheduled_cloud_price(cloud: dict, field: str, profile: dict) -> tuple[floa
     weekday = profile.get("pricing_weekday_utc")
     hour = profile.get("pricing_hour_utc")
     schedule = cloud.get("peak_schedule_utc", ())
+    raw_date = profile.get("pricing_date_utc")
+    if raw_date and schedule:
+        try:
+            billing_date = date.fromisoformat(str(raw_date))
+        except ValueError:
+            billing_date = None
+        if billing_date is not None:
+            weekday = billing_date.weekday()
+            holiday = profile.get("pricing_is_chinese_public_holiday")
+            if holiday is None:
+                holiday = any(
+                    start <= billing_date.isoformat() <= end
+                    for start, end in cloud.get("holiday_date_ranges", ())
+                )
+            if holiday:
+                return max(
+                    float(cloud.get(f"off_peak_{field}", cloud[field])), 0.0
+                ), "holiday_off_peak"
     if weekday is None or hour is None or not schedule:
         return max(float(cloud[field]), 0.0), "weekly_blend" if schedule else "standard"
     weekday = int(weekday) % 7
@@ -1388,21 +1406,25 @@ def _scheduled_cloud_price(cloud: dict, field: str, profile: dict) -> tuple[floa
 
 
 def _dated_cloud_pricing(cloud: dict, profile: dict) -> tuple[dict, str]:
-    """Apply a published successor rate only when the workload pins an as-of date."""
+    """Resolve a captured price history or successor for an explicitly dated workload."""
     raw_as_of = profile.get("pricing_as_of")
     successor = cloud.get("future_pricing")
-    if not raw_as_of or not isinstance(successor, dict):
+    if not raw_as_of or cloud.get("price_source") == "override":
         return cloud, "catalog_capture"
     try:
         as_of = date.fromisoformat(str(raw_as_of))
-        effective_at = date.fromisoformat(str(successor["effective_at"]))
-    except (KeyError, TypeError, ValueError):
+    except ValueError:
         return cloud, "catalog_capture"
-    if as_of < effective_at:
+    history = list(cloud.get("pricing_history", ()))
+    if isinstance(successor, dict):
+        history.append(successor)
+    eligible = [row for row in history if str(row.get("effective_at", "")) <= as_of.isoformat()]
+    if not eligible:
         return cloud, "catalog_capture"
+    selected = max(eligible, key=lambda row: str(row["effective_at"]))
     prices = dict(cloud)
-    prices.update({key: value for key, value in successor.items() if key != "effective_at"})
-    return prices, str(successor["effective_at"])
+    prices.update({key: value for key, value in selected.items() if key != "effective_at"})
+    return prices, str(selected["effective_at"])
 
 
 def _cloud_price_per_m_in_preset(
@@ -1435,6 +1457,13 @@ def _cloud_price_per_m_in_preset(
     best: Optional[tuple[float, dict]] = None
     for key, cloud in cloud_policy.effective_corpo_models(preset_name):
         priced_cloud, price_effective_at = _dated_cloud_pricing(cloud, profile)
+        as_of = profile.get("pricing_as_of")
+        if as_of and cloud.get("released_at") and str(as_of) < str(cloud["released_at"]):
+            continue
+        if priced_cloud.get("cache_mode") == "implicit_only" and (
+            cache_write_tokens > 0 or cache_storage_token_hours > 0
+        ):
+            continue
         # Most cloud entries carry no capability list. Missing data is unknown, not
         # "can do nothing": such entries pass the gate and are flagged unverified.
         listed_capabilities = cloud.get("capabilities")
@@ -1450,9 +1479,12 @@ def _cloud_price_per_m_in_preset(
         cloud_success = success_rate(cloud_quality, difficulty)
         if cloud_success + 1e-9 < min_success:
             continue
-        if tokens_per_req > float(cloud.get("max_context_tokens", math.inf)):
+        actual_output = out_len / cloud_eff
+        if in_len > float(cloud.get("max_input_tokens", math.inf)):
             continue
-        if out_len > float(cloud.get("max_output_tokens", math.inf)):
+        if in_len + actual_output > float(cloud.get("max_context_tokens", math.inf)):
+            continue
+        if actual_output > float(cloud.get("max_output_tokens", math.inf)):
             continue
         threshold = max(float(priced_cloud.get("long_context_threshold_tokens", 0.0) or 0.0), 0.0)
         threshold_inclusive = bool(priced_cloud.get("long_context_threshold_inclusive", False))
@@ -1471,13 +1503,22 @@ def _cloud_price_per_m_in_preset(
             input_price = tier_price("long_context_in_per_m", "in_per_m")
             cached_input_price = tier_price("long_context_cached_in_per_m", "cached_in_per_m")
             output_price = tier_price("long_context_out_per_m", "out_per_m")
+        ttl = str(profile.get("cache_write_ttl", priced_cloud.get("default_cache_write_ttl", "")))
+        write_field = f"cache_write_{ttl}_per_m" if ttl else "cache_write_per_m"
+        if write_field not in priced_cloud and ttl == priced_cloud.get("default_cache_write_ttl"):
+            write_field = "cache_write_per_m"
+        if cache_write_tokens > 0 and write_field not in priced_cloud:
+            continue
         cache_write_price = (
-            tier_price("long_context_cache_write_per_m", "cache_write_per_m")
-            if "cache_write_per_m" in priced_cloud
+            tier_price(f"long_context_{write_field}", write_field)
+            if write_field in priced_cloud
             else 0.0
         )
         cache_storage_price = max(float(priced_cloud.get("cache_storage_per_m_hour", 0.0)), 0.0)
         service_tier = str(profile.get("cloud_service_tier", "standard"))
+        supported_tiers = priced_cloud.get("supported_service_tiers")
+        if supported_tiers is not None and service_tier not in supported_tiers:
+            continue
         region = str(profile.get("cloud_region", "default"))
         service_multiplier = max(
             float(priced_cloud.get("service_tier_price_multipliers", {}).get(service_tier, 1.0)),
@@ -1490,13 +1531,37 @@ def _cloud_price_per_m_in_preset(
             float(profile.get("cloud_price_multiplier", priced_cloud.get("price_multiplier", 1.0))),
             0.0,
         )
-        price_multiplier *= service_multiplier * region_multiplier
+        price_multiplier *= region_multiplier
+        component_overrides = priced_cloud.get("service_tier_component_multipliers", {}).get(
+            service_tier, {}
+        )
+        component_multipliers = {
+            field: max(
+                float(
+                    component_overrides.get(
+                        field, 1.0 if field == "cache_storage_per_m_hour" else service_multiplier
+                    )
+                ),
+                0.0,
+            )
+            for field in (
+                "in_per_m",
+                "cached_in_per_m",
+                "cache_write_per_m",
+                "cache_storage_per_m_hour",
+                "out_per_m",
+            )
+        }
         sticker = price_multiplier * (
-            (uncached / 1e6) * input_price
-            + (cached / 1e6) * cached_input_price
-            + (cache_write_tokens / 1e6) * cache_write_price
-            + (cache_storage_token_hours / 1e6) * cache_storage_price
-            + ((out_len / cloud_eff) / 1e6) * output_price
+            (uncached / 1e6) * input_price * component_multipliers["in_per_m"]
+            + (cached / 1e6) * cached_input_price * component_multipliers["cached_in_per_m"]
+            + (cache_write_tokens / 1e6)
+            * cache_write_price
+            * component_multipliers["cache_write_per_m"]
+            + (cache_storage_token_hours / 1e6)
+            * cache_storage_price
+            * component_multipliers["cache_storage_per_m_hour"]
+            + (actual_output / 1e6) * output_price * component_multipliers["out_per_m"]
         )
         # Token efficiency affects generated tokens, not the fixed prompt payload.
         # Retry-adjust cloud and on-prem routes symmetrically. A route with
@@ -1521,6 +1586,16 @@ def _cloud_price_per_m_in_preset(
                     "effective_cache_storage_per_m_hour": cache_storage_price,
                     "effective_out_per_m": output_price,
                     "effective_price_multiplier": price_multiplier,
+                    "effective_component_multipliers": component_multipliers,
+                    "effective_cache_write_ttl": ttl,
+                    "actual_output_tokens": actual_output,
+                    "holiday_calendar_unverified": bool(
+                        priced_cloud.get("peak_schedule_utc")
+                        and profile.get("pricing_date_utc")
+                        and str(profile["pricing_date_utc"])[:4]
+                        not in priced_cloud.get("holiday_calendar_years", ())
+                        and "pricing_is_chinese_public_holiday" not in profile
+                    ),
                 },
             )
 

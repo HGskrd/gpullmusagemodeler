@@ -174,7 +174,7 @@ class ModelCatalogTests(unittest.TestCase):
             "codestral-2501": ("Codestral", 0.30, 0.03, 0.90),
             "grok-4.6": ("Grok 4.6", 2.00, 0.50, 6.00),
             "deepseek-v4-flash": ("DeepSeek V4.1 Flash 1017", 0.18125, 0.003625, 0.725),
-            "deepseek-v4-pro": ("DeepSeek V4 Pro Preview", 0.7975, 0.026583333333333334, 2.3925),
+            "deepseek-v4-pro": ("DeepSeek V4 Pro 0813", 0.7975, 0.026583333333333334, 2.3925),
         }
 
         self.assertEqual(CLOUD_PRICING_CAPTURED_AT, "2026-09-21")
@@ -190,6 +190,9 @@ class ModelCatalogTests(unittest.TestCase):
                 self.assertEqual(cloud["pricing_source"], CLOUD_PRICING_SOURCES[cloud["vendor"]])
 
         for key, cloud in CLOUD_MODELS.items():
+            if cloud.get("pricing_captured_at") == "2026-11-11":
+                self.assertTrue(cloud["pricing_source"].startswith("https://"))
+                continue
             if key.startswith("kimi") or key in {
                 "claude-opus-5.5",
                 "claude-sonnet-5.5",
@@ -271,8 +274,8 @@ class ModelCatalogTests(unittest.TestCase):
                 self.assertNotIn("kimi", key)
                 self.assertEqual(
                     record["captured_at"],
-                    "2026-10-17"
-                    if key == "cloud:mistral-large-4"
+                    "2026-11-11"
+                    if key in {"gpu:RUBIN_NVL72", "gpu:CrescentIsland", "gpu:TT_GALAXY_BLACKHOLE"}
                     else PREVIEW_ASSUMPTIONS_CAPTURED_AT,
                 )
                 self.assertTrue(str(record["source"]).startswith("https://"))
@@ -537,9 +540,8 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual((model.moe_routed_experts, model.moe_active_experts), (384, 6))
         self.assertEqual(len(model.attention_compression_ratios), 61)
         self.assertEqual(model.native_precision_key, "mxfp4")
-        self.assertIn("preview", CLOUD_MODELS["deepseek-v4-pro"]["label"].lower())
-        record = PREVIEW_ASSUMPTIONS["cloud:deepseek-v4-pro"]
-        self.assertEqual(record["captured_at"], PREVIEW_ASSUMPTIONS_CAPTURED_AT)
+        self.assertNotIn("preview", CLOUD_MODELS["deepseek-v4-pro"]["label"].lower())
+        self.assertNotIn("cloud:deepseek-v4-pro", PREVIEW_ASSUMPTIONS)
 
     def test_laguna_m1_catalog_entry_uses_public_poolside_specs(self):
         model = MODELS["laguna-m1"]
@@ -1045,8 +1047,8 @@ class ModelCatalogTests(unittest.TestCase):
 
     def test_added_asr_catalog_entries_have_profiles(self):
         expected = {
-            "gemma-4-e2b-asr": ("Gemma 4 E2B ASR", 2.0e9, False),
-            "gemma-4-e4b-asr": ("Gemma 4 E4B ASR", 4.0e9, False),
+            "gemma-4-e2b-asr": ("Gemma 4 E2B ASR", 5_123_178_051, False),
+            "gemma-4-e4b-asr": ("Gemma 4 E4B ASR", 7_996_156_490, False),
             "gemma-4-12b-unified-asr": ("Gemma 4 12B Unified ASR", 11.95e9, False),
             "microsoft-vibevoice-asr-streaming-1.5b": (
                 "Microsoft VibeVoice ASR Streaming 1.5B",

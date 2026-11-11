@@ -48,7 +48,15 @@ def test_chooser_has_unique_purchasable_profiles_and_keeps_compatibility_keys():
     ]
     assert len(rendered) == len(set(rendered))
     assert set(rendered) == set(keys)
-    assert list(picker_vendors()) == ["NVIDIA", "AMD", "Intel", "Apple", "Tenstorrent", "FuriosaAI"]
+    assert list(picker_vendors()) == [
+        "NVIDIA",
+        "AMD",
+        "Intel",
+        "Apple",
+        "Tenstorrent",
+        "FuriosaAI",
+        "Tinygrad",
+    ]
 
 
 def test_catalog_corrections_and_new_variant_invariants():

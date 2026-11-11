@@ -734,8 +734,8 @@ class CoreCapacityMathTests(unittest.TestCase):
                 kv_residency_seq_len=2048,
             )
             self.assertIsNotNone(result)
-            # 67.03 GB KV budget / 35.27 MB per 2048-token sequence.
-            self.assertEqual(result.max_batch, 1900)
+            # Exact target weights retain vision and reduce the available KV budget.
+            self.assertEqual(result.max_batch, 1897)
 
         # Without the residency override the call keeps its miss-length-only
         # semantics and overstates how many prompts fit.
@@ -752,7 +752,7 @@ class CoreCapacityMathTests(unittest.TestCase):
             "bf16",
             self.eff,
         )
-        self.assertEqual(legacy.max_batch, 2955)
+        self.assertEqual(legacy.max_batch, 2950)
 
     def test_full_prefix_hit_residency_is_bounded(self):
         model = MODELS["q08"]
@@ -778,7 +778,7 @@ class CoreCapacityMathTests(unittest.TestCase):
         self.assertEqual(result.service_time, 0.0)
         # Not the unbounded sentinel: residency still caps concurrent prompts.
         self.assertLess(result.max_batch, UNBOUNDED_BATCH)
-        self.assertEqual(result.max_batch, 1900)
+        self.assertEqual(result.max_batch, 1897)
 
     def test_attached_drafter_pays_prefill_prompt_pass(self):
         # EAGLE-3 runs its own prompt forward to seed drafter state, so

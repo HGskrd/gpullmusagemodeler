@@ -689,6 +689,8 @@ AA_QUALITY_PLACEHOLDER: frozenset[str] = frozenset(
     {
         # Restored picker entry has no retained comparable AA anchor; confidence is zero.
         "ms32",
+        # November open release has no directly comparable independent quality anchor.
+        "mistral-large-4",
         # Pinned October release batch; vendor protocols are not independent AA anchors.
         "minimax-m3.1-flash",
         "nanbeige43-33b",
