@@ -1,5 +1,6 @@
 """Cloud model pricing and corporate gateway presets."""
 
+from .cloud_releases_202611 import CLOUD_RELEASE_PROXIES, apply_cloud_release_updates
 from .hardware import PREVIEW_ASSUMPTIONS
 from .quality import aa_intelligence_to_quality, aa_output_tokens_to_efficiency
 
@@ -533,6 +534,10 @@ for _k, (_score, _verbosity_m) in AA_CLOUD_METRICS.items():
         CLOUD_MODELS[_k]["quality"] = aa_intelligence_to_quality(_score)
         CLOUD_MODELS[_k]["token_efficiency"] = aa_output_tokens_to_efficiency(_verbosity_m)
 
+# New identities retain explicit predecessor/deployment-class quality proxies.
+for _new_key, _parent_key in CLOUD_RELEASE_PROXIES.items():
+    AA_CLOUD_METRICS[_new_key] = AA_CLOUD_METRICS[_parent_key]
+
 
 def cloud_models_missing_quality_anchors() -> list[str]:
     """Cloud/API models lacking an AA_CLOUD_METRICS row (same silent-0.5 failure mode)."""
@@ -684,6 +689,15 @@ CLOUD_MODELS["mistral-large-4"]["future_pricing"] = {
     "in_per_m": 1.36,
     "cached_in_per_m": 0.14,
     "out_per_m": 4.18,
+}
+
+apply_cloud_release_updates(CLOUD_MODELS, PREVIEW_ASSUMPTIONS)
+for _new_key, _parent_key in CLOUD_RELEASE_PROXIES.items():
+    CLOUD_MODELS[_new_key]["quality"] = CLOUD_MODELS[_parent_key]["quality"]
+    CLOUD_MODELS[_new_key]["token_efficiency"] = CLOUD_MODELS[_parent_key]["token_efficiency"]
+CORPO_CLOUD_PRESETS["november_2026"] = {
+    "label": "Recent API releases · November 2026",
+    "models": (*CLOUD_RELEASE_PROXIES, "mistral-large-4"),
 }
 
 

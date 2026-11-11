@@ -10,12 +10,13 @@ from .asr_support import (
     INKLING_SMALL_ASR_PROFILE,
 )
 from .model_archive import ARCHIVED_MODELS
-from .model_class import Model
+from .model_class import MODEL_ARTIFACT_PROFILES, MODEL_QUANTIZATION_PROFILES, Model
 from .models_asr import ASR_MODELS
 from .models_decision import DECISION_MODELS
 from .models_embedding import EMBEDDING_MODELS
 from .models_lfm3 import LFM3_MODELS
 from .models_releases_202610 import RELEASE_MODELS
+from .models_releases_202611 import NOVEMBER_MODELS
 from .models_text import TEXT_MODELS
 
 _ALL_MODEL_DEFINITIONS = {
@@ -25,6 +26,7 @@ _ALL_MODEL_DEFINITIONS = {
     **DECISION_MODELS,
     **LFM3_MODELS,
     **RELEASE_MODELS,
+    **NOVEMBER_MODELS,
 }
 _INITIAL_MODELS = {
     key: model for key, model in _ALL_MODEL_DEFINITIONS.items() if key not in ARCHIVED_MODELS
@@ -35,6 +37,7 @@ MODEL_ORDER: tuple[str, ...] = (
     "d1-3b",
     "d1-omni-600m",
     "pplx-decider-v1.1-27b",
+    "pplx-decider-v1.2",
     "pplx-decider-flash-v1.2",
     "clef",
     "clef-flash",
@@ -60,6 +63,8 @@ MODEL_ORDER: tuple[str, ...] = (
     "kalm-mini-it-v15",
     "pplx-embed-v1-0.6b",
     "pplx-embed-v1-4b",
+    "pplx-embed-v2-context-0.6b",
+    "pplx-embed-v2-context-9b",
     "pplx-embed-v1-late-0.6b",
     "cohere-embed-v4-0",
     "l8",
@@ -142,6 +147,7 @@ MODEL_ORDER: tuple[str, ...] = (
     "moonshine-streaming-medium",
     "fun-asr-nano-2512",
     "granite-4.0-1b-speech",
+    "granite-speech-5.0-470m-turboctc",
     "cohere-transcribe-03-2026",
     "nvidia-parakeet-tdt-0.6b-v3",
     "ms32",
@@ -149,6 +155,7 @@ MODEL_ORDER: tuple[str, ...] = (
     "mistral-medium-3.5",
     "ms4",
     "ml3",
+    "mistral-large-4",
     "granite42-3b",
     "granite42-8b",
     "granite42-30b",
@@ -247,6 +254,12 @@ MODELS.update(
         ),
     }
 )
+
+for _alias, _parent in (("gemma-4-e2b-asr", "ge2"), ("gemma-4-e4b-asr", "ge4")):
+    for (_model_key, _precision), _profile in tuple(MODEL_QUANTIZATION_PROFILES.items()):
+        if _model_key == _parent:
+            MODEL_QUANTIZATION_PROFILES[(_alias, _precision)] = _profile
+            MODEL_ARTIFACT_PROFILES[(_alias, _profile.artifact_id)] = _profile
 
 # Picker retirement preserves catalog keys and geometry for saved scenarios.
 # Apply after variants are constructed so successors do not inherit hidden=True.

@@ -20,7 +20,7 @@
       {% for r in tech_scorecard(st, ep) %}
       {% set m = r.info.model %}{% set am = r.info.am %}
       <div class="tsc-c"><span class="dot" style="background:{{ m.color }};"></span></div>
-      <div class="tsc-c" title="{{ m.name }}"><b class="ell">{{ m.name }}</b><span class="tsc-sub M">{{ am.gpu_count }}× {{ short_gpu_label(r.info.gpu.name) }} · {{ layout_label(am.tp, am.pp, am.dp) }} · {{ PRECISION_LABELS[am.prec] }}</span></div>
+      <div class="tsc-c" title="{{ m.name }}"><b class="ell">{{ m.name }}</b><span class="tsc-sub M">{{ am.gpu_count }}× {{ short_gpu_label(r.info.gpu.name) }} · {{ layout_label(am.tp, am.pp, am.dp) }} · {{ m.weight_precision_display(am.prec) }}</span></div>
       <div class="tsc-c">{% if r.saturated %}<span class="tsc-pill sat" title="Fully booked in the busiest hours; demand beyond that goes to cloud or is lost. {{ (r.utilization * 100)|round|int }}% busy over the whole day.">SATURATED</span>{% elif r.native_label and r.capacity > 0 %}<span class="tsc-pill ok" title="Native workload capacity estimate; demand is configured through matching use cases.">{{ r.native_label }}</span>{% elif r.capacity > 0 %}<span class="tsc-pill ok" title="Share of capacity used">{{ (r.utilization * 100)|round|int }}% used</span>{% else %}<span class="tsc-pill off">no capacity</span>{% endif %}</div>
       <div class="tsc-c tsc-r M" title="{{ r.capacity_unit }} per day">{{ r.capacity|fmt_num }}</div>
       <div class="tsc-c tsc-r M">{{ "%.1f"|format(r.peak_rps) }}</div>

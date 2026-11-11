@@ -11,7 +11,6 @@ import cloud_policy
 from calc import strategy_label
 from data import (
     MODELS,
-    PRECISION_LABELS,
     effective_quality,
     quality_to_aa_intelligence,
 )
@@ -127,7 +126,7 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
             model = am.model
             gp = state.find_gpu(am.gpu_uid)
             gpu_name = gp.gpu.name if gp else "No GPU pool"
-            prec = PRECISION_LABELS.get(am.prec, am.prec.upper())
+            prec = model.weight_precision_display(am.prec)
             if am.execution_backend != "legacy":
                 info = get_model_info(state, am)
                 weights = info["weight_memory"]

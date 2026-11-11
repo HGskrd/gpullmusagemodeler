@@ -70,9 +70,9 @@ def test_mimo_flash_keeps_local_and_global_kv_geometry_distinct():
     model = MODELS["mimo-v2.6-flash-rl"]
     assert (model.global_kv_heads, model.local_kv_heads) == (4, 8)
     assert model.attention_value_head_size == 128
-    # Pinned runtime cache stores 128d K/V per head; QK matmul is 192d.
+    # Pinned implementation stores K192 and V128; local/global head counts differ.
     assert kv_cache_bytes_for_sequence(model, 16384, "mxfp4") == (
-        9 * 16384 * 2 * 4 * 128 + 39 * 128 * 2 * 8 * 128
+        9 * 16384 * 4 * (192 + 128) + 39 * 128 * 8 * (192 + 128)
     )
     assert model.weight_bytes("mxfp4") == 172923364096
     assert MODELS["mimo-v2.6-pro-rl"].weight_bytes("mxfp4") == 566027990784
@@ -147,12 +147,14 @@ def test_api_release_pricing_and_successor_rates_keep_individual_dates():
         "claude-opus-5.5": (4, 0.2, 20),
         "claude-sonnet-5.5": (2, 0.1, 10),
         "claude-haiku-5.5": (0.1, 0.01, 0.5),
-        "mistral-large-4": (0.68, 0.07, 2.09),
+        "mistral-large-4": (0.70, 0.07, 2.10),
     }
     for key, prices in expected.items():
         model = CLOUD_MODELS[key]
         assert tuple(model[f] for f in ("in_per_m", "cached_in_per_m", "out_per_m")) == prices
-        assert model["pricing_captured_at"] == "2026-10-17"
+        assert model["pricing_captured_at"] == (
+            "2026-11-11" if key == "mistral-large-4" else "2026-10-17"
+        )
         assert model["max_context_tokens"] == 1000000
     assert set(expected) <= set(CORPO_CLOUD_PRESETS["october_2026"]["models"])
     haiku = CLOUD_MODELS["claude-haiku-5.5"]

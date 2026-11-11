@@ -4,6 +4,7 @@ import math
 from dataclasses import dataclass, replace
 
 from .specs import VENDOR_LABELS
+from .tinybox import TINYBOX_GPU_CONFIGS
 
 
 @dataclass
@@ -371,10 +372,10 @@ GPUS: dict[str, GPU] = {
     "Gaudi3": GPU("Gaudi3", "Gaudi 3 128GB", "intel", 128e9, 3.7e12, 1.3e15, 2.6e15, 900e9, 4),
     "CrescentIsland": GPU(
         "CrescentIsland",
-        "Crescent Island Preview up to 480GB",
+        "Intel D-series / D270 up to 480GB (sampling)",
         "intel",
         480e9,
-        1.0e12,
+        1.5e12,
         183.5e12,
         367e12,
         128e9,
@@ -738,7 +739,7 @@ GPU_TCO_PRICE_USD: dict[str, float] = {
     # Specialist accelerators, Intel, and Apple.
     "TT_BLACKHOLE_P100A": 999.0,
     "TT_BLACKHOLE_P150": 1_399.0,
-    "TT_GALAXY_BLACKHOLE": 110_000.0 / 32.0,
+    "TT_GALAXY_BLACKHOLE": 160_000.0 / 32.0,  # official list, captured 2026-11-11
     "FURIOSA_RNGD": 7_000.0,  # proxy: no public card price; L40S-class
     "Gaudi2": 65_000.0 / 8.0,
     "Gaudi3": 125_000.0 / 8.0,
@@ -845,6 +846,31 @@ def _researched_gpu_tco_per_hour(gpu_key: str) -> float:
     return round(amortized + energy, 2)
 
 
+# Complete tinybox configurations retain physical GPUs and system purchase units.
+# Do not collapse their VRAM/bandwidth into one fictional accelerator.
+for _key, _config in TINYBOX_GPU_CONFIGS.items():
+    _base = GPUS[_config.base_gpu]
+    _power_ratio = min(1.0, _config.board_watts / _base.tdp_watts)
+    _pcie_bidir = (64e9 if _config.platform == "G4" else 128e9) * 0.5
+    GPUS[_key] = replace(
+        _base,
+        key=_key,
+        name=f"{_base.name} · {_config.name}",
+        node_size=_config.count,
+        min_count=_config.count,
+        count_multiple=_config.count,
+        bf16=_base.bf16 * _power_ratio,
+        fp8=_base.fp8 * _power_ratio,
+        tdp_watts=float(_config.board_watts),
+        scale_up_p2p_bw_bidir=_pcie_bidir / (2 if _config.count == 14 else 1),
+        inter_node_bw=(0.125e9 if _config.platform == "G4" else 1.25e9) / _config.count,
+        system_memory_gb=float(_config.memory),
+        price_note=_config.details,
+    )
+    GPU_TCO_PRICE_USD[_key] = _config.price / _config.count
+    GPU_TCO_POWER_WATTS_OVERRIDE[_key] = int(_config.power) / _config.count
+GPU_TCO_COMPLETE_SYSTEMS = GPU_TCO_COMPLETE_SYSTEMS | TINYBOX_GPU_CONFIGS.keys()
+
 GPU_TCO_DEFAULTS: dict[str, float] = {_key: _researched_gpu_tco_per_hour(_key) for _key in GPUS}
 for _key, _tco in GPU_TCO_DEFAULTS.items():
     GPUS[_key].default_tco_per_gpu_hour = _tco
@@ -855,10 +881,11 @@ for _key, _tco in GPU_TCO_DEFAULTS.items():
 PREVIEW_ASSUMPTIONS_CAPTURED_AT = "2026-09-21"
 PREVIEW_ASSUMPTIONS: dict[str, dict[str, object]] = {
     "gpu:RUBIN_NVL72": {
-        "status": "full-production ramp; production shipments announced for fall 2026",
+        "status": "available now; OCI general availability announced 2026-10-27",
+        "captured_at": "2026-11-11",
         "source": "https://www.nvidia.com/en-us/data-center/vera-rubin-nvl72/",
         "assumptions": (
-            "NVIDIA publishes 288 GB HBM4, 19.2 TB/s memory bandwidth, 4 PF dense BF16, 17.5 PF FP8, and 3 TB/s bidirectional NVLink per GPU; all remain preliminary",
+            "NVIDIA publishes 288 GB HBM4, 19.2 TB/s memory bandwidth, 4 PF dense BF16, 17.5 PF FP8, and 3 TB/s bidirectional NVLink per GPU; performance remains a roofline, not a benchmark",
             "the 50 PF NVFP4 inference headline is retained as display evidence but excluded from the dense FP4 planner roofline",
             "rack-only pool sizes are constrained to multiples of 72",
             "board power is omitted until NVIDIA publishes a per-GPU figure",
@@ -883,6 +910,7 @@ PREVIEW_ASSUMPTIONS: dict[str, dict[str, object]] = {
         ),
     },
     "gpu:TT_GALAXY_BLACKHOLE": {
+        "captured_at": "2026-11-11",
         "status": "commercial 32-ASIC, 6U air-cooled server",
         "source": "https://tenstorrent.com/hardware/galaxy",
         "assumptions": (
@@ -901,11 +929,13 @@ PREVIEW_ASSUMPTIONS: dict[str, dict[str, object]] = {
         ),
     },
     "gpu:CrescentIsland": {
-        "status": "announced inference GPU; public launch configuration pending",
-        "source": "https://www.intel.de/content/www/de/de/newsroom/news/client-computing/intel-outlines-architectures-for-agentic-ai-at-hot-chips-2026.html",
+        "status": "Intel D-series / D270; customer sampling underway, purchasable configuration unverified",
+        "captured_at": "2026-11-11",
+        "source": "https://www.intc.com/news-events/press-releases/detail/1783/intel-accelerates-open-infrastructure-for-the-agentic-ai-era",
         "assumptions": (
             "up to 480 GB LPDDR5X, 350 W, 32 Xe cores, and 256 XMX engines are public",
-            "bandwidth, tensor rooflines, scale-up topology, and price remain planner proxies",
+            "October 12 release publishes 1.5 TB/s and 1.3 PF FP8; dense/sparse semantics are unresolved, so compute rooflines remain conservative proxies",
+            "scale-up topology and acquisition price remain proxies; up to 480 GB is configuration-dependent",
         ),
     },
     "gpu:MAC_STUDIO_M5_MAX": {
@@ -961,7 +991,7 @@ PREVIEW_ASSUMPTIONS: dict[str, dict[str, object]] = {
     },
 }
 for _preview in PREVIEW_ASSUMPTIONS.values():
-    _preview["captured_at"] = PREVIEW_ASSUMPTIONS_CAPTURED_AT
+    _preview.setdefault("captured_at", PREVIEW_ASSUMPTIONS_CAPTURED_AT)
 
 
 MAX_GPU_POOLS = 64
@@ -1546,6 +1576,20 @@ for _key, _architecture in (
             f"{_gpu.mem_gb:g} GB",
             "Owned-hardware inference planning",
             (GPUPlannerOption("Select configuration", _key),),
+        )
+    )
+
+for _key, _config in TINYBOX_GPU_CONFIGS.items():
+    _gpu = GPUS[_key]
+    GPU_CARDS.append(
+        GPUCard(
+            _gpu.name,
+            "Tinygrad",
+            "RDNA 4 · " + _config.platform,
+            f"{_gpu.mem_gb:g} GB/GPU · {_gpu.mem_gb * _config.count:g} GB total",
+            "Complete tinybox system",
+            (GPUPlannerOption("Add system", _key),),
+            _config.details,
         )
     )
 

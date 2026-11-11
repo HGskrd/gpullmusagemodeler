@@ -476,6 +476,15 @@ ASR_WER_LANGUAGE_SOURCES["jais-asr"] = {
 }
 PUBLISHED_ASR_WER["jais-asr"] = {"ar_ifm_macro": 22.85}
 
+# Multilingual TurboCTC's publisher reports this English-only nine-set average.
+# Keep its unofficial submission distinct from generic English WER and Japanese CER.
+ASR_WER_LANGUAGES = (*ASR_WER_LANGUAGES, "en_openasr9_granite_20261021")
+ASR_WER_LANGUAGE_LABELS["en_openasr9_granite_20261021"] = "English · Open ASR short-form (9 sets)"
+PUBLISHED_ASR_WER["granite-speech-5.0-470m-turboctc"] = {"en_openasr9_granite_20261021": 5.51}
+ASR_WER_LANGUAGE_SOURCES["granite-speech-5.0-470m-turboctc"] = {
+    "en_openasr9_granite_20261021": "https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc/blob/91dcb0605daf65f88dbb04fef015c423241d941d/README.md — Publisher-reported multilingual checkpoint WER averaged over nine English short-form Open ASR sets, October 21, 2026; unofficial submission. Not a Japanese CER or a generic multilingual average.",
+}
+
 # Keep new release protocols distinct from older English/French aggregates.
 
 for _row in RELEASE_ASR_WER_ROWS:

@@ -7,6 +7,7 @@ hardware is offered for a new purchase; cloud-only products are outside this UI.
 from dataclasses import dataclass
 
 from .hardware import GPU_CARDS, GPUS, GPUCard
+from .tinybox import TINYBOX_GPU_CONFIGS, TINYBOX_PRESET_KEYS, TINYBOX_REVIEWED_AT, TINYBOX_SOURCE
 
 HARDWARE_REVIEWED_AT = "2026-10-17"
 # Do not delete these keys: existing exported scenarios must remain readable.
@@ -31,6 +32,7 @@ RYZEN_BUY = "https://www.gmktec.com/products/amd-ryzen%E2%84%A2-ai-max-395-evo-x
 GEFORCE_TENSOR_SOURCE = "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
 PRO_TENSOR_SOURCE = "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1.0.pdf"
 HARDWARE_SOURCES = {
+    **dict.fromkeys(TINYBOX_GPU_CONFIGS, TINYBOX_SOURCE),
     **dict.fromkeys(("RTX5090", "RTX4090", "RTX3090"), GEFORCE_TENSOR_SOURCE),
     "RTXPRO6000_BW_WS": PRO_TENSOR_SOURCE,
     **dict.fromkeys(("A100", "A100_40", "A100_80_PCIE", "A100_40_SXM"), A100_SOURCE),
@@ -139,6 +141,7 @@ def hardware_choices() -> list[HardwareChoice]:
                     runtime,
                     source,
                     RYZEN_BUY if key == "RYZEN_AI_MAX_395_128" else source,
+                    TINYBOX_REVIEWED_AT if key in TINYBOX_GPU_CONFIGS else HARDWARE_REVIEWED_AT,
                 )
             )
     return choices
@@ -244,6 +247,17 @@ PICKER_FAMILIES = {
         ("Galaxy", (("TT_GALAXY_BLACKHOLE", "Blackhole · 32 chips"),)),
     ),
     "FuriosaAI": (("RNGD", (("FURIOSA_RNGD", "48 GB"),)),),
+    "Tinygrad": (
+        ("Presets", tuple((key, TINYBOX_GPU_CONFIGS[key].name) for key in TINYBOX_PRESET_KEYS)),
+        (
+            "Custom",
+            tuple(
+                (key, config.name)
+                for key, config in TINYBOX_GPU_CONFIGS.items()
+                if key not in TINYBOX_PRESET_KEYS
+            ),
+        ),
+    ),
 }
 
 

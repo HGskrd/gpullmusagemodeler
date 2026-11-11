@@ -613,6 +613,7 @@ def get_model_infos(state: PlannerState) -> list[dict]:
 def short_artifact_label(model: Model, option: dict) -> str:
     """'Native · FP8 text + BF16 vision…' -> 'FP8 native'; 'BF16 · estimated conversion' -> 'BF16 est.'."""
     precision = PRECISION_LABELS.get(artifact_precision(model, option["key"]), "")
+    precision = model.weight_precision_display(artifact_precision(model, option["key"]), precision)
     key = str(option.get("key", ""))
     if key.startswith("native:"):
         return f"{precision} native".strip()

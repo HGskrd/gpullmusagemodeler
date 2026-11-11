@@ -405,7 +405,9 @@ def _kv_elems_per_layer_uncached(m: Model, global_layer: bool = False) -> int:
     else:
         heads = m.kv_heads
         head_dim = m.head_dim
-    return _kv_projection_count(m) * heads * head_dim
+    if m.shared_key_value:
+        return heads * head_dim
+    return heads * (head_dim + (m.kv_value_head_dim or head_dim))
 
 
 def _kv_bytes_per_layer(m: Model, prec: str, global_layer: bool = False) -> float:
@@ -765,6 +767,12 @@ def per_replica_token_kv_read_bytes(m: Model, seq_len: float, prec: str, pp: int
             full_bytes / kv_shards_for_heads(_kv_heads_for_layer(m, True), tp)
             + local_bytes / kv_shards_for_heads(_kv_heads_for_layer(m), tp)
         ) * _pp_peak_fraction(m, max(pp, 1))
+    if m.is_mla and m.local_kv_layers >= 0 and m.shared_sparse_attention is None:
+        return (
+            attention_kv_read_bytes_for_sequence(m, seq_len, prec)
+            * _pp_peak_fraction(m, max(pp, 1))
+            / kv_shards(m, tp)
+        )
     if not _attention_compression_ratios(m):
         return per_replica_token_kv_cache_bytes(m, seq_len, prec, pp, tp)
     pp_fraction = _pp_peak_fraction(m, max(pp, 1))
@@ -901,7 +909,9 @@ def _attention_row_flops_per_head(m: Model) -> float:
     """
     if m.is_mla and m.mla_kv_dim > 0:
         return 2.0 * (2 * m.mla_kv_dim + m.mla_rope_dim)
-    return 2.0 * (m.head_dim + m.attention_value_head_size)
+    qk_dim = m.global_head_dim or m.head_dim
+    value_dim = m.attention_value_head_dim or qk_dim
+    return 2.0 * (qk_dim + value_dim)
 
 
 def _decode_attention_work(m: Model, pr: int, avg_seq: float, pp: int) -> float:
@@ -918,7 +928,14 @@ def _decode_attention_work(m: Model, pr: int, avg_seq: float, pp: int) -> float:
         m.attention_layer_count, m.local_attention_layers
     )
     full_row = m.attention_query_head_count * _attention_row_flops_per_head(m)
-    local_row = 4.0 * m.local_attention_head_count * m.local_attention_head_size
+    local_row = (
+        2.0
+        * m.local_attention_head_count
+        * (
+            m.local_attention_head_size
+            + (m.attention_value_head_dim or m.local_attention_head_size)
+        )
+    )
     full_work = full_layers * full_row * _sparse_attention_context(m, avg_seq)
     local_work = local_layers * local_row * _local_context_tokens(m, avg_seq)
     linear_work = _linear_attention_work(m, 1.0)
@@ -984,8 +1001,20 @@ def _prefill_attention_work(m: Model, pr: int, seq_len: int, pp: int, causal: bo
     full_layers, local_layers = _split_attention_layers(
         m.attention_layer_count, m.local_attention_layers
     )
-    full_width = m.attention_query_head_count * (m.head_dim + m.attention_value_head_size) / 2.0
-    local_width = m.local_attention_head_count * m.local_attention_head_size
+    full_qk_dim = m.global_head_dim or m.head_dim
+    full_width = (
+        m.attention_query_head_count
+        * (full_qk_dim + (m.attention_value_head_dim or full_qk_dim))
+        / 2.0
+    )
+    local_width = (
+        m.local_attention_head_count
+        * (
+            m.local_attention_head_size
+            + (m.attention_value_head_dim or m.local_attention_head_size)
+        )
+        / 2.0
+    )
     if causal:
         # Decoder prefill is causal: QK^T and AV each cost half the rectangle.
         # Top-k sparse selection and sliding windows keep the same bound shape
@@ -1059,11 +1088,56 @@ def resolve_execution(g: GPU, m: Model, prec: str) -> ExecutionResolution:
             "BF16-expanded weights; loading workspace is additional and unmeasured.",
         )
     profile = m.quantization_profile(prec)
+    if profile and profile.format_scheme.encoding.startswith("MLX"):
+        if backend == "native":
+            return result(
+                "unsupported",
+                "unsupported",
+                "MLX affine INT4 is weight-only storage, not native FP4 arithmetic.",
+            )
+        if g.vendor != "apple" or m.serving_runtime not in {"generic", "mlx"}:
+            return result(
+                "unsupported",
+                "unsupported",
+                "This artifact requires MLX-VLM >=0.7.11 on Apple Silicon.",
+            )
+        if m.serving_runtime == "mlx" and m.runtime_version:
+            try:
+                version = tuple(int(part) for part in m.runtime_version.split(".")[:3])
+            except ValueError:
+                return result(
+                    "unsupported", "unsupported", "Specify a numeric MLX-VLM version >=0.7.11."
+                )
+            if version < (0, 7, 11):
+                return result(
+                    "unsupported", "unsupported", "This artifact requires MLX-VLM >=0.7.11."
+                )
+        return result(
+            "w4a16",
+            "estimated",
+            "MLX affine INT4 storage with BF16 compute proxy; MLX-VLM >=0.7.11 required.",
+        )
     if (
         profile
-        and profile.container == "gguf"
+        and (
+            profile.container == "gguf"
+            or profile.format_scheme.encoding not in {"E2M1", "BF16", "E4M3"}
+        )
         and profile.compute_precision_shares == {"bf16": 1.0}
+        and prec in {"mxfp4", "nvfp4"}
     ):
+        if backend == "native":
+            return result(
+                "unsupported",
+                "unsupported",
+                "Integer weight-only storage cannot use native FP4 arithmetic.",
+            )
+        if profile.container != "gguf" and g.vendor not in {"nv", "amd"}:
+            return result(
+                "unsupported",
+                "unsupported",
+                "No compressed integer serving recipe is cataloged for this platform.",
+            )
         return result(
             "w4a16",
             "estimated",
@@ -1560,6 +1634,9 @@ def _decode_step_time(
     # combined-KV path, does not multiply fixed recurrent state by speculative k.
     state_traffic_bytes = 2.0 * recurrent_state_bytes
     kv_traffic_bytes = base_token_kv_read_bytes * verify_positions + state_traffic_bytes
+    kv_traffic_bytes += (
+        m.conditional_memory_lookup_bytes_per_token * mb * verify_positions * pp_fraction / tp
+    )
     kv_time = kv_traffic_bytes / (g.effective_bw * eff.bw_eff)
     bt = wt + kv_time
 
@@ -1986,6 +2063,7 @@ def compute_prefill(
     ct = operator_compute_seconds(g, m, prec, ffn, att, "prefill") / (tp * eff.comp_eff)
 
     aw = _active_weight_bytes(m, prec, "prefill")
+    aw += m.conditional_memory_lookup_bytes_per_token * pr * seq_len
     if spec is not None:
         # Drafter weights are resident whenever speculation is on, and are
         # read at least once per prefill forward.
@@ -2017,6 +2095,8 @@ def embedding_vectors_per_input(m: Model, seq_len: int) -> int:
     profile = getattr(m, "embedding_profile", None)
     if profile is None:
         return 0
+    if profile.contextual_chunk_tokens > 0:
+        return max(1, math.ceil(seq_len / profile.contextual_chunk_tokens))
     if profile.supports_late_interaction:
         max_vectors = int(profile.document_length or profile.max_sequence_length or seq_len)
         token_vectors = max(1, min(max(int(seq_len), 1), max_vectors))
@@ -2117,7 +2197,10 @@ def compute_embedding(
     prec: str,
     eff: EfficiencyParams,
 ) -> Optional[EmbeddingResult]:
-    if getattr(m, "embedding_profile", None) is None:
+    profile = m.embedding_profile
+    if profile is None:
+        return None
+    if profile.contextual_chunk_tokens > 0 and seq_len > profile.max_sequence_length:
         return None
 
     tp, pp, dp = strat
@@ -2182,7 +2265,13 @@ def compute_embedding_distribution(
     prec: str,
     eff: EfficiencyParams,
 ) -> Optional[EmbeddingResult]:
-    if getattr(m, "embedding_profile", None) is None:
+    profile = m.embedding_profile
+    if profile is None:
+        return None
+    if profile.contextual_chunk_tokens > 0 and any(
+        weight > 0 and bucket.length > profile.max_sequence_length
+        for weight, bucket in zip(doc_dist, buckets)
+    ):
         return None
 
     tp, pp, dp = strat
@@ -2532,6 +2621,21 @@ def speech_chunk_work(m: Model, prec: str) -> SpeechChunkWork:
         2 * encoder_params * frames
         + 4 * profile.audio_attention_layers * encoder_width * frames * window
     ) * profile.audio_replay_factor
+    if profile.audio_encoder_stages:
+        frames = max(rate * duration for _, rate, _ in profile.audio_encoder_stages)
+        encoder = (
+            sum(
+                2 * params * rate * duration
+                + 4
+                * layers
+                * encoder_width
+                * rate
+                * duration
+                * min(rate * duration, profile.audio_attention_window or rate * duration)
+                for params, rate, layers in profile.audio_encoder_stages
+            )
+            * profile.audio_replay_factor
+        )
     prefill = (
         2 * decoder_params * acoustic + _prefill_attention_work(m, 1, math.ceil(acoustic), 1)
     ) * profile.prefill_replay_factor
