@@ -19,7 +19,7 @@ from calc import (
     compute_decode,
     compute_memory,
     physical_placement,
-    resolve_spec_runtime,
+    spec_runtime_for,
 )
 from data import GPU
 from placement import _preferred_strategy, _probe_batch_sizes
@@ -51,7 +51,7 @@ def _layout_row(
     state: PlannerState, am: ModelAssignment, g: GPU, tp: int, pp: int, dp: int
 ) -> dict:
     m = am.model
-    spec = resolve_spec_runtime(m, am.spec_method, am.spec_k, state.spec_acceptance, am.prec)
+    spec = spec_runtime_for(state, am, m)
     machines = _machines(tp, pp, dp, g.node_size, am.gpu_count)
     copy_machines: dict[int, set[int]] = {}
     first_stage_machine: dict[int, int] = {}

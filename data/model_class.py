@@ -106,7 +106,15 @@ class EmbeddingProfile:
 # drafters verify trees or blocks rather than chains, so alpha is fitted to
 # reproduce the measured acceptance length at default_k — extrapolating to other k
 # with the chain formula is a documented conservative approximation.
-SPEC_METHODS: tuple[str, ...] = ("mtp", "eagle3", "dflash", "dspark", "draft_model", "ngram")
+SPEC_METHODS: tuple[str, ...] = (
+    "mtp",
+    "eagle3",
+    "dflash",
+    "dspark",
+    "dspine",
+    "draft_model",
+    "ngram",
+)
 
 
 @dataclass(frozen=True)
@@ -138,6 +146,19 @@ class SpeculativeProfile:
     # Exact resident bytes by target precision for mixed-format native draft
     # modules. This avoids scaling a measured FP8 artifact with average model BPP.
     exact_weight_bytes_by_precision: tuple[tuple[str, float], ...] = ()
+    # Optional measured prefix survival, indexed by proposed candidate count.
+    # Each curve excludes the anchor and includes P(first j candidates survive).
+    prefix_survival_by_k: tuple[tuple[int, tuple[float, ...]], ...] = ()
+    # Fixed parallel backbone width; zero preserves legacy variable-width drafting.
+    proposed_tokens: int = 0
+    # Runtime-specific anchor work, separate from verified candidate positions.
+    verify_anchor_positions: int = 0
+    draft_extra_seconds: float = 0.0
+    draft_compute_precision: str = ""
+    draft_kv_heads: int = 0
+    draft_head_dim: int = 0
+    draft_kv_bytes: float = 2.0
+    draft_window: int = 0
 
 
 def _mtp_profile(

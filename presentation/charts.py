@@ -691,9 +691,14 @@ def _label(
                 f"α={spec_meta['spec_alpha']:.0%}"
             )
         else:
+            candidate = (
+                f"best k={spec_meta['spec_k']}"
+                if spec_meta["spec_k"] > 0
+                else "no feasible candidate"
+            )
             spec_suffix = (
                 f" · Spec off (Auto {spec_meta['spec_method'].upper()} @"
-                f"{spec_meta['spec_probe_concurrency']}, best k={spec_meta['spec_k']})"
+                f"{spec_meta['spec_probe_concurrency']}, {candidate})"
             )
     precision_label = model.weight_precision_display(am.prec, am.prec.upper())
     if include_prefill:

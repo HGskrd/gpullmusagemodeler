@@ -117,6 +117,8 @@ class SpecRuntime:
     draft_active_params: float  # per-token active drafter parameters (MoE-aware)
     auto_selected: bool = False
     probe_speedup: float = 1.0
+    proposed_tokens: int = 0
+    prefix_survival: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -145,7 +147,25 @@ def spec_acceptance_len(alpha: float, k: int) -> float:
     return (1.0 - alpha ** (k + 1)) / (1.0 - alpha)
 
 
-def spec_finite_output_tau(alpha: float, k: int, output_tokens: int) -> float:
+def spec_prefix_survival(
+    alpha: float, k: int, measured: tuple[float, ...] = ()
+) -> tuple[float, ...]:
+    """Validate measured survival or preserve the legacy geometric fallback."""
+    if measured:
+        if len(measured) < k:
+            raise ValueError("prefix survival curve is shorter than verification length")
+        previous = 1.0
+        for probability in measured:
+            if not math.isfinite(probability) or not 0 <= probability <= previous:
+                raise ValueError("prefix survival must be finite, decreasing probabilities")
+            previous = probability
+        return measured[:k]
+    return tuple(alpha**j for j in range(1, k + 1))
+
+
+def spec_finite_output_tau(
+    alpha: float, k: int, output_tokens: int, survival: tuple[float, ...] = ()
+) -> float:
     """Expected emitted tokens/cycle including final partial-cycle waste.
 
     A cycle emits one through k+1 tokens. This small renewal recurrence prevents
@@ -157,14 +177,15 @@ def spec_finite_output_tau(alpha: float, k: int, output_tokens: int) -> float:
     alpha = min(max(float(alpha), 0.0), 1.0)
     if k <= 0:
         return 1.0
+    prefix = (1.0,) + spec_prefix_survival(alpha, k, survival)
     expected_cycles = [0.0] * (n + 1)
     for remaining in range(1, n + 1):
         cycle_k = min(k, remaining - 1)
         total = 1.0
         for emitted in range(1, cycle_k + 1):
-            probability = (alpha ** (emitted - 1)) * (1.0 - alpha)
+            probability = prefix[emitted - 1] - prefix[emitted]
             total += probability * expected_cycles[remaining - emitted]
-        total += (alpha**cycle_k) * expected_cycles[max(remaining - cycle_k - 1, 0)]
+        total += prefix[cycle_k] * expected_cycles[max(remaining - cycle_k - 1, 0)]
         expected_cycles[remaining] = total
     return n / expected_cycles[n]
 
@@ -193,7 +214,12 @@ def resolve_spec_runtime(
     calibrated_alphas = dict(getattr(profile, "acceptance_alpha_by_k", ()))
     profile_alpha = calibrated_alphas.get(k, profile.acceptance_alpha)
     alpha = min(max(float(alpha_override if alpha_override > 0 else profile_alpha), 0.0), 1.0)
-    passes = 1 if profile.parallel_draft else k
+    proposed = getattr(profile, "proposed_tokens", 0) or k
+    if proposed < k:
+        raise ValueError("verification length exceeds proposed candidates")
+    measured = dict(getattr(profile, "prefix_survival_by_k", ())).get(proposed, ())
+    survival = spec_prefix_survival(alpha, k, () if alpha_override > 0 else measured)
+    passes = 1 if profile.parallel_draft else proposed
     # Draft weights share the target's served precision: scale by the target's
     # average bytes/param at this precision (mixed-precision LUTs included),
     # unless the native draft module has a precision-specific measured size.
@@ -208,7 +234,9 @@ def resolve_spec_runtime(
         profile=profile,
         k=k,
         alpha=alpha,
-        tau=spec_acceptance_len(alpha, k),
+        tau=1.0 + sum(survival),
+        proposed_tokens=proposed,
+        prefix_survival=survival,
         passes=passes,
         draft_weight_bytes=draft_weight_bytes,
         draft_active_params=getattr(profile, "active_params", 0.0) or profile.draft_params,
@@ -1379,6 +1407,36 @@ def peak_stage_weight_bytes(m: Model, prec: str, pp: int) -> float:
     )
 
 
+def draft_cache_bytes(
+    spec: SpecRuntime, seq: float, pp: int, tp: int, target_bytes: float
+) -> float:
+    """Per-GPU draft cache; explicit geometry is independent of target cache format.
+
+    Layers are conservatively assigned to the busiest pipeline stage. KV heads
+    replicate when tensor parallelism exceeds the draft's available KV shards.
+    """
+    p = spec.profile
+    heads = getattr(p, "draft_kv_heads", 0)
+    if not heads:
+        return target_bytes * p.kv_overhead
+    window = getattr(p, "draft_window", 0)
+    length = min(seq, window) if window else seq
+    return (
+        2
+        * math.ceil(p.draft_layers / pp)
+        * heads
+        * p.draft_head_dim
+        * p.draft_kv_bytes
+        * max(length, 0)
+        / kv_shards_for_heads(heads, tp)
+    )
+
+
+def draft_flops(g: GPU, m: Model, prec: str, spec: SpecRuntime) -> float:
+    draft_precision = getattr(spec.profile, "draft_compute_precision", "")
+    return gpu_flops(g, draft_precision) if draft_precision else model_gpu_flops(g, m, prec)
+
+
 def compute_memory(
     m: Model,
     tp: int,
@@ -1627,7 +1685,9 @@ def _decode_step_time(
     # forwarded position supplies the bonus token, so this is k (not k+1)
     # target positions in steady state. Target weights are reused once, while
     # KV reads, activation FLOPs, and collective payloads scale with k.
-    verify_positions = max(spec.k, 1) if spec is not None else 1
+    verify_positions = (
+        (spec.k + getattr(spec.profile, "verify_anchor_positions", 0)) if spec is not None else 1
+    )
     # A fused recurrent kernel advances all verified positions from one initial
     # state, then persists one final state.  Charge one read + one write per block.
     # This is conservative for ReplaySSM-style buffered stores and, unlike the old
@@ -1642,13 +1702,10 @@ def _decode_step_time(
 
     wf = 2 * m.active_params * mb * pp_fraction * max(m.parameter_passes, 1.0)
     af = _decode_attention_work(m, mb, avg_seq, pp)
-    flops = wf + af
-    if spec is not None:
-        # Verification reuses weights, but performs k positions of target work.
-        flops *= verify_positions
     # Callers pass ``extra_flops`` for the whole replica batch (realtime audio
     # charges per-request encoder work), so scale it to the microbatch as well.
     stage_extra_flops = max(extra_flops, 0.0) * mb / max(pr, 1)
+    # Verification reuses weights, but performs k positions of target work.
     multiplier = verify_positions if spec is not None else 1
     ct = operator_compute_seconds(
         g, m, prec, wf * multiplier, af * multiplier + stage_extra_flops
@@ -1683,22 +1740,29 @@ def _decode_step_time(
         # block drafter processes all k positions in its pass. Keep that
         # distinction in both KV traffic and compute instead of treating a
         # length-k block as one token of work.
-        draft_positions = spec.k if spec.profile.parallel_draft else 1
+        draft_positions = (spec.proposed_tokens or spec.k) if spec.profile.parallel_draft else 1
         draft_bt = (
             spec.draft_weight_bytes * pp_fraction / tp
-            + (base_token_kv_read_bytes + recurrent_state_bytes)
-            * spec.profile.kv_overhead
+            + mb
+            * draft_cache_bytes(
+                spec,
+                avg_seq,
+                pp,
+                tp,
+                (base_token_kv_read_bytes + recurrent_state_bytes) / mb,
+            )
             * draft_positions
         ) / (g.effective_bw * eff.bw_eff)
         draft_ct = (2 * spec.draft_active_params * mb * pp_fraction * draft_positions) / (
-            model_gpu_flops(g, m, prec) * tp * eff.comp_eff
+            draft_flops(g, m, prec, spec) * tp * eff.comp_eff
         )
         stage += max(draft_bt, draft_ct) * stages * spec.passes
         draft_ratio = min(max(spec.draft_active_params / max(m.active_params, 1.0), 0.0), 1.0)
         # ``comm`` already carries k verification positions. Both an AR drafter
         # (k one-position passes) and a parallel drafter (one k-position pass)
         # communicate k draft positions in total, so do not multiply by passes.
-        stage += comm.total * draft_ratio
+        stage += comm.total * draft_ratio * (spec.proposed_tokens or spec.k) / verify_positions
+        stage += getattr(spec.profile, "draft_extra_seconds", 0.0)
         stage += (
             SPEC_SCHEDULER_OVERHEAD_S
             + SPEC_REJECTION_SYNC_OVERHEAD_S
@@ -1743,7 +1807,11 @@ def _compute_decode_core(
                 profile=spec.profile,
                 k=effective_k,
                 alpha=spec.alpha,
-                tau=spec_finite_output_tau(spec.alpha, effective_k, output_tokens),
+                tau=spec_finite_output_tau(
+                    spec.alpha, effective_k, output_tokens, spec.prefix_survival
+                ),
+                proposed_tokens=getattr(spec.profile, "proposed_tokens", 0) or effective_k,
+                prefix_survival=spec.prefix_survival[:effective_k],
                 passes=1 if spec.profile.parallel_draft else effective_k,
                 draft_weight_bytes=spec.draft_weight_bytes,
                 draft_active_params=spec.draft_active_params,
@@ -1765,7 +1833,7 @@ def _compute_decode_core(
     if active_spec is not None:
         # The drafter keeps its own small KV cache per sequence on top of the
         # target's, which shrinks the number of slots that fit the KV budget.
-        avg_kv *= 1.0 + active_spec.profile.kv_overhead
+        avg_kv += draft_cache_bytes(active_spec, avg_seq, pp, tp, avg_kv)
     max_slots = int(mem.kv_budget / avg_kv) if avg_kv > 0 else 0
     if eff.sched_budget > 0:
         max_slots = min(max_slots, eff.sched_budget)
@@ -2028,7 +2096,7 @@ def compute_prefill(
         # Reserve the drafter's prompt/hidden-state cache consistently with
         # decode capacity. Some attached drafters reuse target hidden states;
         # the profile overhead is the catalog's measured/estimated aggregate.
-        seq_kv *= 1.0 + spec.profile.kv_overhead
+        seq_kv += draft_cache_bytes(spec, kv_len, pp, tp, seq_kv)
     # AttnRes activations are temporary rather than KV, but they scale with
     # batch×sequence and therefore must participate in the prefill fit check.
     # They are only allocated for the tokens actually (re-)prefilled.
@@ -2053,14 +2121,21 @@ def compute_prefill(
 
     pp_fraction = _pp_peak_fraction(m, pp)
     ffn = 2 * pr * prefill_parameter_tokens(m, seq_len, pp)
+    independent_draft_ct = 0.0
     if spec is not None and spec.profile.method not in ("mtp", "ngram"):
         # Attached drafters (EAGLE-3, DFlash, DSpark, draft models) run their
         # own prompt forward to seed drafter KV and hidden states.  MTP reuses
         # the target's final hidden state and n-gram drafting has no weights,
         # so neither pays a prompt-length drafter pass.
-        ffn += 2 * spec.draft_active_params * pr * seq_len * pp_fraction
+        draft_work = 2 * spec.draft_active_params * pr * seq_len * pp_fraction
+        if getattr(spec.profile, "draft_compute_precision", ""):
+            independent_draft_ct = draft_work / (draft_flops(g, m, prec, spec) * tp * eff.comp_eff)
+        else:
+            ffn += draft_work
     att = _prefill_attention_work(m, pr, seq_len, pp)
     ct = operator_compute_seconds(g, m, prec, ffn, att, "prefill") / (tp * eff.comp_eff)
+
+    ct += independent_draft_ct
 
     aw = _active_weight_bytes(m, prec, "prefill")
     aw += m.conditional_memory_lookup_bytes_per_token * pr * seq_len

@@ -2,7 +2,7 @@
    GpuPool.gpus_per_machine / network_gbps_per_gpu; "Compare shapes" shows the
    shape × network grid (open state kept in localStorage). #}
 {% if gp.count > 1 %}
-{% set mo = machine_controls(state, gp) %}
+{% set mo = machine_options(state, gp) %}
 {% set cur_g = gp.gpu %}
 <div class="pm">
   <div class="pm-ctl">
@@ -29,17 +29,51 @@
       </select>
     </label>
     {% if mo.has_models %}
+    {% set b0 = mo.best %}{% set c0 = mo.current %}
     <button type="button" class="ghost sm pm-toggle" data-pm-toggle aria-expanded="false" aria-controls="pm-grid-{{ panel }}-{{ gp.uid }}"
             title="Compare every machine shape and network speed for the models on this pool">
       <span class="pm-show">Compare shapes ▸</span><span class="pm-hide">Hide shapes ▾</span>
     </button>
+    {% if b0 and c0 and b0.delta > 0.005 %}
+      {% if b0 is sameas c0 %}<span class="pl-bad T" title="Same machines, planner's layout {{ b0.layouts }} gives {{ b0.tps|fmt_num }} tok/s (yours {{ c0.own_layouts }}: {{ c0.own_tps|fmt_num }}). Click the outlined cell to apply.">{{ '%+.0f'|format(b0.delta * 100) }}% with layout {{ b0.layouts }}</span>
+      {% else %}<span class="pl-bad T" title="{{ b0.machines }} × {{ b0.size }} GPU at {{ b0.net|round|int }} Gb/s with {{ b0.layouts }} gives {{ b0.tps|fmt_num }} tok/s (now {{ c0.own_tps|fmt_num }})">{{ '%+.0f'|format(b0.delta * 100) }}% with another shape</span>{% endif %}
+    {% endif %}
     {% endif %}
   </div>
 
   {% if mo.has_models %}
-  <div class="pm-v pm-B" id="pm-grid-{{ panel }}-{{ gp.uid }}"
-       data-pm-url="{{ url_for('planner.gpu_machine_options', panel=panel, uid=gp.uid) }}" aria-live="polite">
-    <span class="T">Open to compare machine shapes.</span>
+  {# B: every shape × network, planner's best layout on each; click to apply #}
+  <div class="pm-v pm-B" id="pm-grid-{{ panel }}-{{ gp.uid }}">
+    <table class="pm-grid">
+      <thead>
+        <tr><th rowspan="2" title="Number of machines × GPUs per machine">Machines × GPUs</th><th colspan="{{ mo.networks|length }}" class="pm-gh" title="Network bandwidth per GPU between machines (NIC line rate, e.g. one 400 Gb/s NIC per GPU). Only used when a model copy is split across machines.">Network between machines, per GPU</th></tr>
+        <tr>{% for net in mo.networks %}<th title="{{ net|round|int }} gigabits/s = {{ (net / 8)|round(1) }} gigabytes/s per GPU">{{ net|round|int }} Gb/s <span class="T">= {{ '%g'|format(net / 8) }} GB/s</span></th>{% endfor %}</tr>
+      </thead>
+      <tbody>
+      {% for row in mo.grid %}
+        <tr>
+          <th>{{ row.machines }} × {{ row.size }}{% if row.size == mo.default_size %}<span class="T"> default</span>{% endif %}</th>
+          {% for c in row.cells %}
+          <td class="{{ 'cur' if c.is_current }} {{ 'best' if c.is_best }} {{ 'neg' if c.delta < -0.005 }} {{ 'pos' if c.delta > 0.005 }}"
+              hx-post="/gpu/machines" hx-target="#main-content" hx-trigger="click"
+              hx-vals='{"panel":"{{ panel }}","uid":"{{ gp.uid }}","gpus_per_machine":"{{ 0 if c.size == mo.default_size else c.size }}","network_gbps":"{{ 0 if c.net == mo.default_net else c.net }}"}'
+              title="{{ c.machines }} machines × {{ c.size }} GPU at {{ c.net|round|int }} Gb/s/GPU · layout {{ c.layouts }} · copy spans {{ c.span }} machine{{ 's' if c.span != 1 }} · {{ c.per_user|round|int }} tok/s/user{% if c.host_max_gb %} · host RAM {{ c.host_max_gb|round|int }} GB on busiest machine{% endif %}">
+            {% if c.is_current and not c.own_is_pick %}
+            <span class="M">{{ c.own_tps|fmt_num }}</span> <span class="pm-d">now</span>
+            <span class="pm-l">{{ c.own_layouts }} (your layout)</span>
+            <span class="pm-l">planner: {{ c.tps|fmt_num }}{% if c.is_best %}★{% endif %}{% if c.delta|abs > 0.005 %} {{ '%+.0f'|format(c.delta * 100) }}%{% endif %} · {{ c.layouts }}</span>
+            {% else %}
+            <span class="M">{{ c.tps|fmt_num }}</span>{% if c.is_best %}★{% endif %}
+            {% if c.delta|abs > 0.005 %}<span class="pm-d">{{ '%+.0f'|format(c.delta * 100) }}%</span>{% endif %}
+            <span class="pm-l">{{ c.layouts }}{% if c.span > 1 %} · spans {{ c.span }}{% endif %}</span>
+            {% endif %}
+          </td>
+          {% endfor %}
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <div class="T">Peak decode tok/s of {{ 'the deployed model' if mo.n_llms == 1 else 'the ' ~ mo.n_llms ~ ' deployed models' }} with the planner's layout for each shape (≤128 users). Inside a machine GPUs use {{ 'PCIe' if cur_g.scale_up_p2p_bw_bidir <= 128e9 else 'NVLink' }}; the network only matters where a copy “spans” machines, so rows where every copy fits in one machine are the same across columns. ★ best · outlined = current machines · % vs what is deployed now · click to apply (the planner re-picks the layout). MoE expert traffic between machines is not modelled.</div>
   </div>
 
   {% endif %}

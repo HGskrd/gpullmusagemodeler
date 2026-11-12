@@ -174,10 +174,20 @@
   </div>
   {% if info.spec %}
   <div class="T" style="margin-bottom:3px;" title="{{ info.spec.profile.note }} Source: {{ info.spec.profile.source }}.">
-    {{ info.spec.profile.label }} · {% if am.spec_k == 0 %}Auto {{ 'chose' if info.spec.active else 'tested' }} {% endif %}k={{ info.spec.k }} · α={{ "%.0f"|format(info.spec.alpha * 100) }}% ({{ info.spec.alpha_source }}) · τ≈{{ "%.2f"|format(info.spec.tau) }} tok/cycle{% if info.spec.draft_gb > 0 %} · +{{ "%.1f"|format(info.spec.draft_gb) }} GB draft{% endif %}{% if info.spec.speedup > 0 %} · {{ "%.2f"|format(info.spec.speedup) }}× decode @{{ info.spec.probe_bs }} users{% endif %}
+    {{ info.spec.profile.label }} · {% if am.spec_k == 0 %}Auto {{ 'chose' if info.spec.active else ('tested' if info.spec.candidate_feasible else 'cannot fit; profile') }} {% endif %}k={{ info.spec.k }} · α={{ "%.0f"|format(info.spec.alpha * 100) }}% ({{ info.spec.alpha_source }}) · τ≈{{ "%.2f"|format(info.spec.tau) }} tok/cycle{% if info.spec.draft_gb > 0 %} · {{ "%.2f"|format(info.spec.draft_gb) }} GB draft weights/copy{{ " (candidate only; not allocated)" if not info.spec.active else "" }}{% endif %}{% if info.spec.speedup > 0 %} · {{ "%.2f"|format(info.spec.speedup) }}× decode @{{ info.spec.probe_bs }} users{% endif %}
   </div>
+  <details class="T" style="margin-bottom:6px;" data-persist-key="spec-assumptions-{{ panel }}-{{ am.uid }}">
+    <summary>Speculative decoding assumptions · {{ 'active' if info.spec.active else 'off; candidate estimate' }}</summary>
+    <div style="margin-top:4px;">
+      <p>Draft: {{ info.spec.proposed_tokens }} proposed tokens in {{ info.spec.draft_passes }} pass{{ 'es' if info.spec.draft_passes != 1 else '' }} per cycle. Draft weight reads, compute, and cache consume resources; weights above are per model copy, before placement across GPUs.</p>
+      <p>Verification: {{ info.spec.verify_positions }} target positions per cycle, including {{ info.spec.anchor_positions }} anchor position{{ 's' if info.spec.anchor_positions != 1 else '' }}. Expected accepted draft tokens: {{ '%.2f'|format(info.spec.accepted_tokens) }}; including the target token, {{ '%.2f'|format(info.spec.tau) }} emitted tokens/cycle before short-output adjustment.</p>
+      <p>Profile for {{ m.name }}. This is a capacity estimate; selecting a serving runtime does not establish that it supports this drafter.</p>
+      <p>{{ info.spec.profile.note }}</p>
+      <a href="{{ info.spec.profile.source }}" target="_blank" rel="noopener noreferrer">Profile source</a>
+    </div>
+  </details>
   {% if am.spec_k == 0 %}
-  <div class="T" style="margin-bottom:3px;">Auto optimizes modeled generated tok/s at {{ info.spec.probe_bs }} concurrent users. {% if info.spec.active %}The effective k can change with workload and hardware.{% else %}It kept speculative decoding off; k={{ info.spec.k }} is the best speculative candidate, shown for comparison.{% endif %}</div>
+  <div class="T" style="margin-bottom:3px;">Auto optimizes modeled generated tok/s at {{ info.spec.probe_bs }} concurrent users. {% if info.spec.active %}The effective k can change with workload and hardware.{% else %}It kept speculative decoding off; {% if info.spec.candidate_feasible %}k={{ info.spec.k }} is the best speculative candidate, shown for comparison.{% else %}no candidate is feasible at this operating point. The default profile assumptions are shown for reference.{% endif %}{% endif %}</div>
   {% endif %}
   {% if info.spec.unmeasured_prior %}
   <div class="warn">⚠ Acceptance is an unmeasured profile prior, not a benchmark for this exact deployment. Speculative decoding is not free: draft, verification, KV, and scheduler costs are included where modeled.</div>

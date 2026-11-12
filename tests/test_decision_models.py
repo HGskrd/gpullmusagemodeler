@@ -246,12 +246,14 @@ def test_decision_memory_surface_labels_forward_work_buffer():
     from flask import render_template
 
     from calc import strategy_label
+    from presentation.model_cards import get_model_info
 
     state = state_for()
     app = create_test_app()
     with app.test_request_context():
         html = render_template(
             "partials/membar.html",
+            get_model_info=get_model_info,
             state=state,
             MODELS=MODELS,
             GPUS=GPUS,

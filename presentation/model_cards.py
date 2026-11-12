@@ -15,6 +15,7 @@ from calc import (
     compute_prefill,
     compute_realtime_capacity,
     compute_realtime_max_users,
+    draft_cache_bytes,
     effective_prefill_length,
     embedding_doc_stats,
     embedding_sequence_length,
@@ -24,6 +25,7 @@ from calc import (
     resolve_execution,
     resolve_spec_runtime,
     spec_optimization_for,
+    spec_runtime_for,
     speech_chunk_work,
     strategy_label,
     valid_strategies,
@@ -209,9 +211,10 @@ def _build_model_info(
     spec_runtime = resolve_spec_runtime(
         model, am.spec_method, am.spec_k, state.spec_acceptance, am.prec
     )
+    active_spec = spec_runtime_for(state, am, model)
     if gpu and am.gpu_count > 0:
         strats = valid_strategies(
-            model, am.gpu_count, gpu, state.mu, state.profiled_non_kv_gb, am.prec, spec_runtime
+            model, am.gpu_count, gpu, state.mu, state.profiled_non_kv_gb, am.prec, active_spec
         )
         recommended_strategy = _preferred_strategy(state, am, gpu, "decode")
         recommended_label = strategy_label(*recommended_strategy)
@@ -233,9 +236,11 @@ def _build_model_info(
     decode_max_slots = 0
     if decode_mem and avg_seq > 0:
         decode_kv = per_replica_kv_cache_bytes(model, avg_seq, am.prec, am.pp, am.tp)
-        if spec_runtime is not None:
+        if active_spec is not None:
             # The drafter's own small KV cache shares the sequence's KV budget.
-            decode_kv *= 1.0 + spec_runtime.profile.kv_overhead
+            decode_kv += draft_cache_bytes(
+                active_spec, avg_in + avg_out / 2.0, am.pp, am.tp, decode_kv
+            )
         decode_per_replica = int(decode_mem.kv_budget / decode_kv) if decode_kv > 0 else 0
         if state.decode_efficiency.sched_budget > 0:
             decode_per_replica = min(decode_per_replica, state.decode_efficiency.sched_budget)
@@ -248,9 +253,9 @@ def _build_model_info(
         optimization = None
         if am.spec_k == 0 and gpu and am.gpu_count > 0:
             optimization = spec_optimization_for(state, am, model)
+            probe_bs = optimization.probe_concurrency
             if optimization.runtime is not None:
                 spec_runtime = optimization.runtime
-                probe_bs = optimization.probe_concurrency
         if gpu and am.gpu_count > 0 and optimization is None:
             probe = compute_decode(
                 model,
@@ -281,6 +286,11 @@ def _build_model_info(
         if state.spec_acceptance > 0:
             alpha_source = "user override"
             unmeasured_prior = True
+        elif dict(getattr(spec_runtime.profile, "prefix_survival_by_k", ())).get(
+            spec_runtime.proposed_tokens
+        ):
+            alpha_source = "measured prefix survival"
+            unmeasured_prior = False
         elif prior_is_unmeasured:
             alpha_source = "unmeasured profile prior"
             unmeasured_prior = True
@@ -301,8 +311,15 @@ def _build_model_info(
             "unmeasured_prior": unmeasured_prior,
             "tau": spec_runtime.tau,
             "draft_gb": spec_runtime.draft_weight_bytes / 1e9,
+            "proposed_tokens": spec_runtime.proposed_tokens,
+            "draft_passes": spec_runtime.passes,
+            "anchor_positions": getattr(spec_runtime.profile, "verify_anchor_positions", 0),
+            "verify_positions": spec_runtime.k
+            + getattr(spec_runtime.profile, "verify_anchor_positions", 0),
+            "candidate_feasible": optimization is None or optimization.runtime is not None,
+            "accepted_tokens": spec_runtime.tau - 1,
             "probe_bs": probe_bs,
-            "speedup": optimization.speedup
+            "speedup": (optimization.speedup if optimization.runtime is not None else 0.0)
             if optimization is not None
             else (probe.spec_speedup if probe else 0.0),
             "beneficial": optimization.beneficial
@@ -680,9 +697,7 @@ def tech_scorecard(state: PlannerState, econ: dict) -> list[dict]:
             continue
         projected = by_uid.get(am.uid, {})
         is_text = not (model.is_embedding_model or model.is_asr_model or model.is_decision_model)
-        spec = resolve_spec_runtime(
-            model, am.spec_method, am.spec_k, state.spec_acceptance, am.prec
-        )
+        spec = spec_runtime_for(state, am, model)
         speed_alone = speed_full = ttft = None
         slots = int(info["decode_max_slots"] or 0) if is_text else 0
         if is_text and info["runnable"] and info["decode_fits"]:

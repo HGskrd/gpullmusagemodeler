@@ -798,7 +798,7 @@ class ModelCatalogTests(unittest.TestCase):
                     mtp = next(p for p in model.speculative_profiles if p.method == "mtp")
                     self.assertEqual(mtp.supported_ks, (1,))
                 else:
-                    self.assertEqual(model.speculative_profiles, ())
+                    self.assertEqual({p.method for p in model.speculative_profiles}, {"dspine"})
 
     def test_qwen38_27b_fp8_artifact_is_exact_and_smaller_than_native(self):
         model = MODELS["qwen38-27b"]
@@ -1416,6 +1416,7 @@ class ModelCatalogTests(unittest.TestCase):
             "eagle3": (0.0, 0.15),
             "dflash": (0.0, 0.2),
             "dspark": (0.0, 0.25),
+            "dspine": (0.0, 0.25),
             "draft_model": (0.0, 1.0),
             "ngram": (0.0, 0.0),
         }
