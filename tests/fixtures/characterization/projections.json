@@ -144,7 +144,37 @@
           "sparse_indexer_head_dim": 0,
           "sparse_indexer_heads": 0,
           "sparse_indexer_layers": 0,
-          "speculative_profiles": [],
+          "speculative_profiles": [
+            {
+              "__type__": "SpeculativeProfile",
+              "acceptance_alpha": 0.781068733651,
+              "acceptance_alpha_by_k": [],
+              "active_params": 2025912064,
+              "default_k": 15,
+              "draft_compute_precision": "bf16",
+              "draft_extra_seconds": 0.0,
+              "draft_head_dim": 128,
+              "draft_kv_bytes": 2.0,
+              "draft_kv_heads": 8,
+              "draft_layers": 5,
+              "draft_params": 2025912064,
+              "draft_window": 8192,
+              "exact_weight_bytes": 4051824128,
+              "exact_weight_bytes_by_precision": [],
+              "kv_overhead": 0.0,
+              "label": "DSpine · Qwen3.8-27B (preview)",
+              "method": "dspine",
+              "note": "Captured 2026-11-11. Official BF16 checkpoint/config: 2,025,912,064 parameters; five sliding-attention layers. Block 16 includes an anchor and 15 candidates. Fixed-length acceptance is an unmeasured proxy fitted to published MT-Bench greedy tau=4.48 under dynamic verification; not a benchmark for this deployment. SGLang 0.5.22/FA3/ReplaySSM reference. Injection/selection overhead, replay buffers, shared-head compute and runtime-specific placement need calibration; no adaptive scheduling gain is claimed.",
+              "parallel_draft": true,
+              "prefix_survival_by_k": [],
+              "proposed_tokens": 15,
+              "source": "https://huggingface.co/tencent/Qwen3.8-27B-DSpine-b16/tree/5f54174d301dbca65d9aa4448dc47e56732d9a12",
+              "supported_ks": [
+                15
+              ],
+              "verify_anchor_positions": 1
+            }
+          ],
           "token_efficiency": 0.1,
           "total_params": 27781427952
         },
@@ -677,8 +707,14 @@
               "acceptance_alpha_by_k": [],
               "active_params": 400000000.0,
               "default_k": 1,
+              "draft_compute_precision": "",
+              "draft_extra_seconds": 0.0,
+              "draft_head_dim": 0,
+              "draft_kv_bytes": 2.0,
+              "draft_kv_heads": 0,
               "draft_layers": 4,
               "draft_params": 400000000.0,
+              "draft_window": 0,
               "exact_weight_bytes": 0.0,
               "exact_weight_bytes_by_precision": [],
               "kv_overhead": 0.03,
@@ -686,10 +722,13 @@
               "method": "mtp",
               "note": "Gemma 4 assistant checkpoint served through vLLM's MTP path. No acceptance benchmark is published; alpha=.40 is an explicitly conservative planning prior, not a measured result.",
               "parallel_draft": false,
+              "prefix_survival_by_k": [],
+              "proposed_tokens": 0,
               "source": "https://huggingface.co/google/gemma-4-26B-A4B-it-assistant",
               "supported_ks": [
                 1
-              ]
+              ],
+              "verify_anchor_positions": 0
             },
             {
               "__type__": "SpeculativeProfile",
@@ -697,8 +736,14 @@
               "acceptance_alpha_by_k": [],
               "active_params": 900000000.0,
               "default_k": 5,
+              "draft_compute_precision": "",
+              "draft_extra_seconds": 0.0,
+              "draft_head_dim": 0,
+              "draft_kv_bytes": 2.0,
+              "draft_kv_heads": 0,
               "draft_layers": 1,
               "draft_params": 900000000.0,
+              "draft_window": 0,
               "exact_weight_bytes": 1800000000.0,
               "exact_weight_bytes_by_precision": [],
               "kv_overhead": 0.05,
@@ -706,8 +751,11 @@
               "method": "eagle3",
               "note": "RedHatAI EAGLE-3 speculator; checkpoint size is 0.9B, alpha is a family prior.",
               "parallel_draft": false,
+              "prefix_survival_by_k": [],
+              "proposed_tokens": 0,
               "source": "https://huggingface.co/RedHatAI/gemma-4-26B-A4B-it-speculator.eagle3",
-              "supported_ks": []
+              "supported_ks": [],
+              "verify_anchor_positions": 0
             }
           ],
           "token_efficiency": 0.714285714286,
@@ -838,8 +886,14 @@
               "acceptance_alpha_by_k": [],
               "active_params": 100000000.0,
               "default_k": 3,
+              "draft_compute_precision": "",
+              "draft_extra_seconds": 0.0,
+              "draft_head_dim": 0,
+              "draft_kv_bytes": 2.0,
+              "draft_kv_heads": 0,
               "draft_layers": 1,
               "draft_params": 550000000.0,
+              "draft_window": 0,
               "exact_weight_bytes": 0.0,
               "exact_weight_bytes_by_precision": [],
               "kv_overhead": 0.03,
@@ -847,8 +901,11 @@
               "method": "mtp",
               "note": "Native MTP documented for Qwen 3.5 397B; family assumption here — no per-size acceptance published.",
               "parallel_draft": false,
+              "prefix_survival_by_k": [],
+              "proposed_tokens": 0,
               "source": "https://www.lmsys.org/blog/2026-06-15-next-generation-speculative-decoding-dflash-v2/",
-              "supported_ks": []
+              "supported_ks": [],
+              "verify_anchor_positions": 0
             }
           ],
           "token_efficiency": 0.1,
@@ -3152,8 +3209,14 @@
               "acceptance_alpha_by_k": [],
               "active_params": 20452864.0,
               "default_k": 1,
+              "draft_compute_precision": "",
+              "draft_extra_seconds": 0.0,
+              "draft_head_dim": 0,
+              "draft_kv_bytes": 2.0,
+              "draft_kv_heads": 0,
               "draft_layers": 1,
               "draft_params": 20452864.0,
+              "draft_window": 0,
               "exact_weight_bytes": 40905728,
               "exact_weight_bytes_by_precision": [],
               "kv_overhead": 0.03,
@@ -3161,10 +3224,13 @@
               "method": "mtp",
               "note": "Official config contains one native MTP layer. No per-size acceptance benchmark is published; alpha=.65 and the one-layer parameter footprint are conservative planning estimates. Exact BF16 resident bytes pinned.",
               "parallel_draft": false,
+              "prefix_survival_by_k": [],
+              "proposed_tokens": 0,
               "source": "https://huggingface.co/Qwen/Qwen3.5-0.8B/blob/main/config.json",
               "supported_ks": [
                 1
-              ]
+              ],
+              "verify_anchor_positions": 0
             }
           ],
           "token_efficiency": 0.0434782608696,
@@ -3289,7 +3355,37 @@
           "sparse_indexer_head_dim": 0,
           "sparse_indexer_heads": 0,
           "sparse_indexer_layers": 0,
-          "speculative_profiles": [],
+          "speculative_profiles": [
+            {
+              "__type__": "SpeculativeProfile",
+              "acceptance_alpha": 0.781068733651,
+              "acceptance_alpha_by_k": [],
+              "active_params": 2025912064,
+              "default_k": 15,
+              "draft_compute_precision": "bf16",
+              "draft_extra_seconds": 0.0,
+              "draft_head_dim": 128,
+              "draft_kv_bytes": 2.0,
+              "draft_kv_heads": 8,
+              "draft_layers": 5,
+              "draft_params": 2025912064,
+              "draft_window": 8192,
+              "exact_weight_bytes": 4051824128,
+              "exact_weight_bytes_by_precision": [],
+              "kv_overhead": 0.0,
+              "label": "DSpine · Qwen3.8-27B (preview)",
+              "method": "dspine",
+              "note": "Captured 2026-11-11. Official BF16 checkpoint/config: 2,025,912,064 parameters; five sliding-attention layers. Block 16 includes an anchor and 15 candidates. Fixed-length acceptance is an unmeasured proxy fitted to published MT-Bench greedy tau=4.48 under dynamic verification; not a benchmark for this deployment. SGLang 0.5.22/FA3/ReplaySSM reference. Injection/selection overhead, replay buffers, shared-head compute and runtime-specific placement need calibration; no adaptive scheduling gain is claimed.",
+              "parallel_draft": true,
+              "prefix_survival_by_k": [],
+              "proposed_tokens": 15,
+              "source": "https://huggingface.co/tencent/Qwen3.8-27B-DSpine-b16/tree/5f54174d301dbca65d9aa4448dc47e56732d9a12",
+              "supported_ks": [
+                15
+              ],
+              "verify_anchor_positions": 1
+            }
+          ],
           "token_efficiency": 0.1,
           "total_params": 27781427952
         },

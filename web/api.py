@@ -81,10 +81,15 @@ def _annotate_chart_spec(state: PlannerState, datasets: list[dict]) -> list[dict
             if am.spec_k == 0
             else str(spec["k"])
         )
+        performance = (
+            f"{spec['speedup']:.2f}× @ {spec['probe_bs']} users"
+            if spec["speedup"] > 0
+            else f"no feasible candidate @ {spec['probe_bs']} users"
+        )
         disclosures.append(
             f"{info['model'].name}: {spec['profile'].label}, k {k_label}, "
             f"α {spec['alpha'] * 100:.0f}% ({spec['alpha_source']}), "
-            f"{spec['speedup']:.2f}× @ {spec['probe_bs']} users"
+            f"{performance}"
         )
     disclosure = "; ".join(disclosures)
     if disclosure:

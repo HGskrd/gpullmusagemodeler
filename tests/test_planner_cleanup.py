@@ -1,4 +1,4 @@
-"""Regression coverage for persistent edits, bounded GPU variants and lazy comparisons."""
+"""Regression coverage for persistent edits, bounded GPU variants and machine comparisons."""
 
 import json
 import uuid
@@ -72,7 +72,7 @@ def test_pool_gpu_lru_is_bounded_and_refreshes_replaced_catalog_entries(monkeypa
         cache.clear()
 
 
-def test_collapsed_updates_skip_comparison_and_expansion_uses_current_state(planner):
+def test_updates_embed_comparison_and_fragment_uses_current_state(planner):
     client, headers, state = planner
     pool = state.gpus[0]
     with patch.object(
@@ -81,8 +81,8 @@ def test_collapsed_updates_skip_comparison_and_expansion_uses_current_state(plan
         response = client.post("/gpu/qty", headers=headers, data={"uid": pool.uid, "delta": 1})
         assert response.status_code == 200
         assert calc.call_count == 0
-        assert b"data-pm-url=" in response.data
-        assert b'<table class="pm-grid">' not in response.data
+        assert b"data-pm-url=" not in response.data
+        assert b'<table class="pm-grid">' in response.data
         url = f"/gpu/machine-options?panel=A&uid={pool.uid}"
         fragment = client.get(url, headers=headers)
         assert fragment.status_code == 200

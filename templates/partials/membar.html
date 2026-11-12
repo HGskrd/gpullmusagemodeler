@@ -11,11 +11,14 @@
     {% set m = MODELS[am.model_key] %}
     {% set gp = state.find_gpu(am.gpu_uid) %}
     {% if gp %}
-      {% set g = GPUS[gp.gpu_type] %}
+      {% set g = gp.gpu %}
       {% set phase_tp = am.prefill_tp if mem_phase == 'prefill' else am.tp %}
       {% set phase_pp = am.prefill_pp if mem_phase == 'prefill' else am.pp %}
       {% set stage_frac = ((m.layers + phase_pp - 1) // phase_pp) / m.layers %}
       {% set w = m.gpu_weight_bytes(am.prec) * stage_frac / phase_tp %}
+      {% set memory_info = get_model_info(state, am) %}
+      {% set memory = memory_info.prefill_mem if mem_phase == 'prefill' else memory_info.decode_mem %}
+      {% if memory %}{% set w = memory.weights %}{% endif %}
       {% set non_kv = state.profiled_non_kv_gb * 1e9 %}
       {% set kv = [0, (g.mem * state.mu - w - non_kv)]|max %}
       {% set over = (w + non_kv) > g.mem * state.mu %}

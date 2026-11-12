@@ -15,6 +15,7 @@ from calc import (
     default_strategy,
     effective_prefill_length,
     resolve_spec_runtime,
+    spec_runtime_for,
     valid_strategies,
 )
 from data import (
@@ -318,7 +319,7 @@ def _assignment_memories(state: PlannerState, am: ModelAssignment, gpu: GPU):
     if (am.prefill_tp, am.prefill_pp, am.prefill_dp) != (am.tp, am.pp, am.dp):
         return None, None
     model = am.model
-    spec = resolve_spec_runtime(model, am.spec_method, am.spec_k, state.spec_acceptance, am.prec)
+    spec = spec_runtime_for(state, am, model)
     prefill_mem = compute_memory(
         model,
         am.prefill_tp,

@@ -65,7 +65,7 @@ from presentation.model_cards import (
     short_spec_label,
     tech_scorecard,
 )
-from presentation.placement_view import machine_controls, placement_view
+from presentation.placement_view import machine_options, placement_view
 from scenarios import validate_import_payload
 from state import (
     AUTO_MODEL_STRATEGIES,
@@ -282,7 +282,7 @@ def _template_context() -> dict:
         "strategy_label": strategy_label,
         "layout_label": layout_label,
         "placement_view": placement_view,
-        "machine_controls": machine_controls,
+        "machine_options": machine_options,
         "short_artifact_label": short_artifact_label,
         "short_spec_label": short_spec_label,
         "short_note": short_note,

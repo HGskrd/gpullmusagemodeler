@@ -220,15 +220,25 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
                 auto_label = (
                     f"Auto selected k={spec['k']}"
                     if am.spec_k == 0 and spec["active"]
-                    else f"Auto kept spec off (best candidate k={spec['k']})"
+                    else (
+                        f"Auto kept spec off (best candidate k={spec['k']})"
+                        if spec["candidate_feasible"]
+                        else f"Auto kept spec off ({spec['reason']})"
+                    )
                     if am.spec_k == 0
                     else f"manual k={spec['k']}"
                 )
+                performance = (
+                    f"modeled {spec['speedup']:.2f}x at {spec['probe_bs']} users"
+                    if spec["speedup"] > 0
+                    else f"no feasible candidate at {spec['probe_bs']} users"
+                )
+                residency = "allocated" if spec["active"] else "candidate only; not allocated"
                 lines.append(
                     f"  - Spec decoding: {spec['profile'].label}, {auto_label}, "
                     f"alpha {spec['alpha']:.2f} ({spec['alpha_source']}), tau ~{spec['tau']:.2f} tok/cycle, "
-                    f"+{spec['draft_gb']:.1f} GB draft weights, modeled {spec['speedup']:.2f}x "
-                    f"at {spec['probe_bs']} users; lossless verification; "
+                    f"{spec['draft_gb']:.2f} GB draft weights/copy ({residency}), {performance}; "
+                    f"lossless verification; "
                     f"draft/verification/KV/scheduler costs are modeled and speedup erodes as batch turns compute-bound. "
                     f"Source: {spec['profile'].source}."
                 )
