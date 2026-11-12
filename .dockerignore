@@ -1,7 +1,13 @@
 .DS_Store
 .env
 .git
+.claude
+.codex
+.poolside
+.coverage
+.mypy_cache
 .pytest_cache
+.ruff_cache
 .venv
 __pycache__
 *.pyc

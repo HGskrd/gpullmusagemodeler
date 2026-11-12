@@ -339,16 +339,21 @@ def _record_snapshot(
     )
 
 
-def _htmx_response(state_a=None):
-    # Always render the canonical A/B pair. Callers may pass the mutated panel,
-    # which is panel B for compare-side edits.
-    sa = get_state(_scope_id())
-    sb = get_compare_state(_scope_id())
+def _render_panels(sa: PlannerState, sb: PlannerState | None):
     resp = make_response(
         render_template("partials/htmx_response.html", A=sa, B=sb, **_planner_view_context(sa, sb))
     )
     resp.headers["HX-Trigger"] = "refreshChart"
     return resp
+
+
+# The three responses below always render the canonical A/B pair for the
+# request's scope. ``state_a`` is accepted so callers can pass the panel they
+# mutated (panel B for compare-side edits); it is not used.
+
+
+def _htmx_response(state_a: PlannerState | None = None):
+    return _render_panels(get_state(_scope_id()), get_compare_state(_scope_id()))
 
 
 def _event_htmx_response(reason: str, state_a: PlannerState | None = None):
@@ -360,21 +365,12 @@ def _event_htmx_response(reason: str, state_a: PlannerState | None = None):
     sa = get_state(_scope_id())
     sb = get_compare_state(_scope_id())
     record_event(reason, sa, sb)
-    resp = make_response(
-        render_template("partials/htmx_response.html", A=sa, B=sb, **_planner_view_context(sa, sb))
-    )
-    resp.headers["HX-Trigger"] = "refreshChart"
-    return resp
+    return _render_panels(sa, sb)
 
 
 def _tracked_htmx_response(reason: str, state_a: PlannerState | None = None):
-    # Always render and snapshot the canonical A/B pair. Callers may pass the
-    # mutated panel, which is panel B for compare-side edits.
+    """Render like _htmx_response and record a full A/B snapshot."""
     sa = get_state(_scope_id())
     sb = get_compare_state(_scope_id())
     _record_snapshot(reason, sa, sb)
-    resp = make_response(
-        render_template("partials/htmx_response.html", A=sa, B=sb, **_planner_view_context(sa, sb))
-    )
-    resp.headers["HX-Trigger"] = "refreshChart"
-    return resp
+    return _render_panels(sa, sb)

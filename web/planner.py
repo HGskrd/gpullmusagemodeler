@@ -721,7 +721,9 @@ def task_preset(s):
 @planner_bp.route("/task/length", methods=["POST"])
 @with_planner_state
 def task_length(s):
-    length = 2 ** _form_int("value")
+    # The sliders send log2(tokens); cap it so a crafted value cannot ask for an
+    # astronomically large integer. 2**23 stays inside the scenario import bound.
+    length = 2 ** _bounded_int(request.form.get("value"), name="value", lo=0, hi=23)
     kind = request.form.get("kind")
     if kind == "in":
         s.task_il = length

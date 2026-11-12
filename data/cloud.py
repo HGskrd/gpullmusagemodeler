@@ -666,14 +666,6 @@ CORPO_CLOUD_PRESETS["october_2026"] = {
 CORPO_CLOUD_DEFAULT = "current"
 
 
-def corpo_cloud_models(name: str) -> tuple[str, ...]:
-    preset = CORPO_CLOUD_PRESETS.get(name) or CORPO_CLOUD_PRESETS[CORPO_CLOUD_DEFAULT]
-    return tuple(preset["models"])
-
-
-# Opinionated use-case definitions so the demo is one click from a realistic story.
-
-
 PREVIEW_ASSUMPTIONS["cloud:mistral-large-4"] = {
     "captured_at": "2026-10-17",
     "status": "public API preview; weights pending",

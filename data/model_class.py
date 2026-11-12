@@ -1319,6 +1319,42 @@ MODEL_QUANTIZATION_PROFILES: dict[tuple[str, str], QuantizationProfile] = dict(
                 ),
             ),
         ),
+        (
+            ("kimi-k3.1-pro", "mxfp4"),
+            QuantizationProfile(
+                precision_key="mxfp4",
+                label="MXFP4",
+                source_repo="moonshotai/Kimi-K3.1-Pro",
+                source_revision="6d0a0202956796543364d666ab19c6ad1a494ee1",
+                source_downloads=797,
+                captured_at="2026-11-04",
+                source_kind="exact",
+                quant_algo="native MXFP4 QAT",
+                kv_cache_format="FP8",
+                kv_cache_bytes_per_elem=1.0,
+                group_size=32,
+                storage_format_counts={},
+                # 92 MoE layers × 16 active experts × 3 matrices × 3584 × 3072
+                # divided by the vendor's rounded 104B active parameter count.
+                compute_precision_shares={
+                    "mxfp4": 0.4675035766153846,
+                    "bf16": 0.5324964233846154,
+                },
+                quantized=("92 layers of routed MoE expert weights MXFP4",),
+                retained=(
+                    "KDA, gated DSA/indexer, and Block AttnRes higher precision",
+                    "latent/shared experts, routers, dense layer and multimodal tower higher precision",
+                ),
+                total_weight_bytes_override=1_561_217_377_280,
+                active_weight_bytes_per_param_override=1.313354121846154,
+                notes=(
+                    "Exact 96-shard checkpoint footprint. Active traffic is an estimate: "
+                    "0.53125 bytes per routed-expert parameter (MXFP4 + group-32 scales), "
+                    "remaining active parameters conservatively BF16. "
+                    "104B active is vendor-rounded. DSA index cache is separately FP8."
+                ),
+            ),
+        ),
         _nvfp4_profile(
             model_key="k25",
             source_repo="nvidia/Kimi-K2.5-NVFP4",

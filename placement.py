@@ -282,16 +282,8 @@ def _retune_model(state: PlannerState, am: ModelAssignment, preserve_existing: b
     if (am.tp, am.pp, am.dp) not in decode_valid:
         am.tp, am.pp, am.dp = decode_default
 
-    prefill_valid = valid_strategies(
-        model,
-        am.gpu_count,
-        gp.gpu,
-        state.mu,
-        state.profiled_non_kv_gb,
-        am.prec,
-        spec,
-    )
-    if (am.prefill_tp, am.prefill_pp, am.prefill_dp) not in prefill_valid or (
+    # Prefill shares the decode layout (see above), so one validity set covers both.
+    if (am.prefill_tp, am.prefill_pp, am.prefill_dp) not in decode_valid or (
         am.prefill_tp,
         am.prefill_pp,
         am.prefill_dp,
@@ -474,10 +466,6 @@ def _auto_model_value(model: Model, projects: list[Project]) -> float:
         )
         value += _active_project_demand(project) * max(0.0, float(project.wtp_per_m or 0.0)) * sr
     return value
-
-
-def _auto_model_value_density(model: Model, projects: list[Project], gpu_count: int) -> float:
-    return _auto_model_value(model, projects) / max(int(gpu_count or 0), 1)
 
 
 def _auto_served_projects(model: Model, projects: list[Project]) -> list[Project]:

@@ -6,11 +6,47 @@ from .embedding_support import (
     _pplx_embed_model,
 )
 from .model_class import (
+    MODEL_QUANTIZATION_PROFILES,
     EmbeddingProfile,
     Model,
+    _artifact_profile,
 )
 
 EMBEDDING_MODELS: dict[str, Model] = {
+    "meta-encoder-v1": Model(
+        key="meta-encoder-v1",
+        name="MetaEncoder v1 28.5B",
+        cat="Embeddings",
+        color="#0866FF",
+        total_params=28_476_097_536,
+        active_params=28_476_097_536,
+        is_moe=False,
+        layers=52,
+        num_heads=32,
+        kv_heads=2,
+        head_dim=128,
+        is_mla=False,
+        hidden_dim=6656,
+        local_attention_layers=39,
+        local_attention_window=2048,
+        max_context_tokens=16384,
+        capabilities_override=frozenset(),
+        quality_confidence=0.0,
+        native_precision_label="BF16 checkpoint + embedding head · 56.95 GB",
+        native_precision_note="Exact BF16 tensor residency includes the full vision tower and the separately loaded embedding head. Other weight precisions are hypothetical conversions.",
+        attention_label="39 local 2,048 + 13 global causal GQA · 6656d embeddings",
+        architecture_note="Text-input capacity proxy conservatively charges all resident parameters per forward pass. Image/video encoding latency and retrieval quality are uncalibrated. The backbone supports 131,072 positions; planning is capped at the 16,384 tokens seen in training (the wrapper warns above this, without truncation).",
+        embedding_profile=EmbeddingProfile(
+            label="MetaEncoder v1",
+            kind="single",
+            output_dim=6656,
+            max_sequence_length=16384,
+            source="facebook/meta-encoder-v1",
+            note="Instruction-conditioned text/image/video embeddings. Final user <|eot|> hidden state is projected and L2-normalized, returned as FP32. Input length includes prompt formatting. The decide wrapper retrieves over option embeddings; separate decision-task capacity is not modeled.",
+            pooling="last <|eot|> + projection + L2 normalization",
+            causal_attention=True,
+        ),
+    ),
     "nvidia-nemotron-3-embed-8b": Model(
         "nvidia-nemotron-3-embed-8b",
         "NVIDIA Nemotron 3 Embed 8B",
@@ -397,6 +433,30 @@ EMBEDDING_MODELS: dict[str, Model] = {
     ),
     "cohere-embed-v4-0": _cohere_embed_v4_model(),
 }
+
+
+# Hub/index metadata excludes this separately loaded 6656 × 6656 BF16 head.
+MODEL_QUANTIZATION_PROFILES.update(
+    [
+        _artifact_profile(
+            model_key="meta-encoder-v1",
+            precision_key="bf16",
+            label="Official BF16 + embedding head",
+            source_repo="facebook/meta-encoder-v1",
+            source_revision="ed04ebd4defb8e837b5eaea164143177272696ac",
+            total_weight_bytes=56_952_195_072,
+            storage_format_counts={"BF16": 28_476_097_536},
+            compute_precision_shares={"bf16": 1.0},
+            quantized=(),
+            retained=("Full backbone, vision tower, projector and embedding head BF16",),
+            notes="56,863,590,400 indexed backbone bytes plus 88,604,672 embedding-head tensor bytes. Text-only throughput is an uncalibrated full-parameter proxy; runtime/activation memory is additional.",
+            quant_algo="unquantized BF16",
+            kv_cache_format="BF16",
+            captured_at="2026-11-12",
+            storage_evidence="Pinned shard index and separate embedding_head.safetensors header (BF16, 6656 × 6656); no weights downloaded.",
+        ),
+    ]
+)
 
 
 # October 2026 multimodal retrieval releases (text-input throughput proxies).

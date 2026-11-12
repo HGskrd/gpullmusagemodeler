@@ -20,6 +20,24 @@ class ModelArchitectureSource:
 # These entries cover every model added or materially corrected in the
 # September 2026 audit. Revisions are immutable official release snapshots.
 OPEN_MODEL_ARCHITECTURE_SOURCES: dict[str, ModelArchitectureSource] = {
+    "meta-encoder-v1": ModelArchitectureSource(
+        "https://huggingface.co/facebook/meta-encoder-v1",
+        "ed04ebd4defb8e837b5eaea164143177272696ac",
+        "Captured 2026-11-12: official config, card, wrapper, Hub metadata, shard index and separate embedding-head header. "
+        "28,431,795,200 backbone + 44,302,336 head parameters, all BF16. 52 layers, 39 local/13 global GQA, "
+        "6656d last-token projected embeddings. 16,384-token training-length planning cap versus 131,072 positional limit. "
+        "Causal text masks confirmed in transformers v5.15.1 modeling_muse_glimmer.py. "
+        "Full multimodal residency; text-only capacity/quality uncalibrated; other precisions hypothetical.",
+    ),
+    "kimi-k3.1-pro": ModelArchitectureSource(
+        "https://huggingface.co/moonshotai/Kimi-K3.1-Pro",
+        "6d0a0202956796543364d666ab19c6ad1a494ee1",
+        "Captured 2026-11-04: official config/card, Hub parameter metadata and 96-shard index "
+        "(1,561,217,377,280 bytes). 69 KDA + 24 Gated DSA, 32×128 indexer, top-k 2048; "
+        "104B active is vendor-rounded. Cache layout/132-byte FP8 index keys and "
+        "DSpark acceptance from https://vllm.ai/blog/2026-11-04-kimi-k31-pro. "
+        "Quality/verbosity uncalibrated; no fused-kernel or DCP speedup assumed.",
+    ),
     "ms32": ModelArchitectureSource(
         "https://huggingface.co/mistralai/Mistral-Small-3.2-24B-Instruct-2506",
         "95a6d26c4bfb886c58daf9d3f7332c857cb27b43",

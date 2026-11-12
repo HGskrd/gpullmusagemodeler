@@ -1400,6 +1400,80 @@ TEXT_MODELS: dict[str, Model] = {
         native_precision_label="official MXFP4 QAT artifact · 1.56 TB",
         native_precision_note="Exact official Kimi K3 artifact: routed experts MXFP4; attention, AttnRes, latent/shared experts, routers, multimodal tower, and head remain higher precision.",
     ),
+    "kimi-k3.1-pro": Model(
+        "kimi-k3.1-pro",
+        "Kimi K3.1 Pro 2.78T-A104B",
+        "Kimi",
+        "#6D45E8",
+        2_780_110_363_392,
+        104e9,
+        True,
+        93,
+        96,
+        96,
+        128,
+        True,
+        512,
+        64,
+        mla_tp_supported=True,
+        kv_layers=24,
+        hidden_dim=7168,
+        attention_layers=24,
+        linear_attention_layers=69,
+        linear_attention_heads=96,
+        linear_attention_head_dim=128,
+        linear_attention_k_heads=96,
+        linear_attention_k_head_dim=128,
+        linear_attention_conv_kernel=4,
+        sparse_attention_top_k=2048,
+        sparse_indexer_heads=32,
+        sparse_indexer_head_dim=128,
+        sparse_indexer_layers=24,
+        # Ratio one uses the existing independent index-key cache accounting:
+        # no pooling, one 128-element FP8 key plus FP32 scale per source token.
+        sparse_indexer_compression_ratio=1,
+        sparse_indexer_cache_bytes_per_token=132.0,
+        attention_label=(
+            "69 lower-bounded/full-rank KDA + 24 NoPE Gated DSA top-2,048 · "
+            "32×128 indexer · Block AttnRes 12-layer/8 blocks · "
+            "Stable LatentMoE 16/896 + 2 shared"
+        ),
+        attention_residual_block_size=12,
+        moe_latent_dim=3584,
+        moe_intermediate_dim=3072,
+        moe_routed_experts=896,
+        moe_active_experts=16,
+        moe_shared_experts=2,
+        activation_label="SiTU-GLU β1=4 β2=25",
+        max_context_tokens=1_048_576,
+        capabilities_override=frozenset({"tools", "images", "reasoning"}),
+        quality_confidence=0.0,
+        speculative_profiles=(
+            _dspark_profile(
+                2_686_752_257,
+                0.8327993071178925,
+                "https://huggingface.co/Inferact/Kimi-K3.1-Pro-DSpark-preview/tree/5e654fbe920278f228a89519b06b2680aa56480f",
+                "Preview five-layer BF16 speculator. Alpha fits vLLM's GSM8K mean acceptance length 4.597 with seven draft tokens (temperature 1.0, top-p 0.95); transfer to other workloads is uncalibrated. Reported 3.0× decode speedup on 8×GB300 is not a planner benchmark. KV overhead conservatively uses five full MLA layers relative to 24 target cache layers, including target index-key bytes.",
+                exact_weight_bytes=5_373_504_514,
+                draft_layers=5,
+                kv_overhead=5 / 24,
+            ),
+        ),
+        native_precision="mxfp4",
+        native_precision_label="official MXFP4 QAT artifact · 1.561 TB",
+        native_precision_note="Exact official K3.1 Pro checkpoint; routed experts MXFP4, other components higher precision. FP8 DSA index keys remain separate from the selected MLA cache precision.",
+        architecture_note=(
+            "Captured 2026-11-04. Gated DSA replaces K3's dense MLA in all 24 "
+            "attention layers; main KV remains full-context, with top-2,048 reads "
+            "plus a full-context FP8 index scan (132 bytes/token/layer). "
+            "MLA uses the runtime's 576-element latent/position cache layout even "
+            "with NoPE. 104B active parameters is the rounded vendor count. "
+            "Expert compute/traffic shares are geometry-derived estimates. "
+            "Optional MXFP4 index keys, DCP, fused kernels, cache-page padding "
+            "and vision latency are not simulated. Quality and token efficiency "
+            "are uncalibrated placeholders; throughput is an estimate, not a benchmark."
+        ),
+    ),
     "kimi-linear-48b": Model(
         "kimi-linear-48b",
         "Kimi Linear 48B-A3B",

@@ -17,6 +17,7 @@ from .models_embedding import EMBEDDING_MODELS
 from .models_lfm3 import LFM3_MODELS
 from .models_releases_202610 import RELEASE_MODELS
 from .models_releases_202611 import NOVEMBER_MODELS
+from .models_startlux import STARTLUX_MODELS
 from .models_text import TEXT_MODELS
 
 _ALL_MODEL_DEFINITIONS = {
@@ -27,11 +28,13 @@ _ALL_MODEL_DEFINITIONS = {
     **LFM3_MODELS,
     **RELEASE_MODELS,
     **NOVEMBER_MODELS,
+    **STARTLUX_MODELS,
 }
 _INITIAL_MODELS = {
     key: model for key, model in _ALL_MODEL_DEFINITIONS.items() if key not in ARCHIVED_MODELS
 }
 MODEL_ORDER: tuple[str, ...] = (
+    *STARTLUX_MODELS,
     "d1-2b",
     "d1-omni-2b",
     "d1-3b",
@@ -48,6 +51,7 @@ MODEL_ORDER: tuple[str, ...] = (
     "intern-decision-0.8b",
     "intern-decision-2b",
     "intern-decision-4b",
+    "meta-encoder-v1",
     "nvidia-nemotron-3-embed-8b",
     "nvidia-nemotron-3-embed-1b",
     "denseon",
@@ -111,6 +115,7 @@ MODEL_ORDER: tuple[str, ...] = (
     "glm53",
     "glm53f",
     "kimi-k3",
+    "kimi-k3.1-pro",
     "kimi-linear-48b",
     "inkling",
     "inkling-small-preview",

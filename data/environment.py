@@ -292,12 +292,6 @@ GCP_ZONE_COUNTRY: dict[str, str] = {
 }
 
 
-def carbon_intensity(country: str, hour: int) -> float:
-    """Grams CO2-equivalent per kWh for the given country at the given local hour (0-23)."""
-    series = CARBON_INTENSITY_HOURLY.get(country) or CARBON_INTENSITY_HOURLY[DEFAULT_COUNTRY]
-    return series[hour % 24]
-
-
 def carbon_intensity_avg(country: str, hour_weights: list[float] | None = None) -> float:
     """Demand-weighted daily average gCO2/kWh for a country. Unweighted if weights is None."""
     series = CARBON_INTENSITY_HOURLY.get(country) or CARBON_INTENSITY_HOURLY[DEFAULT_COUNTRY]

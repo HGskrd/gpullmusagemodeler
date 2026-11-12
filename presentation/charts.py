@@ -10,7 +10,6 @@ from calc import (
     EMBEDDING_BATCH_SIZES,
     PROCESSING_PARETO_COLORS,
     REALTIME_USER_SWEEP,
-    USER_EXP_FRACTIONS,
     USER_EXP_SWEEP,
     EfficiencyParams,
     SpecRuntime,
@@ -446,41 +445,6 @@ def embedding_quality_axis_range(
     return {
         "y_min": round(max(0.0, lo - margin), 4),
         "y_max": round(min(1.0, hi + margin), 4),
-    }
-
-
-def _sample_user_exp_curve(points: list[dict], target_rps: float) -> Optional[dict]:
-    if not points or target_rps <= 0 or target_rps > points[-1]["arrival_rps"]:
-        return None
-    if target_rps <= points[0]["arrival_rps"]:
-        point = points[0]
-        return {
-            "arrival_rps": round(target_rps * 100) / 100,
-            "response_s": point["response_s"],
-            "inflight": round(target_rps * point["response_s"], 1),
-            "ttft_ms": point["ttft_ms"],
-            "decode_step_ms": point["decode_step_ms"],
-        }
-
-    left = points[0]
-    right = points[-1]
-    for candidate in points[1:]:
-        if target_rps <= candidate["arrival_rps"]:
-            right = candidate
-            break
-        left = candidate
-
-    span = right["arrival_rps"] - left["arrival_rps"]
-    t = 0.0 if span <= 0 else (target_rps - left["arrival_rps"]) / span
-    response_s = left["response_s"] + (right["response_s"] - left["response_s"]) * t
-    ttft_ms = left["ttft_ms"] + (right["ttft_ms"] - left["ttft_ms"]) * t
-    decode_step_ms = left["decode_step_ms"] + (right["decode_step_ms"] - left["decode_step_ms"]) * t
-    return {
-        "arrival_rps": round(target_rps * 100) / 100,
-        "response_s": round(response_s * 100) / 100,
-        "inflight": round(target_rps * response_s, 1),
-        "ttft_ms": round(ttft_ms, 1),
-        "decode_step_ms": round(decode_step_ms, 1),
     }
 
 
@@ -1084,58 +1048,6 @@ def chart_processing_pareto(
             }
         )
     return datasets
-
-
-def compute_user_exp_table(state) -> list[dict]:
-    """Build the sampled user-experience table presentation model."""
-    rows = []
-    for am, gpu in _iter_resolved_models(state):
-        model = am.model
-        if model.is_decision_model or getattr(model, "embedding_profile", None) is not None:
-            continue
-        points = _user_exp_curve(
-            model,
-            (am.prefill_tp, am.prefill_pp, am.prefill_dp),
-            (am.tp, am.pp, am.dp),
-            gpu,
-            state.mu,
-            state.profiled_non_kv_gb,
-            am.prec,
-            state.in_dist,
-            state.out_dist,
-            state.prefix_hit_rate,
-            state.prefill_efficiency,
-            state.decode_efficiency,
-            spec_runtime_for(state, am, model),
-        )
-        if not points:
-            continue
-        peak = points[-1]
-        cells: list[dict | None] = []
-        for frac in USER_EXP_FRACTIONS:
-            sample = _sample_user_exp_curve(points, peak["arrival_rps"] * frac)
-            if sample is None:
-                cells.append(None)
-                continue
-            cells.append(
-                {
-                    "lat": round(sample["decode_step_ms"], 1),
-                    "resp_s": round(sample["response_s"], 2),
-                    "ttft_ms": round(sample["ttft_ms"], 1),
-                }
-            )
-        rows.append(
-            {
-                "model": model,
-                "config": f"{strategy_label(am.tp, am.pp, am.dp)} {am.prec.upper()}",
-                "prec": am.prec,
-                "peak_rps": round(peak["arrival_rps"] * 100) / 100,
-                "peak_resp_s": round(peak["response_s"] * 100) / 100,
-                "peak_inflight": round(peak["inflight"], 1),
-                "cells": cells,
-            }
-        )
-    return rows
 
 
 DECISION_LENGTHS = (128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768)

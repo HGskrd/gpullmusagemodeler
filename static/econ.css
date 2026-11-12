@@ -59,10 +59,7 @@
   background: var(--bg0); border: 1px solid var(--b1); border-radius: var(--rl);
   padding: 28px 34px; font-size: 14px; line-height: 1.65;
 }
-.brief .b-kicker {
-  font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
-  color: var(--fg2); margin-bottom: 4px;
-}
+
 .brief h2 { font-size: 22px; margin: 0 0 4px; line-height: 1.3; }
 .brief .b-date { font-size: 11px; color: var(--fg2); margin-bottom: 16px; }
 .brief h3 {
@@ -109,8 +106,6 @@
 .m-fill-ok { background: var(--acc2); }
 .m-fill-warn { background: var(--amber); }
 .m-fill-idle { background: var(--bg3); }
-.m-fill-cap { background: var(--acc); }
-.m-fill-demand { background: var(--amber); }
 
 /* Fate bars (.fate-bar/.fate-seg/.fate-legend) come from style.css. */
 .chart-box { width: 100%; }
@@ -149,17 +144,11 @@
    cause. Same density as the rest of the page; one line per item. */
 .brief.overview { max-width: none; padding: 0; margin-top: 8px; font-size: 11px; line-height: 1.45; background: none; border: 0; border-radius: 0; }
 .brief.overview h2 { font-size: 15px; text-transform: none; letter-spacing: -0.01em; color: var(--fg0); margin: 0 0 2px; }
-.brief.overview .b-kicker, .brief.overview .b-date { font-size: 10px; margin-bottom: 4px; }
+.brief.overview .b-date { font-size: 10px; margin-bottom: 4px; }
 .brief.overview h3 { font-size: 10px; margin: 10px 0 3px; padding-bottom: 2px; }
 .moves { display: grid; gap: 0; }
 .move { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 2px 0; border-bottom: 1px solid var(--b0); }
-.move-ic { font-family: var(--mono); font-weight: 600; font-size: 11px; text-align: center; }
-.move-ic.swap { color: var(--acc); } .move-ic.grow { color: var(--o-cloud); }
-.move-body { display: flex; gap: 10px; align-items: baseline; min-width: 0; white-space: nowrap; overflow: hidden; }
-.move-body strong { font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
-.move-body .T { font-size: 10px; overflow: hidden; text-overflow: ellipsis; }
-.move-gain { display: flex; gap: 8px; font-family: var(--mono); font-size: 10px; margin-left: auto; flex: none; }
-.move-gain .good { color: var(--acc2); } .move-gain .bad { color: var(--red); }
+
 .move button { font-size: 9px; padding: 1px 6px; }
 .ov-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 6px 18px; }
 .ov-group { display: grid; gap: 0; align-content: start; }
