@@ -1162,6 +1162,7 @@ class ModelCatalogTests(unittest.TestCase):
 
     def test_embedding_catalog_entries_cover_dense_and_late_modes(self):
         expected = {
+            "meta-encoder-v1": ("single", 6656, 16384),
             "denseon": ("single", 768, 512),
             "lateon": ("late", 128, 300),
             "bge-m3": ("hybrid", 1024, 8192),
@@ -1268,6 +1269,7 @@ class ModelCatalogTests(unittest.TestCase):
 
     def test_embedding_quality_scores_are_sourced(self):
         expected_quality = {
+            "meta-encoder-v1": 0.5,
             "denseon": 0.5620,
             "lateon": 0.5722,
             "bge-m3": 0.5288,
@@ -1300,6 +1302,7 @@ class ModelCatalogTests(unittest.TestCase):
             EMBEDDING_QUALITY_PLACEHOLDER,
             frozenset(
                 {
+                    "meta-encoder-v1",
                     "cohere-embed-v4-0",
                     "nvidia-nemotron-3-embed-1b",
                     "pplx-embed-v2-late-0.6b",

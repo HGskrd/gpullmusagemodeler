@@ -4,6 +4,7 @@ from .model_class import EmbeddingProfile, Model
 from .release_quality_202610 import RELEASE_EMBEDDING_METRICS
 
 EMBEDDING_QUALITY_SOURCES: dict[str, str] = {
+    "meta-encoder-v1": "Placeholder: facebook/meta-encoder-v1 publishes multimodal benchmark results, but no catalog-comparable text retrieval aggregate is established. Not a measured retrieval score.",
     "denseon": "LightOn DenseOn HF model card, BEIR average nDCG@10 table.",
     "lateon": "LightOn LateOn HF model card, BEIR average nDCG@10 table.",
     "bge-m3": "MTEB results repo, BGE-M3 MTEB(Multilingual, v2) retrieval average over the 18 pplx report tasks.",
@@ -23,6 +24,7 @@ EMBEDDING_QUALITY_SOURCES: dict[str, str] = {
     "nvidia-nemotron-3-embed-1b": "Placeholder: official 1B config and serving limit are published, but no catalog-comparable retrieval aggregate was isolated.",
 }
 PUBLISHED_EMBEDDING_QUALITY: dict[str, float] = {
+    "meta-encoder-v1": 0.5,
     "denseon": 0.5620,
     "lateon": 0.5722,
     "bge-m3": 0.5288,
@@ -43,6 +45,7 @@ PUBLISHED_EMBEDDING_QUALITY: dict[str, float] = {
 }
 EMBEDDING_QUALITY_PLACEHOLDER: frozenset[str] = frozenset(
     {
+        "meta-encoder-v1",
         "cohere-embed-v4-0",
         "nvidia-nemotron-3-embed-1b",
     }

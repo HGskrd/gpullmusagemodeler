@@ -48,20 +48,6 @@ from web.planner import planner_bp
 from web.scenarios import scenarios_bp
 from web.use_cases import use_cases_bp
 
-_configured_secret = os.environ.get("PLANNER_SECRET_KEY", "").strip()
-
-
-# Fetchable resources are local. 'unsafe-inline' stays for scripts (one inline
-# block in base.html) and styles (~250 inline style attributes across the
-# templates); HTMX expression evaluation is disabled in base.html so its
-# controls remain compatible with the no-unsafe-eval policy.
-
-
-# The after_request compressor deliberately skips direct_passthrough responses,
-# which is every file served by Flask's static handler — so the vendor bundles
-# (~1.1 MB of JS/CSS) went out uncompressed. Compress those once and keep the
-# result keyed by (mtime, size) so a redeploy or edit invalidates it.
-
 
 def _handle_validation_error(error: ValueError):
     if isinstance(error, json.JSONDecodeError):

@@ -1,0 +1,27 @@
+<div class="gpu-picker-hint">Complete systems · USD before shipping/tax · <a href="https://tinygrad.org/" target="_blank" rel="noopener">tinygrad.org</a> · {{ tinybox_reviewed_at }}</div>
+{% for config in tinybox_presets %}
+<div class="gpu-picker-family tinybox-preset">
+  <button type="button" class="sm" data-gpu-key="{{ config.key }}" data-gpu-name="{{ config.name }}"
+          data-hardware-match="Tinygrad {{ config.name }} {{ config.platform }} {{ config.gpu }} {{ config.memory }} {{ config.details }}"
+          data-system-gpus="{{ config.count }}" data-min-count="{{ config.count }}" data-count-multiple="{{ config.count }}"
+          data-hardware-detail="{{ config.details }}"
+          onclick="addGpuFromPicker('{{ panel }}', '{{ config.key }}', this)">{{ config.name }} · ${{ '{:,}'.format(config.price) }}</button>
+  <span class="T">{{ config.platform }} · {{ config.count }}× {{ '9070 XT' if '9070XT' in config.gpu else 'R9700' }} · {{ (16 if '9070XT' in config.gpu else 32) * config.count }} GB total</span>
+</div>
+{% endfor %}
+<div class="tinybox-custom" data-tinybox-configurator data-tinybox-configs="{{ tinybox_configs|tojson|forceescape }}">
+  <div class="T">Customize a tinybox</div>
+  {% for field, options in tinybox_options.items() %}
+  <label>{{ 'GPUs' if field == 'gpu' else field|capitalize }}
+    <select data-tinybox-field="{{ field }}" aria-label="Tinybox {{ field }}">
+      {% for value, label in options %}
+      <option value="{{ value }}">{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  {% endfor %}
+  <div class="T" data-tinybox-summary role="status"></div>
+  <button type="button" class="sm acc" data-tinybox-add
+          onclick="addGpuFromPicker('{{ panel }}', this.dataset.gpuKey, this)">Add system</button>
+  <div class="T">PSU watts are capacity. Throughput, PCIe collectives and power are planning proxies; validate your runtime. Barebones prices are shown; select GPUs to plan inference.</div>
+</div>

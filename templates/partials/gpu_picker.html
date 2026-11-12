@@ -6,7 +6,7 @@
     <button type="button" class="sm{{ ' acc' if loop.first else '' }}" role="tab" aria-selected="{{ 'true' if loop.first else 'false' }}" data-gpu-vendor="{{ vendor }}">{{ vendor }}</button>
     {% endfor %}
   </div>
-  <div class="gpu-count-sel"><span>Quantity</span>
+  <div class="gpu-count-sel"><span data-gpu-quantity-label>Quantity</span>
     {% for n in [1, 2, 4, 6, 8, 16] %}
     <button type="button" data-gcnt="{{ n }}" class="sm" aria-pressed="false">{{ n }}</button>
     {% endfor %}
@@ -15,6 +15,9 @@
 <div class="gpu-picker-hint">Click a variant to add</div>
 {% for vendor, families in picker_vendors.items() %}
 <div data-gpu-vendor-panel="{{ vendor }}" role="tabpanel" aria-label="{{ vendor }} accelerators" class="{{ 'gpu-picker-apple' if vendor == 'Apple' else '' }}"{% if not loop.first %} hidden{% endif %}>
+  {% if vendor == 'Tinygrad' %}
+  {% include "partials/tinybox_picker.html" %}
+  {% else %}
   {% for family, variants in families %}
   <div class="gpu-picker-family">
     <span class="gpu-picker-family-name">{{ family }}</span>
@@ -32,6 +35,7 @@
     </div>
   </div>
   {% endfor %}
+  {% endif %}
 </div>
 {% endfor %}
 <div class="gpu-picker-hint" data-hardware-empty hidden role="status">No matching accelerators</div>

@@ -19,6 +19,13 @@ from data import (
     models_by_kind,
 )
 from data.hardware_picker import picker_vendors
+from data.tinybox import (
+    TINYBOX_GPU_CONFIGS,
+    TINYBOX_OPTIONS,
+    TINYBOX_PRESET_KEYS,
+    TINYBOX_REVIEWED_AT,
+    tinybox_picker_configs,
+)
 from placement import (
     resolve_deployment,
 )
@@ -210,6 +217,10 @@ def picker_gpu():
         panel=request.args.get("panel", "A"),
         picker_vendors=picker_vendors(),
         GPUS=GPUS,
+        tinybox_options=TINYBOX_OPTIONS,
+        tinybox_presets=[TINYBOX_GPU_CONFIGS[key] for key in TINYBOX_PRESET_KEYS],
+        tinybox_configs=tinybox_picker_configs(),
+        tinybox_reviewed_at=TINYBOX_REVIEWED_AT,
     )
 
 

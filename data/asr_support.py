@@ -507,15 +507,6 @@ for _row in RELEASE_ASR_WER_ROWS:
         + " Not cross-walked to other evaluation protocols."
     )
 
-# Backward-compatible aliases include the same expanded protocol inventory.
-ASR_WER_BENCHMARKS = ASR_WER_LANGUAGES
-ASR_WER_BENCHMARK_LABELS = ASR_WER_LANGUAGE_LABELS
-ASR_WER_BENCHMARK_SOURCES = ASR_WER_LANGUAGE_SOURCES
-STREAMING_WER_LANGUAGES = ASR_WER_LANGUAGES
-STREAMING_WER_LANGUAGE_LABELS = ASR_WER_LANGUAGE_LABELS
-STREAMING_ASR_WER = PUBLISHED_ASR_WER
-STREAMING_ASR_WER_PLACEHOLDER = ASR_WER_PLACEHOLDER
-
 
 # ---------------------------------------------------------------------------
 # Published embedding retrieval quality, in [0, 1]. Used by the "Embedding

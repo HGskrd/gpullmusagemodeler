@@ -49,7 +49,6 @@ USER_EXP_SWEEP = [
     768,
     1024,
 ]
-USER_EXP_FRACTIONS = [0.50, 0.75, 0.90, 0.95]
 REALTIME_USER_SWEEP = [
     1,
     2,
@@ -2411,48 +2410,6 @@ def compute_embedding_distribution(
     )
 
 
-def compute_embedding_capacity(
-    m: Model,
-    strat: tuple[int, int, int],
-    seq_len: int,
-    g: GPU,
-    mu: float,
-    profiled_non_kv_gb: float,
-    prec: str,
-    eff: EfficiencyParams,
-) -> int:
-    result = compute_embedding(
-        m, strat, max(strat[2], 1), seq_len, g, mu, profiled_non_kv_gb, prec, eff
-    )
-    return result.max_batch if result else 0
-
-
-def compute_embedding_distribution_capacity(
-    m: Model,
-    strat: tuple[int, int, int],
-    doc_dist: list[int],
-    buckets: list[Bucket],
-    g: GPU,
-    mu: float,
-    profiled_non_kv_gb: float,
-    prec: str,
-    eff: EfficiencyParams,
-) -> int:
-    result = compute_embedding_distribution(
-        m,
-        strat,
-        max(strat[2], 1),
-        doc_dist,
-        buckets,
-        g,
-        mu,
-        profiled_non_kv_gb,
-        prec,
-        eff,
-    )
-    return result.max_batch if result else 0
-
-
 def compute_data(
     m: Model,
     prefill_strat: tuple[int, int, int],
@@ -3021,61 +2978,6 @@ def get_realtime_bs(
     return _batch_axis_sweep(capacities, REALTIME_USER_SWEEP)
 
 
-def get_embedding_bs(states: Optional[list] = None) -> list[int]:
-    if not states:
-        return list(EMBEDDING_BATCH_SIZES)
-
-    capacities = []
-    for state in states:
-        doc_dist = _embedding_doc_dist_for_state(state)
-        for am, gpu in _iter_resolved_models(state):
-            if getattr(am.model, "embedding_profile", None) is None:
-                continue
-            capacities.append(
-                compute_embedding_distribution_capacity(
-                    am.model,
-                    (am.prefill_tp, am.prefill_pp, am.prefill_dp),
-                    doc_dist,
-                    EMBEDDING_DOC_BUCKETS,
-                    gpu,
-                    state.mu,
-                    state.profiled_non_kv_gb,
-                    am.prec,
-                    state.prefill_efficiency,
-                )
-            )
-    return _batch_axis_sweep(capacities, EMBEDDING_BATCH_SIZES)
-
-
-def get_data_bs(states: Optional[list] = None) -> list[int]:
-    if not states:
-        return list(DATA_BATCH_SIZES)
-
-    capacities = []
-    for state in states:
-        for am, gpu in _iter_resolved_models(state):
-            if getattr(am.model, "embedding_profile", None) is not None:
-                continue
-            capacities.append(
-                compute_data_capacity(
-                    am.model,
-                    (am.prefill_tp, am.prefill_pp, am.prefill_dp),
-                    (am.tp, am.pp, am.dp),
-                    state.task_il,
-                    state.task_ol,
-                    gpu,
-                    state.mu,
-                    state.profiled_non_kv_gb,
-                    am.prec,
-                    state.prefix_hit_rate,
-                    state.prefill_efficiency,
-                    state.decode_efficiency,
-                    spec_runtime_for(state, am, am.model),
-                )
-            )
-    return _batch_axis_sweep(capacities, DATA_BATCH_SIZES)
-
-
 def spec_runtime_for(state, am, m: Model) -> Optional[SpecRuntime]:
     """Resolve an assignment's speculative-decoding config against global state."""
     method = getattr(am, "spec_method", "off")
@@ -3152,51 +3054,6 @@ def get_processing_pareto_bs(states: Optional[list] = None) -> list[int]:
                     )
                 )
     return _batch_axis_sweep(capacities, DATA_BATCH_SIZES)
-
-
-def compute_stats_data(state) -> dict:
-    il, ol = state.task_il, state.task_ol
-    batch_sizes = get_data_bs([state])
-
-    peak_tps = 0
-    peak_bs = 0
-    for bs in batch_sizes:
-        total = 0
-        for am, gpu in _iter_resolved_models(state):
-            model = am.model
-            if getattr(model, "embedding_profile", None) is not None:
-                continue
-            result = compute_data(
-                model,
-                (am.prefill_tp, am.prefill_pp, am.prefill_dp),
-                (am.tp, am.pp, am.dp),
-                bs,
-                il,
-                ol,
-                gpu,
-                state.mu,
-                state.profiled_non_kv_gb,
-                am.prec,
-                state.prefix_hit_rate,
-                state.prefill_efficiency,
-                state.decode_efficiency,
-                spec_runtime_for(state, am, model),
-            )
-            if result:
-                total += result.tps
-        if total > peak_tps:
-            peak_tps = total
-            peak_bs = bs
-
-    rps = peak_tps / (il + ol) if (il + ol) > 0 else 0.0
-    return {
-        "peak_tps": peak_tps,
-        "peak_bs": peak_bs,
-        "rps": rps,
-        "dph": round(rps * 3600),
-        "il": il,
-        "ol": ol,
-    }
 
 
 @dataclass(frozen=True)

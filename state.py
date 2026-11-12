@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import copy
 import math
-import os
 import re
 import threading
 from collections import OrderedDict
@@ -67,7 +66,6 @@ PROJECT_FIELD_BOUNDS = {
     "unlock_price_per_m": (0.0, 200.0),
 }
 ALLOWED_CAPABILITIES = frozenset(MODEL_CAPABILITIES)
-ALLOWED_PROJECT_KINDS = frozenset(p["key"] for p in PROJECT_PRESETS) | {"custom"}
 VISIBLE_PLOT_MODES = (
     ("userpareto", "User Pareto"),
     ("usercapacity", "User Capacity"),
@@ -129,13 +127,6 @@ def _next_uid() -> int:
     with _uid_lock:
         _uid_counter += 1
         return _uid_counter
-
-
-def _env_nonnegative_int(name: str, default: int) -> int:
-    try:
-        return max(0, int(os.environ.get(name, default)))
-    except (TypeError, ValueError):
-        return default
 
 
 def normalize_plot_mode(mode: Optional[str]) -> str:
@@ -289,8 +280,6 @@ class Project:
     unlock_price_per_m: float = 0.0
     # Catalog-owned empirical prior: share of prompt tokens expected to hit
     # Automatic Prefix Caching for this workload archetype.
-    # Derived prompt-token-weighted average of project-level empirical priors.
-    # Kept on the state because shared capacity/topology views consume one blend.
     prefix_hit_rate: float = 0.0
     # Per-project input / output length preset. The aggregate state.in_dist / state.out_dist
     # used by calc.py are a demand-weighted blend across all projects' presets.
@@ -393,40 +382,6 @@ class ModelAssignment:
         return None
 
 
-class ModelAssignmentProxy:
-    """Wrap ModelAssignment with resolved GPU metadata."""
-
-    def __init__(
-        self,
-        assignment: ModelAssignment,
-        gpu: Optional[GPU],
-        phase: str = "decode",
-        prefill_mem=None,
-        decode_mem=None,
-    ):
-        self._assignment = assignment
-        self._gpu = gpu
-        self._phase = phase
-        self.prefill_mem = prefill_mem
-        self.decode_mem = decode_mem
-
-    @property
-    def assignment(self) -> ModelAssignment:
-        return self._assignment
-
-    def __getattr__(self, name):
-        if name == "gpu_spec":
-            return self._gpu
-        if self._phase == "prefill":
-            if name == "tp":
-                return self._assignment.prefill_tp
-            if name == "pp":
-                return self._assignment.prefill_pp
-            if name == "dp":
-                return self._assignment.prefill_dp
-        return getattr(self._assignment, name)
-
-
 def normalize_assignment_spec(am: ModelAssignment) -> None:
     model = MODELS.get(am.model_key)
     allowed = {"off"}
@@ -495,6 +450,8 @@ class PlannerState:
     decode_ar_overlap: float = 0.30
     decode_sched_budget: int = 16384
 
+    # Derived prompt-token-weighted average of project-level empirical priors.
+    # Kept on the state because shared capacity/topology views consume one blend.
     prefix_hit_rate: float = 0.0
     # Global per-token acceptance override for speculative decoding;
     # 0.0 means use each profile's acceptance_alpha.
@@ -596,9 +553,6 @@ class PlannerState:
         gp = self.find_gpu(gpu_uid)
         return gp.count - self.used_gpu_for_pool(gpu_uid) if gp else 0
 
-    def total_gpus(self) -> int:
-        return sum(g.count for g in self.gpus)
-
     def find_project(self, uid: int) -> Optional[Project]:
         return next((p for p in self.projects if p.uid == uid), None)
 
@@ -646,12 +600,6 @@ def create_default_scenario() -> tuple[PlannerState, Optional[PlannerState]]:
     if _default_scenario_factory is None:
         raise RuntimeError("Default scenario service has not been configured.")
     return _default_scenario_factory()
-
-
-def create_default_state() -> PlannerState:
-    """Compatibility helper for callers that only need the primary default panel."""
-    state, _compare = create_default_scenario()
-    return state
 
 
 def _find_preset(key: str) -> Optional[dict]:
@@ -966,13 +914,6 @@ def _find_use_case_def(state: PlannerState, key: str) -> Optional[dict[str, Any]
     return _use_case_def_index(state).get(key)
 
 
-def _default_project_name(name: str) -> bool:
-    clean = (name or "").strip()
-    return clean in {"", "New project", "New use case"} or any(
-        clean == p["name"] for p in PROJECT_PRESETS
-    )
-
-
 def _apply_preset_definition(proj: Project, preset: dict, preserve_scale: bool = True):
     old_kind = getattr(proj, "kind_key", "custom")
     tokens_day = proj.tokens_day
@@ -1146,16 +1087,22 @@ def set_project_scale_value(state: PlannerState, project_uid: int, value: float)
     proj = state.find_project(project_uid)
     if proj is None:
         return
-    scale_kind = project_scale_config(state, proj)
-    proj.scale_kind = {
-        k: scale_kind[k]
+    # Validate before touching the project: a half-applied edit would leave a
+    # non-finite scale on the state and fail every later request for the scope.
+    numeric = float(value or 0.0)
+    if not math.isfinite(numeric):
+        raise ValueError("scale_value must be finite.")
+    scale_config = project_scale_config(state, proj)
+    scale_kind = {
+        k: scale_config[k]
         for k in ("model", "label", "unit", "token_multiplier", "min", "max", "step", "formula")
     }
-    proj.scale_value = max(0.0, float(value or 0.0))
-    proj.tokens_day = _bounded_project_value(
-        "tokens_day", scale_value_to_tokens(proj.scale_value, proj.scale_kind)
+    tokens_day = _bounded_project_value(
+        "tokens_day", scale_value_to_tokens(max(0.0, numeric), scale_kind)
     )
-    proj.scale_value = tokens_to_scale_value(proj.tokens_day, proj.scale_kind)
+    proj.scale_kind = scale_kind
+    proj.tokens_day = tokens_day
+    proj.scale_value = tokens_to_scale_value(tokens_day, scale_kind)
     _sync_aggregate_distribution(state)
 
 
@@ -1335,7 +1282,24 @@ def set_use_case_def_field(state: PlannerState, key: str, field_name: str, value
     item = _find_use_case_def(state, key)
     if item is None:
         return
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{field_name} must be finite.")
+    # The definition is edited in place, so restore it if a later bound check
+    # rejects the edit; a half-applied definition would poison every project
+    # that follows it.
+    snapshot = copy.deepcopy(item)
+    try:
+        _edit_use_case_def(state, item, key, field_name, value)
+    except Exception:
+        item.clear()
+        item.update(snapshot)
+        invalidate_use_case_defs(state)
+        raise
 
+
+def _edit_use_case_def(
+    state: PlannerState, item: dict[str, Any], key: str, field_name: str, value: Any
+) -> None:
     if field_name == "name":
         item["name"] = str(value or "").strip()[:80] or item["name"]
     elif field_name == "scale_hint":

@@ -3,8 +3,6 @@
 import math
 from dataclasses import dataclass
 
-FP8_SPEEDUP_DEFAULT = 1.4
-FP8_SPEEDUP_OPTIONS = [1.0, 1.2, 1.4, 1.6]
 MIXED_NATIVE_BF16_WEIGHT_BPP = 1.35
 MIXED_NATIVE_FP8_WEIGHT_BPP = 1.10
 FP4_FP8_MOE_WEIGHT_BPP = 0.70
@@ -201,12 +199,6 @@ class QuantizationProfile:
         if self.active_weight_bytes_per_param_override is not None:
             return self.active_weight_bytes_per_param_override
         return self.weight_bytes_per_param(total_params)
-
-    @property
-    def source_label(self) -> str:
-        if self.source_kind == "exact":
-            return f"HF {self.source_repo}"
-        return f"HF family proxy {self.source_repo}"
 
     @property
     def storage_summary(self) -> str:

@@ -255,15 +255,6 @@ function baseOption(theme, tooltipFormatter, trigger) {
   };
 }
 
-function axisRow(p, theme, yStr) {
-  const oom = yStr === 'OOM';
-  return `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:7px;padding:2px 0;font-family:${theme.fontFamily};font-size:11px;">` +
-    `<span style="display:inline-block;width:10px;height:2.5px;border-radius:2px;background:${p.color};flex-shrink:0;"></span>` +
-    `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px;color:${theme.text};">${escapeTooltipHtml(p.seriesName)}</span>` +
-    `<span style="font-weight:600;margin-left:4px;color:${oom ? 'var(--red)' : theme.text};">${yStr}</span>` +
-    `</div>`;
-}
-
 function axisHeader(theme, label, value) {
   return `<div style="font-size:9px;color:${theme.tc};text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;padding-bottom:5px;border-bottom:1px solid ${theme.border};">${label}: <b style="color:${theme.text};">${value}</b></div>`;
 }
@@ -1683,6 +1674,7 @@ function postPartial(url, body) {
 
 function normalizedPickerGpuCount(trigger) {
   let count = Number(window.selectedGpuCount ?? 8) || 8;
+  if (trigger?.dataset?.systemGpus) count *= Number(trigger.dataset.systemGpus);
   const minCount = Number(trigger?.dataset?.minCount ?? 1) || 1;
   const multiple = Number(trigger?.dataset?.countMultiple ?? 1) || 1;
   count = Math.max(count, minCount);
@@ -1852,12 +1844,13 @@ function deleteStoredScenarios(button) {
 
 /* Vendor and quantity are remembered while the user adds pools. */
 window.selectedGpuCount = 8;
-const gpuPickerCounts = { Apple: 1 };
+const gpuPickerCounts = { Apple: 1, Tinygrad: 1 };
 let gpuPickerVendor = 'NVIDIA';
 function syncGpuCountSelector(root) {
   if (!root?.querySelector('[data-gpu-picker]')) return;
   const count = gpuPickerCounts[gpuPickerVendor] ?? 8;
   window.selectedGpuCount = count;
+  root.querySelector('[data-gpu-quantity-label]').textContent = gpuPickerVendor === 'Tinygrad' ? 'Systems' : 'Quantity';
   root.querySelectorAll('[data-gcnt]').forEach(button => {
     const selected = Number(button.dataset.gcnt) === count;
     button.classList.toggle('selected', selected);
@@ -1865,7 +1858,8 @@ function syncGpuCountSelector(root) {
   });
   root.querySelectorAll('[data-gpu-key]').forEach(button => {
     const actual = normalizedPickerGpuCount(button);
-    button.title = `Add ${actual} × ${button.dataset.gpuName}. ${button.dataset.hardwareDetail}`;
+    const units = button.dataset.systemGpus ? `${count} systems (${actual} GPUs)` : `${actual} GPUs`;
+    button.title = `Add ${units} · ${button.dataset.gpuName}. ${button.dataset.hardwareDetail}`;
   });
 }
 function filterGpuPicker(root, allowSwitch = false) {
@@ -1884,6 +1878,14 @@ function filterGpuPicker(root, allowSwitch = false) {
       family.hidden = visible === 0;
       total += visible;
     });
+    const custom = panel.querySelector('[data-tinybox-configurator]');
+    if (custom) {
+      const configs = JSON.parse(custom.dataset.tinyboxConfigs);
+      const match = configs.some(config => words.every(word =>
+        `Tinygrad ${config.name} ${config.gpu} ${config.details}`.toLocaleLowerCase().includes(word)));
+      custom.hidden = !match;
+      if (match) total++;
+    }
     matches.set(panel.dataset.gpuVendorPanel, total);
   });
   if (allowSwitch && !matches.get(gpuPickerVendor)) {
@@ -1904,6 +1906,7 @@ function filterGpuPicker(root, allowSwitch = false) {
 }
 function initGpuPicker(root) {
   if (!root.querySelector('[data-gpu-picker]')) return;
+  initTinyboxPicker(root);
   filterGpuPicker(root);
   root.querySelector('[data-hardware-search]').addEventListener('input', () => filterGpuPicker(root, true));
   root.addEventListener('click', event => {
@@ -1932,6 +1935,48 @@ function initGpuPicker(root) {
       tabs[index].focus();
     }
   });
+}
+
+function initTinyboxPicker(root) {
+  const form = root.querySelector('[data-tinybox-configurator]');
+  if (!form) return;
+  const configs = JSON.parse(form.dataset.tinyboxConfigs);
+  const controls = [...form.querySelectorAll('[data-tinybox-field]')];
+  const field = name => controls.find(control => control.dataset.tinyboxField === name);
+  const update = changed => {
+    const platform = field('platform').value;
+    if (!['32', platform === 'G4' ? '128' : '192'].includes(field('memory').value)) field('memory').value = '32';
+    if (changed === 'platform' && platform === 'G4' && field('storage').value === 'RAID4X4') field('storage').value = 'BOOT';
+    if (changed === 'power' && field('power').value === '1700' && ['6X9070XT', '14XR9700'].includes(field('gpu').value)) field('gpu').value = 'NONE';
+    const selection = Object.fromEntries(controls.map(control => [control.dataset.tinyboxField, control.value]));
+    controls.forEach(control => {
+      const name = control.dataset.tinyboxField;
+      [...control.options].forEach(option => {
+        option.disabled = !['platform', 'power'].includes(name) && !configs.some(config =>
+          config[name] === option.value && controls.every(other => {
+            const otherName = other.dataset.tinyboxField;
+            return otherName === name || config[otherName] === selection[otherName];
+          }));
+      });
+    });
+    const config = configs.find(config => controls.every(control =>
+      config[control.dataset.tinyboxField] === control.value));
+    const button = form.querySelector('[data-tinybox-add]');
+    button.disabled = !config?.count;
+    if (config) {
+      const ram = config.count * (config.gpu.includes('9070XT') ? 16 : 32);
+      form.querySelector('[data-tinybox-summary]').textContent = `$${config.price.toLocaleString('en-US')} / system · ${config.count} GPUs · ${ram} GB GPU RAM · ${config.count * 640} GB/s aggregate. ${config.count ? '' : 'Select GPUs to add this system.'}`;
+      Object.assign(button.dataset, {
+        gpuKey: config.key, gpuName: config.name, systemGpus: String(config.count),
+        minCount: String(config.count), countMultiple: String(config.count),
+        hardwareDetail: config.details,
+      });
+      button.textContent = config.count ? 'Add configured system' : 'No GPUs selected';
+    }
+    syncGpuCountSelector(root);
+  };
+  form.addEventListener('change', event => update(event.target.dataset.tinyboxField));
+  update();
 }
 
 /* Model picker: rows carry server-computed fit/quality flags (data-pass-*).

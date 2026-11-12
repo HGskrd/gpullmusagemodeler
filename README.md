@@ -74,6 +74,19 @@ To export hardware/model combinations for a web-search agent, see the
 JSONL tasks with calculator-screened configurations, source context, deterministic
 sharding, and resumable completion IDs. A bounded exploratory queue samples rejected pairs.
 
+Kimi K3.1 Pro is a separate catalog entry from K3. The [official release config and card](https://huggingface.co/moonshotai/Kimi-K3.1-Pro/tree/6d0a0202956796543364d666ab19c6ad1a494ee1)
+retain 69 KDA layers and replace the 24 dense MLA layers with gated DSA
+(32 × 128 index heads, top-k 2,048). The native MXFP4 checkpoint occupies exactly
+1,561,217,377,280 bytes across 96 shards. Main KV still grows with the full context;
+decode reads selected latents plus a full-context index scan. The
+[vLLM release description](https://vllm.ai/blog/2026-11-04-kimi-k31-pro)
+supplies the 132-byte FP8 index key and 576-element MLA cache layout. Index keys
+stay FP8 independently of the main cache choice. Optional MXFP4 index keys, DCP,
+fused-kernel gains, cache-page padding and vision latency are not simulated.
+The separate DSpark preview uses a GSM8K-specific acceptance fit; transfer to
+other workloads needs calibration. Quality and token efficiency are uncalibrated
+placeholders. Sources captured 2026-11-04; estimates are not runtime benchmarks.
+
 ## Requirements
 
 - Python 3.10+
@@ -235,6 +248,8 @@ curl --fail-with-body http://localhost:5014/api/v1/calculate \
 | `PLANNER_STATE_TTL_SECONDS` | Idle lifetime for an in-memory planner scope; defaults to `86400` |
 | `PLANNER_STATE_MAX_SCOPES` | Maximum active in-memory browser scopes; defaults to `5000` |
 | `PLANNER_MAX_TABS_PER_VISITOR` | Maximum active tab scopes accepted per visitor; defaults to `64` |
+| `PLANNER_CHART_CACHE_MAX_SCOPES` | Maximum browser scopes with cached chart JSON; defaults to `5000` |
+| `PLANNER_SWAP_CACHE_MAX_ENTRIES` | Maximum cached model-swap recommendation results; defaults to `256` |
 | `PLANNER_MAX_IMPORT_BYTES` | Maximum scenario/use-case JSON import size; defaults to `1048576` |
 | `PLANNER_MAX_REQUEST_BYTES` | Maximum total HTTP request size; defaults to `2097152` |
 | `PLANNER_RATE_LIMIT_PER_MINUTE` | Per-IP mutation-request limit; defaults to `600` |
@@ -344,7 +359,7 @@ mutators. Clearing it means moving those calls up into `planner_service.py`.
 Run the full regression suite and source compilation checks before changing planner math or catalog data:
 
 ```bash
-python -m compileall -q app.py calc.py data engine presentation web state.py tracking.py
+python -m compileall -q app.py benchmark_feasibility.py benchmark_research.py calc.py cloud_policy.py data deployment.py engine placement.py planner_service.py presentation scenarios.py state.py tracking.py use_case_evidence.py web
 python -m pytest -q
 ```
 

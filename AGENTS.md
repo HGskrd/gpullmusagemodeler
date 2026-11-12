@@ -12,7 +12,7 @@
 - Use the project virtual environment when present; install with `python -m pip install -r requirements.txt` only when dependencies are missing.
 - Run locally with `python app.py`; the documented default is port `5014`.
 - For executable code or catalog changes, run the following once against the final edits before handoff (independent read-only checks may run concurrently):
-  - `python -m compileall -q app.py calc.py data engine presentation web state.py tracking.py`
+  - `python -m compileall -q app.py benchmark_feasibility.py benchmark_research.py calc.py cloud_policy.py data deployment.py engine placement.py planner_service.py presentation scenarios.py state.py tracking.py use_case_evidence.py web`
   - `python -m ruff check . && python -m ruff format --check . && python -m mypy`
   - `python -m pytest -q`
 - `compileall` exits 0 for paths it cannot list, so a stale path in that
