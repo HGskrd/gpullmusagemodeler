@@ -47,6 +47,7 @@ from data import (
     validate_settings,
 )
 from data.hardware import MAX_GPU_POOLS
+from data.task_primitives import normalize_task_count, normalize_task_primitive
 from data.use_case_modalities import normalize_workload_kind
 
 _uid_counter = 0
@@ -188,9 +189,9 @@ def pool_gpu(gpu_type: str, gpus_per_machine: int = 0, network_gbps: float = 0.0
     base = GPUS[gpu_type]
     if not math.isfinite(network_gbps):
         raise ValueError("Network speed must be finite.")
-    if gpus_per_machine <= 0 and network_gbps <= 0:
-        return base
     size = int(gpus_per_machine) if gpus_per_machine > 0 else base.node_size
+    if size == base.node_size and network_gbps <= 0:
+        return base
     # The NIC shares the host link, so scale-out cannot beat peer bandwidth.
     bandwidth = (
         min(network_gbps * 1e9 / 8, max(base.scale_up_collective_bw, base.inter_node_bw))
@@ -217,13 +218,18 @@ class GpuPool:
     count: int
     cost_per_gpu_hour: float = 0.0
     country: str = "FR"
-    # Machine shape. 0 keeps the catalog value (GPU.node_size / GPU.inter_node_bw).
+    # Zero uses the pool's automatic machine size or the catalog network speed.
     gpus_per_machine: int = 0
     network_gbps_per_gpu: float = 0.0
 
     @property
+    def default_machine_size(self) -> int:
+        return min(GPUS[self.gpu_type].node_size, max(1, self.count))
+
+    @property
     def gpu(self) -> GPU:
-        return pool_gpu(self.gpu_type, self.gpus_per_machine, self.network_gbps_per_gpu)
+        size = self.gpus_per_machine if self.gpus_per_machine > 0 else self.default_machine_size
+        return pool_gpu(self.gpu_type, size, self.network_gbps_per_gpu)
 
     @property
     def machine_size(self) -> int:
@@ -260,6 +266,9 @@ class Project:
     kind_key: str = "custom"
     # Routing family; native stages use their own capacity model and units.
     workload_kind: str = "llm"
+    task_primitive: str = "choice"
+    questions_per_request: int = 1
+    options_per_question: int = 4
     # Fixed volume: ignores the config's company size and tech-savviness multiplier.
     scale_locked: bool = False
     # Batch work runs whenever GPUs are free (it fills the troughs left by interactive
@@ -298,6 +307,9 @@ class Project:
         if not isinstance(self.requires, frozenset):
             self.requires = frozenset(c for c in (self.requires or ()) if c in ALLOWED_CAPABILITIES)
         self.workload_kind = normalize_workload_kind(self.workload_kind)
+        self.task_primitive = normalize_task_primitive(self.task_primitive)
+        self.questions_per_request = normalize_task_count(self.questions_per_request)
+        self.options_per_question = max(2, normalize_task_count(self.options_per_question, 4))
         self.difficulty = min(max(float(self.difficulty), 0.0), 1.0)
         self.scale_kind = _normalize_scale_kind({"scale_kind": getattr(self, "scale_kind", {})})
         if getattr(self, "scale_value", None) is None:
@@ -803,6 +815,9 @@ def _normalize_use_case_def(raw: dict[str, Any], fallback_key: str | None = None
         "scale_kind": scale_kind,
         "wtp_per_m": _bounded_def_value("wtp_per_m", _payload_float(raw, "wtp_per_m", 1.0)),
         "workload_kind": normalize_workload_kind(raw.get("workload_kind", "llm")),
+        "task_primitive": normalize_task_primitive(raw.get("task_primitive")),
+        "questions_per_request": normalize_task_count(raw.get("questions_per_request")),
+        "options_per_question": max(2, normalize_task_count(raw.get("options_per_question"), 4)),
         "requires": _coerce_requires(raw.get("requires", ())),
         "min_success_rate": _bounded_def_value(
             "min_success_rate", _payload_float(raw, "min_success_rate", 0.85)
@@ -927,6 +942,9 @@ def _apply_preset_definition(proj: Project, preset: dict, preserve_scale: bool =
     proj.wtp_per_m = float(preset["wtp_per_m"])
     proj.scale_kind = copy.deepcopy(scale_kind)
     proj.workload_kind = normalize_workload_kind(preset.get("workload_kind"))
+    proj.task_primitive = normalize_task_primitive(preset.get("task_primitive"))
+    proj.questions_per_request = normalize_task_count(preset.get("questions_per_request"))
+    proj.options_per_question = max(2, normalize_task_count(preset.get("options_per_question"), 4))
     # When the demand arrives is the row's own choice (the "When" column). The
     # definition only seeds it when the row takes this kind, so re-syncing
     # definitions on every request does not undo the user's pick.
@@ -984,6 +1002,9 @@ def _add_project_from_preset(state: PlannerState, preset_key: str) -> Optional[P
         scale_kind=copy.deepcopy(scale_kind),
         kind_key=str(preset["key"]),
         workload_kind=normalize_workload_kind(preset.get("workload_kind")),
+        task_primitive=normalize_task_primitive(preset.get("task_primitive")),
+        questions_per_request=normalize_task_count(preset.get("questions_per_request")),
+        options_per_question=max(2, normalize_task_count(preset.get("options_per_question"), 4)),
         batch_eligible=bool(preset.get("batch_eligible", False)),
         requires=frozenset(preset.get("requires", ())),
         min_success_rate=float(preset.get("min_success_rate", 0.85)),
@@ -1325,6 +1346,12 @@ def _edit_use_case_def(
         for proj in state.projects:
             if getattr(proj, "kind_key", "custom") == key:
                 proj.batch_eligible = bool(value)
+    elif field_name == "task_primitive":
+        item[field_name] = normalize_task_primitive(value)
+    elif field_name in {"questions_per_request", "options_per_question"}:
+        item[field_name] = max(
+            2 if field_name == "options_per_question" else 1, normalize_task_count(value)
+        )
     elif field_name == "workload_kind":
         item["workload_kind"] = normalize_workload_kind(value)
     elif field_name == "quality_domain":

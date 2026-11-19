@@ -175,6 +175,9 @@ def _project_definition_payload(proj: Project) -> dict:
         "scale_kind": copy.deepcopy(getattr(proj, "scale_kind", DEFAULT_SCALE_KIND)),
         "wtp_per_m": float(proj.wtp_per_m),
         "workload_kind": proj.workload_kind,
+        "task_primitive": proj.task_primitive,
+        "questions_per_request": proj.questions_per_request,
+        "options_per_question": proj.options_per_question,
         "requires": sorted(proj.requires),
         "min_success_rate": float(proj.min_success_rate),
         "quality_floor": float(getattr(proj, "quality_floor", 0.0)),
@@ -297,6 +300,13 @@ def _project_from_payload(state: PlannerState, item: dict) -> Project:
             definition.get("day_shape", item.get("day_shape", state.projection_day_shape))
         ),
         workload_kind=definition.get("workload_kind", base.get("workload_kind", "llm")),
+        task_primitive=definition.get("task_primitive", base.get("task_primitive", "choice")),
+        questions_per_request=definition.get(
+            "questions_per_request", base.get("questions_per_request", 1)
+        ),
+        options_per_question=definition.get(
+            "options_per_question", base.get("options_per_question", 4)
+        ),
         requires=requires,
         min_success_rate=_bounded_project_value(
             "min_success_rate",

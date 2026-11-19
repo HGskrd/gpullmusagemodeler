@@ -140,6 +140,9 @@ def use_case_definition_set():
         "scale_formula",
         "quality_domain",
         "workload_kind",
+        "task_primitive",
+        "questions_per_request",
+        "options_per_question",
         "in_pre",
         "out_pre",
     }:

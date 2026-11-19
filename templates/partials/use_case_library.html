@@ -50,6 +50,20 @@
         {% endfor %}
       </select>
     </div>
+    {% if preset.get('workload_kind') == 'decision' %}
+    <div class="def-row">
+      <span class="T">Task</span>
+      <select name="value" aria-label="Task for {{ preset.name }}" hx-post="/use-cases/definition/set" hx-target="#useCaseLibrary" hx-trigger="change" hx-vals='{"key":"{{ key }}","field":"task_primitive"}'>
+      {% for task, label in [('choice', 'Choose'), ('boolean', 'Decide'), ('score', 'Score'), ('span_extraction', 'Extract spans')] %}
+        <option value="{{ task }}" {{ 'selected' if preset.get('task_primitive', 'choice') == task }}>{{ label }}</option>
+      {% endfor %}
+      </select>
+    </div>
+    {% for field, label, default, minimum in [('questions_per_request', 'Questions / fields per document', 1, 1), ('options_per_question', 'Options / score levels', 4, 2)] %}
+    <div class="def-row"><span class="T">{{ label }}</span><input type="number" min="{{ minimum }}" max="128" name="value" value="{{ preset.get(field, default) }}" aria-label="{{ label }} for {{ preset.name }}" hx-post="/use-cases/definition/set" hx-target="#useCaseLibrary" hx-trigger="change" hx-vals='{"key":"{{ key }}","field":"{{ field }}"}'></div>
+    {% endfor %}
+    <p class="note">Tokens/unit includes the document and formatted schema. Decide uses two outcomes. Models must explicitly support the selected task. Extract spans returns source text with offsets and requires a compatible model such as Decider Flash v1.3 + Locate. Separate task workloads do not share processing credit. Accuracy is uncalibrated.</p>
+    {% endif %}
     {% if preset.get('workload_kind', 'llm') != 'llm' %}
     <p class="note">Capacity only; task accuracy and retries are uncalibrated. LLM difficulty, quality SLO, output shape, and prefix reuse do not apply. For ASR, one accounting unit is one audio second; otherwise it is one input token. WTP is per million accounting units.</p>
     {% endif %}

@@ -48,13 +48,20 @@ class TinyboxConfig:
     gpu: str
     count: int
     price: int
+    source: str = TINYBOX_SOURCE
+    reviewed_at: str = TINYBOX_REVIEWED_AT
+    availability: str = "Retail / hardware vendor"
 
     @property
     def base_gpu(self) -> str:
+        if self.gpu == "4XMI300X":
+            return "MI300X"
         return "RadeonRX9070XT" if "9070XT" in self.gpu else "RadeonAIProR9700"
 
     @property
     def board_watts(self) -> int:
+        if self.gpu == "4XMI300X":
+            return 500
         if self.count == 14:
             return 210
         if self.gpu == "6XR9700":
@@ -84,6 +91,21 @@ class TinyboxConfig:
             "tinygrad / ROCm model and precision support requires validation. "
             "TCO energy uses a PSU-capacity-per-GPU planning proxy, not measured wall power; "
             "task energy uses the GPU power limit and excludes host overhead."
+            + (
+                " Refurbished MI300X on custom carrier boards; no XGMI links. "
+                "PCIe 5 x16 per GPU; 192 GB HBM3 and 5.3 TB/s per GPU "
+                "(768 GB and 21.2 TB/s aggregate, not unified memory). "
+                "Seller advertises 10.44 PFLOPS FP8 aggregate; planner conservatively "
+                "scales the standard 750 W MI300X compute roofline by 500/750. "
+                "This is not measured throughput at 500 W. "
+                "192 GB DDR5 host RAM; 1 TB boot SSD + 4× 1 TB RAID 0. "
+                "Batch 2 preorder; estimated Q1–Q2 2027 shipping, not guaranteed. "
+                "AMD kernel driver and tinygrad tested by seller; unofficial AMD "
+                "configuration with no AMD warranty/support. Tier 1 export destinations only. "
+                f"Reviewed {self.reviewed_at}. {self.source}"
+                if self.gpu == "4XMI300X"
+                else ""
+            )
         )
 
 
@@ -119,8 +141,29 @@ def _configurations() -> tuple[TinyboxConfig, ...]:
 
 
 TINYBOX_CONFIGS = _configurations()
-TINYBOX_GPU_CONFIGS = {config.key: config for config in TINYBOX_CONFIGS if config.count}
-TINYBOX_PRESET_KEYS = tuple(key for key, _ in _PRESETS.values())
+# Separate fixed listing: it is not an option in the Radeon configurator.
+TINYBOX_FIXED_CONFIGS = (
+    TinyboxConfig(
+        "TINYBOX_RED_MI300X",
+        "tinybox red 4× MI300X",
+        "3400",
+        "G5",
+        "192",
+        "RAID4",
+        "4XMI300X",
+        4,
+        89_000,
+        source="https://tinycorp.myshopify.com/products/tinybox-red-4xmi300x",
+        reviewed_at="2026-11-19",
+        availability="Batch 2 preorder · estimated Q1–Q2 2027",
+    ),
+)
+TINYBOX_GPU_CONFIGS = {
+    config.key: config for config in (*TINYBOX_CONFIGS, *TINYBOX_FIXED_CONFIGS) if config.count
+}
+TINYBOX_PRESET_KEYS = tuple(key for key, _ in _PRESETS.values()) + tuple(
+    config.key for config in TINYBOX_FIXED_CONFIGS
+)
 
 
 def tinybox_picker_configs() -> list[dict]:

@@ -1,5 +1,7 @@
 """Pinned single-forward decision checkpoints; no autoregressive generation."""
 
+from dataclasses import replace
+
 from .model_class import (
     DECISION_PROFILES,
     MODEL_QUANTIZATION_PROFILES,
@@ -142,6 +144,7 @@ DECISION_PROFILES["pplx-decider-v1.1-27b"] = DecisionProfile(
     "https://huggingface.co/perplexity-ai/pplx-decider-v1.1-27b/blob/14c9d90137962d300f3de95633f7b6535e80c5ce/README.md",
     "Noncausal full-attention layers, native linear layers, calibrated readout. Config positional ceiling 262,144; production long-context performance uncalibrated. Custom inference and checkpoint access may be required.",
     causal_attention=False,
+    forward_per_question=True,
 )
 MODEL_QUANTIZATION_PROFILES.update(
     [
@@ -695,6 +698,7 @@ DECISION_PROFILES["pplx-decider-flash-v1.2"] = DecisionProfile(
     "https://huggingface.co/perplexity-ai/pplx-decider-flash-v1.2/blob/6d771ad7b5ecff5e93b8fc7b90d4c5ccc341954d/README.md",
     "Qwen3.5-4B backbone with joint per-question marker readout; noncausal full attention and native causal linear layers. Released max_length defaults to 262,144 positions, including images and question/option templates; training covered about 32k. Longer inputs require task validation. Recursive multi-question splitting, image encoder latency, compilation, CUDA graphs and optional FP8 fast-path gains are not simulated. Text-only closed-form capacity estimate, not a benchmark; quality uncalibrated and no generation economics.",
     causal_attention=False,
+    task_primitives=("choice", "boolean", "score"),
 )
 MODEL_QUANTIZATION_PROFILES.update(
     [
@@ -712,6 +716,57 @@ MODEL_QUANTIZATION_PROFILES.update(
             quant_algo="Unquantized",
             kv_cache_format="BF16",
             captured_at="2026-10-17",
+        )
+    ]
+)
+
+
+# Metadata and tensor headers captured 2026-11-18; no weight downloads.
+_FLASH13_REV = "d06fb3f2d97e0a52325a0d463c450cf0338f44fe"
+_FLASH13_NOTE = (
+    "Qwen3.5-4B backbone; default separate decision sequences, joint Locate questions. "
+    "Text-only, 32,768 formatted positions; no fast=True Locate support. "
+    "Conservatively keeps the FP32 Locate adapter/head resident for all tasks. "
+    "BF16 backbone/adapter compute and dense span-score scratch are planning proxies; "
+    "CPU span decoding, tokenization and runtime calibration are not simulated. "
+    "Mixed primitive workloads use separate passes; accuracy uncalibrated."
+)
+DECISION_MODELS["pplx-decider-flash-v1.3"] = replace(
+    DECISION_MODELS["pplx-decider-flash-v1.2"],
+    key="pplx-decider-flash-v1.3",
+    name="Perplexity Decider Flash v1.3 + Locate (4B)",
+    total_params=4671427237,
+    active_params=4671427237,
+    max_context_tokens=32768,
+    attention_label="Noncausal full + causal linear · decisions / Locate spans",
+    architecture_note=_FLASH13_NOTE,
+    native_precision_label="BF16 backbone + FP32 Locate adapter/head",
+)
+DECISION_PROFILES["pplx-decider-flash-v1.3"] = DecisionProfile(
+    32768,
+    f"https://huggingface.co/perplexity-ai/pplx-decider-flash-v1.3/blob/{_FLASH13_REV}/README.md",
+    _FLASH13_NOTE,
+    causal_attention=False,
+    forward_per_question=True,
+    max_options=255,
+    task_primitives=("choice", "boolean", "score", "span_extraction"),
+)
+MODEL_QUANTIZATION_PROFILES.update(
+    [
+        _artifact_profile(
+            model_key="pplx-decider-flash-v1.3",
+            precision_key="bf16",
+            label="Native BF16 + resident FP32 Locate",
+            source_repo="perplexity-ai/pplx-decider-flash-v1.3",
+            source_revision=_FLASH13_REV,
+            total_weight_bytes=9605872276,
+            compute_precision_shares={"bf16": 1.0},
+            quantized=(),
+            retained=("BF16 backbone/readout; FP32 Locate adapter and span head.",),
+            notes="Backbone index 9,078,531,072 bytes; tensor headers: readout 1,305,600, adapter 519,448,576, span head 6,587,028 bytes. Index total_parameters includes additional components; physical dtype/byte accounting used. Entire adapter resident conservatively. BF16 compute is a proxy.",
+            quant_algo="Unquantized",
+            kv_cache_format="BF16",
+            captured_at="2026-11-18",
         )
     ]
 )

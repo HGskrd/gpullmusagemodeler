@@ -60,6 +60,9 @@ PROJECT_FIELDS = {
     "min_success_rate": number(0.5, 1),
     "quality_floor": number(0, 1),
     "workload_kind": choices(("llm", "asr", "embedding", "decision")),
+    "task_primitive": choices(("choice", "boolean", "score", "span_extraction")),
+    "questions_per_request": number(1, 128),
+    "options_per_question": number(2, 128),
     "quality_domain": choices(QUALITY_DOMAIN_LABELS),
     "quality_weights": {
         "type": "object",
