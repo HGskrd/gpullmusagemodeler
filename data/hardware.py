@@ -1585,7 +1585,7 @@ for _key, _config in TINYBOX_GPU_CONFIGS.items():
         GPUCard(
             _gpu.name,
             "Tinygrad",
-            "RDNA 4 · " + _config.platform,
+            ("CDNA 3" if _config.base_gpu == "MI300X" else "RDNA 4") + " · " + _config.platform,
             f"{_gpu.mem_gb:g} GB/GPU · {_gpu.mem_gb * _config.count:g} GB total",
             "Complete tinybox system",
             (GPUPlannerOption("Add system", _key),),

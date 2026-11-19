@@ -164,7 +164,16 @@ def placement_view(state: PlannerState, info: dict) -> Optional[dict]:
 
 
 NETWORK_GBPS = (100.0, 200.0, 400.0, 800.0)
-SHAPE_SIZES = (1, 2, 4, 8, 16)
+SHAPE_SIZES = (1, 2, 4, 6, 8, 16)
+
+
+def _machine_shape_label(count: int, size: int) -> str:
+    full, remainder = divmod(count, size)
+    if not full:
+        return f"1 × {remainder} GPU ({size} slots)"
+    if remainder:
+        return f"{full} × {size} + 1 × {remainder} GPU"
+    return f"{full} × {size} GPU"
 
 
 def _best_on(state: PlannerState, am: ModelAssignment, g: GPU) -> Optional[dict]:
@@ -179,12 +188,13 @@ def machine_controls(state: PlannerState, gp: GpuPool) -> dict:
     """Cheap control metadata; shape comparisons are calculated only on demand."""
     base = pool_gpu(gp.gpu_type)
     cur = gp.gpu
-    sizes = sorted({s for s in SHAPE_SIZES if s <= gp.count} | {base.node_size, cur.node_size})
-    sizes = [s for s in sizes if s <= max(gp.count, cur.node_size)]
+    default_size = gp.default_machine_size
+    sizes = sorted({s for s in SHAPE_SIZES if s <= gp.count} | {default_size, cur.node_size})
     return {
         "sizes": sizes,
+        "shape_labels": {size: _machine_shape_label(gp.count, size) for size in sizes},
         "networks": sorted(set(NETWORK_GBPS) | {cur.inter_node_bw * 8 / 1e9}),
-        "default_size": base.node_size,
+        "default_size": default_size,
         "default_net": base.inter_node_bw * 8 / 1e9,
         "cur_size": cur.node_size,
         "cur_net": cur.inter_node_bw * 8 / 1e9,
@@ -222,6 +232,7 @@ def machine_options(state: PlannerState, gp: GpuPool) -> dict:
     best = None
     current_cell = None
     for size in sizes:
+        machines = max(1, math.ceil(gp.count / size))
         cells = []
         for net in networks:
             g = pool_gpu(gp.gpu_type, size, net)
@@ -231,14 +242,14 @@ def machine_options(state: PlannerState, gp: GpuPool) -> dict:
             cell = {
                 "size": size,
                 "net": net,
-                "machines": max(1, math.ceil(gp.count / size)),
+                "machines": machines,
                 "tps": tps,
                 "per_user": min((r["per_user"] for r in ok), default=0.0),
                 "span": max((r["span"] for r in ok), default=1),
                 "layouts": " + ".join(r["label"] for r in ok),
                 "host_max_gb": max((r["host_max_gb"] for r in ok), default=0.0),
                 "is_current": size == cur.node_size and abs(net * 1e9 / 8 - cur.inter_node_bw) < 1,
-                "is_default": size == base.node_size
+                "is_default": size == controls["default_size"]
                 and abs(net * 1e9 / 8 - base.inter_node_bw) < 1,
             }
             if cell["is_current"]:
@@ -251,12 +262,12 @@ def machine_options(state: PlannerState, gp: GpuPool) -> dict:
                 cell["own_is_pick"] = cell["own_layouts"] == cell["layouts"]
                 current_cell = cell
             cells.append(cell)
-        grid.append({"size": size, "machines": max(1, math.ceil(gp.count / size)), "cells": cells})
+        grid.append({"size": size, "cells": cells})
     cells_all = [c for row in grid for c in row["cells"] if c["tps"] > 0]
     if cells_all:
         top = max(c["tps"] for c in cells_all)
         # Within 0.5% is a tie: keep the current shape, then the fewest network
-        # crossings, then the catalog default, then fewer, larger machines.
+        # crossings, then the pool's default, then fewer, larger machines.
         near = [c for c in cells_all if c["tps"] >= top * 0.995]
         best = min(
             near,
@@ -275,15 +286,9 @@ def machine_options(state: PlannerState, gp: GpuPool) -> dict:
             base_tps = current_cell.get("own_tps", 0.0) if current_cell else 0.0
             cell["delta"] = (cell["tps"] / base_tps - 1) if base_tps else 0.0
     return {
-        "sizes": sizes,
-        "networks": networks,
+        **controls,
         "grid": grid,
         "best": best,
         "current": current_cell,
-        "default_size": base.node_size,
-        "default_net": base.inter_node_bw * 8 / 1e9,
-        "cur_size": cur.node_size,
-        "cur_net": cur.inter_node_bw * 8 / 1e9,
         "n_llms": len(llms),
-        "has_models": bool(llms),
     }

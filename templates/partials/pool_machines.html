@@ -8,12 +8,12 @@
   <div class="pm-ctl">
     <span class="T tip" title="How the pool's GPUs are split into machines. GPUs inside one machine talk over {{ 'PCIe' if cur_g.scale_up_p2p_bw_bidir <= 128e9 else 'NVLink' }} ({{ (cur_g.scale_up_collective_bw / 1e9)|round|int }} GB/s per GPU); between machines over the network. The planner re-picks each model's layout for the shape.">Machines</span>
     <label class="pick">
-      <span class="lbl">{{ gp.machine_count }} × {{ cur_g.node_size }} GPU</span><span class="car">▾</span>
+      <span class="lbl">{{ mo.shape_labels[mo.cur_size] }}</span><span class="car">▾</span>
       <select name="gpus_per_machine" aria-label="GPUs per machine for {{ cur_g.name }}"
               hx-post="/gpu/machines" hx-target="#main-content" hx-trigger="change" hx-include="this"
               hx-vals='{"panel":"{{ panel }}","uid":"{{ gp.uid }}","network_gbps":"{{ gp.network_gbps_per_gpu }}"}'>
         {% for size in mo.sizes %}
-        <option value="{{ 0 if size == mo.default_size else size }}" {{ 'selected' if size == cur_g.node_size }}>{{ (gp.count / size)|round(0, 'ceil')|int }} × {{ size }} GPU{{ ' (catalog default)' if size == mo.default_size }}</option>
+        <option value="{{ 0 if size == mo.default_size else size }}" {{ 'selected' if size == mo.cur_size }}>{{ mo.shape_labels[size] }}{{ ' (default)' if size == mo.default_size }}</option>
         {% endfor %}
       </select>
     </label>
@@ -52,12 +52,12 @@
       <tbody>
       {% for row in mo.grid %}
         <tr>
-          <th>{{ row.machines }} × {{ row.size }}{% if row.size == mo.default_size %}<span class="T"> default</span>{% endif %}</th>
+          <th>{{ mo.shape_labels[row.size] }}{% if row.size == mo.default_size %}<span class="T"> default</span>{% endif %}</th>
           {% for c in row.cells %}
           <td class="{{ 'cur' if c.is_current }} {{ 'best' if c.is_best }} {{ 'neg' if c.delta < -0.005 }} {{ 'pos' if c.delta > 0.005 }}"
               hx-post="/gpu/machines" hx-target="#main-content" hx-trigger="click"
               hx-vals='{"panel":"{{ panel }}","uid":"{{ gp.uid }}","gpus_per_machine":"{{ 0 if c.size == mo.default_size else c.size }}","network_gbps":"{{ 0 if c.net == mo.default_net else c.net }}"}'
-              title="{{ c.machines }} machines × {{ c.size }} GPU at {{ c.net|round|int }} Gb/s/GPU · layout {{ c.layouts }} · copy spans {{ c.span }} machine{{ 's' if c.span != 1 }} · {{ c.per_user|round|int }} tok/s/user{% if c.host_max_gb %} · host RAM {{ c.host_max_gb|round|int }} GB on busiest machine{% endif %}">
+              title="{{ mo.shape_labels[c.size] }} at {{ c.net|round|int }} Gb/s/GPU · layout {{ c.layouts }} · copy spans {{ c.span }} machine{{ 's' if c.span != 1 }} · {{ c.per_user|round|int }} tok/s/user{% if c.host_max_gb %} · host RAM {{ c.host_max_gb|round|int }} GB on busiest machine{% endif %}">
             {% if c.is_current and not c.own_is_pick %}
             <span class="M">{{ c.own_tps|fmt_num }}</span> <span class="pm-d">now</span>
             <span class="pm-l">{{ c.own_layouts }} (your layout)</span>

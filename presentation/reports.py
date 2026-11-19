@@ -321,7 +321,12 @@ def _format_projection_report_for_state(state: PlannerState, label: str) -> str:
             if proj.workload_kind != "llm":
                 lines.append(
                     f"- {proj.name}: {proj.workload_kind.upper()} capacity only; "
-                    f"task accuracy/retries uncalibrated, no LLM quality gate; "
+                    + (
+                        f"task {proj.task_primitive}, {proj.questions_per_request} questions/document; "
+                        if proj.workload_kind == "decision"
+                        else ""
+                    )
+                    + f"task accuracy/retries uncalibrated, no LLM quality gate; "
                     f"{row['tokens_day']:,.0f} {row['workload_unit']}/day, "
                     f"WTP ${proj.wtp_per_m:.2f}/M {row['workload_unit']}; {cloud}; {fate}."
                 )

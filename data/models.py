@@ -42,6 +42,7 @@ MODEL_ORDER: tuple[str, ...] = (
     "pplx-decider-v1.1-27b",
     "pplx-decider-v1.2",
     "pplx-decider-flash-v1.2",
+    "pplx-decider-flash-v1.3",
     "clef",
     "clef-flash",
     "mapika-decider-2b",

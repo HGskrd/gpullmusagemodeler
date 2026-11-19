@@ -11,12 +11,12 @@
       <tbody>
       {% for row in mo.grid %}
         <tr>
-          <th>{{ row.machines }} × {{ row.size }}{% if row.size == mo.default_size %}<span class="T"> default</span>{% endif %}</th>
+          <th>{{ mo.shape_labels[row.size] }}{% if row.size == mo.default_size %}<span class="T"> default</span>{% endif %}</th>
           {% for c in row.cells %}
           <td class="{{ 'cur' if c.is_current }} {{ 'best' if c.is_best }} {{ 'neg' if c.delta < -0.005 }} {{ 'pos' if c.delta > 0.005 }}"
               hx-post="/gpu/machines" hx-target="#main-content" hx-trigger="click"
               hx-vals='{"panel":"{{ panel }}","uid":"{{ gp.uid }}","gpus_per_machine":"{{ 0 if c.size == mo.default_size else c.size }}","network_gbps":"{{ 0 if c.net == mo.default_net else c.net }}"}'
-              title="{{ c.machines }} machines × {{ c.size }} GPU at {{ c.net|round|int }} Gb/s/GPU · layout {{ c.layouts }} · copy spans {{ c.span }} machine{{ 's' if c.span != 1 }} · {{ c.per_user|round|int }} tok/s/user{% if c.host_max_gb %} · host RAM {{ c.host_max_gb|round|int }} GB on busiest machine{% endif %}">
+              title="{{ mo.shape_labels[c.size] }} at {{ c.net|round|int }} Gb/s/GPU · layout {{ c.layouts }} · copy spans {{ c.span }} machine{{ 's' if c.span != 1 }} · {{ c.per_user|round|int }} tok/s/user{% if c.host_max_gb %} · host RAM {{ c.host_max_gb|round|int }} GB on busiest machine{% endif %}">
             {% if c.is_current and not c.own_is_pick %}
             <span class="M">{{ c.own_tps|fmt_num }}</span> <span class="pm-d">now</span>
             <span class="pm-l">{{ c.own_layouts }} (your layout)</span>

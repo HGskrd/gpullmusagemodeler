@@ -5,8 +5,8 @@ from placement import retune_models
 from planner_service import add_model
 from presentation.econ import econ_payload
 from presentation.model_cards import get_model_info, tech_scorecard
-from presentation.placement_view import machine_options, placement_view
-from state import PlannerState, add_gpu, pool_gpu, set_gpu_machines, set_model_strat
+from presentation.placement_view import machine_controls, machine_options, placement_view
+from state import PlannerState, add_gpu, change_gpu_qty, pool_gpu, set_gpu_machines, set_model_strat
 
 
 def _deepseek_on_16_rtx_pro() -> PlannerState:
@@ -22,6 +22,43 @@ def test_pool_without_override_uses_catalog_gpu():
     s = _deepseek_on_16_rtx_pro()
     assert s.gpus[0].gpu is GPUS["RTXPRO6000_BSE"]
     assert s.gpus[0].machine_count == 2
+
+
+def test_underfilled_pool_uses_available_gpus_for_automatic_machine_size():
+    state = PlannerState()
+    add_gpu(state, "RTXPRO6000_BSE", 3)
+    pool = state.gpus[0]
+    controls = machine_controls(state, pool)
+    assert controls["sizes"] == [1, 2, 3]
+    assert controls["default_size"] == pool.machine_size == 3
+    assert controls["shape_labels"][3] == "1 × 3 GPU"
+    assert pool.gpus_per_machine == 0
+
+    change_gpu_qty(state, pool.uid, 5)
+    assert pool.gpu is GPUS["RTXPRO6000_BSE"]
+
+
+def test_shape_labels_show_populated_gpus_when_machines_are_partial():
+    state = PlannerState()
+    add_gpu(state, "RTXPRO6000_BW_WS", 6)
+    pool = state.gpus[0]
+    controls = machine_controls(state, pool)
+    assert controls["shape_labels"][controls["default_size"]] == "1 × 4 + 1 × 2 GPU"
+
+    set_gpu_machines(state, pool.uid, 8, 0.0)
+    controls = machine_controls(state, pool)
+    assert pool.machine_size == 8
+    assert controls["shape_labels"][8] == "1 × 6 GPU (8 slots)"
+
+
+def test_workstation_pool_offers_one_machine_for_six_or_eight_gpus():
+    for count in (6, 8):
+        state = PlannerState()
+        add_gpu(state, "RTXPRO6000_BW_WS", count)
+        pool = state.gpus[0]
+        assert count in machine_controls(state, pool)["sizes"]
+        set_gpu_machines(state, pool.uid, count, 0.0)
+        assert pool.machine_count == 1
 
 
 def test_override_sets_node_size_and_caps_network_at_peer_bandwidth():

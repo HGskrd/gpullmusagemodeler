@@ -212,8 +212,18 @@ Native estimates cover capacity, not task accuracy or retries. LLM difficulty/SL
 and prefix reuse do not apply. ASR accounting units are audio seconds (3600 per
 recorded hour); WTP is per million audio seconds. ASR batch work conservatively uses
 realtime stream capacity without faster-than-realtime credit. Embedding and decision
-units are formatted input tokens; decision requests assume one question with four
-options and no generated output. Historical `tokens_day` report fields retain these
+units are formatted input tokens. Decision workloads select Choose, Decide, Score,
+or Extract spans, with questions/fields per document and options/score levels. Legacy
+scenarios default to Choose with one question and four options. Decide uses two
+outcomes. Tokens/unit must include the document and formatted schema; document
+volume is the scale value. Supported tasks are explicit checkpoint capabilities;
+unsupported tasks receive no capacity or text-cloud fallback. Flash v1.2 supports
+Choose/Decide/Score (official model card checked 2026-11-18); Decider Flash v1.3 adds span extraction through Locate, with its FP32 adapter/head
+kept resident and a conservative dense span-score scratch estimate. This is an
+uncalibrated capacity proxy, not an extraction benchmark. Existing profiles
+control shared versus per-question forward passes. No generated output is charged.
+Mixed primitive requests are represented as separate workloads; shared compute
+across those workloads is not credited. Historical `tokens_day` report fields retain these
 accounting units for compatibility, with explicit native `workload_kind`,
 `workload_unit`, and `quality_status` on project results. Mixed-modality totals are
 accounting aggregates, not comparable task counts. Source links and scenario

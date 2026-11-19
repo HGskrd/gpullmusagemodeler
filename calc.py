@@ -3082,6 +3082,7 @@ def compute_decision(
     *,
     questions_per_request: int = 1,
     options_per_question: int = 4,
+    task_primitive: str = "choice",
 ) -> DecisionResult | None:
     """One forward pass over the complete formatted input; never a decode loop.
 
@@ -3095,6 +3096,8 @@ def compute_decision(
     profile = m.decision_profile
     if (
         profile is None
+        or task_primitive not in profile.task_primitives
+        or (task_primitive == "span_extraction" and questions_per_request > 128)
         or not 0 < seq_len <= profile.max_sequence_length
         or bs < 1
         or questions_per_request < 1
@@ -3114,7 +3117,9 @@ def compute_decision(
     scratch = (
         4 * seq_len * max(m.hidden_size, m.num_heads * m.head_dim) * 2
         + 2 * linear_attention_state_bytes(m, "bf16")
-        + 4 * questions_per_request * options_per_question
+        + 4
+        * questions_per_request
+        * (seq_len * 128 if task_primitive == "span_extraction" else options_per_question)
     )
     max_per_replica = max(0, int(mem.kv_budget / scratch))
     batch_per_replica = math.ceil(bs / dp)
@@ -3135,7 +3140,11 @@ def compute_decision(
         / (g.effective_bw * eff.bw_eff)
     )
     comm = communication_breakdown(m, tp, pp, batch_per_replica * seq_len, seq_len, g, eff)
-    forwards = questions_per_request if profile.forward_per_question else 1
+    forwards = (
+        questions_per_request
+        if profile.forward_per_question and task_primitive != "span_extraction"
+        else 1
+    )
     seconds = (forwards * (max(compute_s, weight_s) + comm.total) + output_s) * (
         1 + eff.overhead * 1.2 + fixed_paged_oh(seq_len, eff, 0.20)
     )

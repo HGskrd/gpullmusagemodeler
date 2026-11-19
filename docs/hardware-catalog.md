@@ -9,6 +9,28 @@ unreleased 512 GB M5 Ultra configuration are excluded. Compatibility keys remain
 in `GPUS`, and imported plans retain their device counts and explicit costs.
 `data/hardware_picker.py` records the exclusions and purchase-channel caveats.
 
+The Tinygrad tab also includes the explicitly labeled **tinybox red 4× MI300X
+batch 2 preorder**, reviewed November 19, 2026 against the
+[seller listing](https://tinycorp.myshopify.com/products/tinybox-red-4xmi300x)
+and its Shopify product metadata (`/products/tinybox-red-4xmi300x.js`, available
+for preorder at review). It costs $89,000 per four-GPU system before shipping/tax,
+with estimated Q1–Q2 2027 shipping, without a delivery guarantee. This is a fixed
+configuration, separate from the Radeon configurator: 192 GB DDR5 host RAM,
+1 TB boot SSD, 4× 1 TB RAID 0 and two 1700 W PSUs. Each refurbished GPU has
+192 GB HBM3, 5.3 TB/s bandwidth and a PCIe 5 x16 host link; **no XGMI** is fitted.
+768 GB and 21.2 TB/s are system aggregates, not shared memory/bandwidth.
+The planner uses a conservative 64 GB/s bidirectional PCIe peer proxy and one
+10GbE scale-out path (the machine has two ports; bonding is not assumed).
+The seller advertises 10.44 PFLOPS FP8 aggregate, but the planner scales the
+standard MI300X BF16/FP8 rooflines by 500/750 for the supplied 500 W power limit.
+These are uncalibrated estimates, not measured 500 W throughput; AMD's standard
+750 W peaks are documented in the
+[MI300X datasheet](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/data-sheets/amd-instinct-mi300x-data-sheet.pdf).
+PSU capacity drives the existing whole-system TCO energy proxy, not a claim of
+measured wall power. The seller reports AMD kernel driver and tinygrad tests,
+but this custom-carrier configuration has no AMD warranty/support and is limited
+to Tier 1 export destinations.
+
 The anchored dropdown uses vendor tabs, family rows and inline variant buttons.
 Search matches names, memory, architecture and vendor across tabs, switching to
 an available match when needed. Older purchasable hardware remains searchable.

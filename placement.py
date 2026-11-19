@@ -30,6 +30,7 @@ from data import (
     model_profile_success_rate,
     required_quality,
 )
+from data.task_primitives import supports_task
 from data.use_case_modalities import model_workload_kind
 from deployment import Deployment, ResolvedAssignment
 from state import (
@@ -360,6 +361,8 @@ def resolve_deployment(state: PlannerState) -> Deployment:
 
 def _model_serves_project(model: Model, project: Project) -> bool:
     if model_workload_kind(model) != project.workload_kind:
+        return False
+    if project.workload_kind == "decision" and not supports_task(model, project.task_primitive):
         return False
     if project.workload_kind != "llm":
         if model.is_asr_model:

@@ -6,7 +6,7 @@
           data-system-gpus="{{ config.count }}" data-min-count="{{ config.count }}" data-count-multiple="{{ config.count }}"
           data-hardware-detail="{{ config.details }}"
           onclick="addGpuFromPicker('{{ panel }}', '{{ config.key }}', this)">{{ config.name }} · ${{ '{:,}'.format(config.price) }}</button>
-  <span class="T">{{ config.platform }} · {{ config.count }}× {{ '9070 XT' if '9070XT' in config.gpu else 'R9700' }} · {{ (16 if '9070XT' in config.gpu else 32) * config.count }} GB total</span>
+  <span class="T">{{ config.platform }} · {{ config.count }}× {{ 'MI300X' if config.base_gpu == 'MI300X' else ('9070 XT' if '9070XT' in config.gpu else 'R9700') }} · {{ '%g'|format(GPUS[config.key].mem_gb * config.count) }} GB total{% if config.availability != 'Retail / hardware vendor' %} · {{ config.availability }}{% endif %}</span>
 </div>
 {% endfor %}
 <div class="tinybox-custom" data-tinybox-configurator data-tinybox-configs="{{ tinybox_configs|tojson|forceescape }}">

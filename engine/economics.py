@@ -52,6 +52,7 @@ from data import (
     required_quality,
     success_rate,
 )
+from data.task_primitives import supports_task
 from data.use_case_modalities import model_workload_kind, workload_unit
 from placement import apply_gpu_expansion
 from state import project_demand_multiplier
@@ -220,7 +221,16 @@ def _project_workload_profile(project, fallback: dict) -> dict:
             if project.workload_kind == "asr"
             else max(1.0, float(project.scale_kind["token_multiplier"]))
         )
-        return {"in_len": size, "out_len": 0.0, "tokens_per_request": size}
+        return {
+            "in_len": size,
+            "out_len": 0.0,
+            "tokens_per_request": size,
+            "task_primitive": project.task_primitive,
+            "questions_per_request": project.questions_per_request,
+            "options_per_question": 2
+            if project.task_primitive == "boolean"
+            else project.options_per_question,
+        }
     in_preset = DIST_PRESETS.get(getattr(project, "in_pre", "")) or DIST_PRESETS["Chat"]
     out_preset = DIST_PRESETS.get(getattr(project, "out_pre", "")) or DIST_PRESETS["Chat"]
     in_len: float = avg_dist(in_preset["in"], INPUT_BUCKETS)
@@ -567,6 +577,8 @@ def allocate_capacity(context: _ProjectionContext) -> _ProjectionContext:
             if not me["runnable"]:
                 continue
             runnable_seen = True
+            if p.workload_kind == "decision" and not supports_task(me["model"], p.task_primitive):
+                continue
             if not (required_caps <= me["model"].capabilities):
                 continue
             capability_compatible_seen = True
@@ -774,6 +786,8 @@ def allocate_capacity(context: _ProjectionContext) -> _ProjectionContext:
             **(
                 {
                     "workload_kind": p.workload_kind,
+                    "task_primitive": p.task_primitive,
+                    "questions_per_request": p.questions_per_request,
                     "workload_unit": workload_unit(p.workload_kind),
                     "quality_status": "uncalibrated",
                 }
@@ -1272,6 +1286,10 @@ def _native_deployment_capacity(state, am, gpu: GPU, profile: dict) -> tuple[flo
         if profile.get("streaming_required") and not model.realtime_profile.streaming:
             return 0.0, 0.0
         return users * 86400.0, float(users)
+    if model.is_decision_model and not supports_task(
+        model, profile.get("task_primitive", "choice")
+    ):
+        return 0.0, 0.0
     seq = max(1, math.ceil(profile["in_len"]))
     native_profile = model.decision_profile if model.is_decision_model else model.embedding_profile
     if native_profile is None or seq > native_profile.max_sequence_length:
@@ -1289,6 +1307,9 @@ def _native_deployment_capacity(state, am, gpu: GPU, profile: dict) -> tuple[flo
                 state.profiled_non_kv_gb,
                 am.prec,
                 state.prefill_efficiency,
+                task_primitive=str(profile.get("task_primitive", "choice")),
+                questions_per_request=int(profile.get("questions_per_request", 1)),
+                options_per_question=int(profile.get("options_per_question", 4)),
             )
             rps = decision.rps if decision else 0.0
         else:

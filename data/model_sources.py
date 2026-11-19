@@ -857,3 +857,9 @@ UNPUBLISHED_MODEL_ARCHITECTURE_SOURCES = {
         "note": "Captured 2026-11-10: legacy hosted model; no public checkpoint/config is available. Retained catalog geometry is a capacity proxy, not verified architecture.",
     },
 }
+
+OPEN_MODEL_ARCHITECTURE_SOURCES["pplx-decider-flash-v1.3"] = ModelArchitectureSource(
+    "https://huggingface.co/perplexity-ai/pplx-decider-flash-v1.3",
+    "d06fb3f2d97e0a52325a0d463c450cf0338f44fe",
+    "Captured 2026-11-18: config, release manifest, backbone index and readout/Locate tensor headers. 32,768 runtime default; separate decision passes, joint span extraction. FP32 adapter kept resident; uncalibrated BF16 compute proxy.",
+)

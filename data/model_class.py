@@ -53,6 +53,7 @@ class DecisionProfile:
     source: str
     note: str
     causal_attention: bool = True
+    task_primitives: tuple[str, ...] = ("choice",)
     forward_per_question: bool = False
     min_options: int = 2
     max_options: int = 0
