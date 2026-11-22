@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-22
+
+- Updated Tinybox 3400 W tall-case + second-PSU pricing from $1,000 to $2,000 across all 78 affected configurator combinations (64 GPU-populated profiles; `tinybox red whale` $50,000 → $51,000) to match live `tinybox.js`.
+- Added OpenAI `gpt-6.2-astra` and `gpt-6.2-sol` (including `background_2h`/`background_8h` windows, Flex exclusion on 6.2, and dated 3×→6× Ultrafast promotion), Google `gemini-4-neon` and `gemini-4-hydrogen`, and Alibaba `qwen4-max` GA hosted rows; marked `gemini-3.7-flash` deprecated.
+- Added source-pinned local models and artifacts: Thinking Machines `Inkling-2-Small` (NVFP4/MXFP8) and looped `Inkling-2-Mini` (48 logical / 24 physical layers, 3 passes), Perplexity `pplx-decider-v1.3` (27B + Locate), Salesforce `SOV-Transcribe-1` (+ 430M DFlash prior), and NVIDIA `Nemotron-3.5-Transcribe-30B-A4B` (BF16/FP8/NVFP4 + Open ASR WER).
+- Added pinned NVIDIA NVFP4 artifacts for `nemotron35-super-vl` and `qwen38-27b` (QAD) plus the three November 17 NVIDIA standalone `qwen38-27b` draft models with SPEED-Bench acceptance fits.
+
 ## 2026-11-11
 
 - Corrected MiMo V2.6 unequal K/V widths, Gemma E2B/E4B full residency and shared

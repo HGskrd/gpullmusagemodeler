@@ -1,13 +1,13 @@
 """tinygrad.org configurator snapshot; prices are complete-system USD, before tax.
 
-Reviewed 2026-11-05 against the homepage and assets/tinybox.js?v=red-whale-2.
+Reviewed 2026-11-22 against the homepage and assets/tinybox.js?v=red-whale-2.
 Keep option IDs stable: exported scenarios retain configuration-specific GPU keys.
 """
 
 from dataclasses import asdict, dataclass
 from itertools import product
 
-TINYBOX_REVIEWED_AT = "2026-11-11"
+TINYBOX_REVIEWED_AT = "2026-11-22"
 TINYBOX_SOURCE = "https://tinygrad.org/"
 TINYBOX_CONFIG_SOURCE = "https://tinygrad.org/assets/tinybox.js?v=red-whale-2"
 TINYBOX_OPTIONS = {
@@ -124,7 +124,7 @@ def _configurations() -> tuple[TinyboxConfig, ...]:
             continue
         price = (
             (7000 if platform == "G4" else 12000)
-            + (1000 if power == "3400" else 0)
+            + (2000 if power == "3400" else 0)
             + {"32": 0, "128": 3000, "192": 8000}[memory]
             + {"BOOT": 0, "RAID4": 2000, "RAID16": 6000, "RAID4X4": 8000}[storage]
             + count * (1000 if "9070XT" in gpu else 2500)

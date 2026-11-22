@@ -485,6 +485,37 @@ ASR_WER_LANGUAGE_SOURCES["granite-speech-5.0-470m-turboctc"] = {
     "en_openasr9_granite_20261021": "https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc/blob/91dcb0605daf65f88dbb04fef015c423241d941d/README.md — Publisher-reported multilingual checkpoint WER averaged over nine English short-form Open ASR sets, October 21, 2026; unofficial submission. Not a Japanese CER or a generic multilingual average.",
 }
 
+# Nemotron 3.5 Transcribe publishes Open ASR Leaderboard English (9 public sets)
+# and Multilingual (7 languages) WER averages captured October 12, 2026.
+ASR_WER_LANGUAGES = (
+    *ASR_WER_LANGUAGES,
+    "en_openasr9_nemotron35_20261012",
+    "multi_openasr7_nemotron35_20261012",
+)
+ASR_WER_LANGUAGE_LABELS["en_openasr9_nemotron35_20261012"] = (
+    "English · Open ASR Leaderboard (9 public sets)"
+)
+ASR_WER_LANGUAGE_LABELS["multi_openasr7_nemotron35_20261012"] = (
+    "Multilingual · Open ASR Leaderboard (7 languages)"
+)
+PUBLISHED_ASR_WER["nvidia-nemotron-3.5-transcribe-30b-a4b"] = {
+    "en_openasr9_nemotron35_20261012": 4.71,
+    "multi_openasr7_nemotron35_20261012": 4.62,
+}
+ASR_WER_LANGUAGE_SOURCES["nvidia-nemotron-3.5-transcribe-30b-a4b"] = {
+    "en_openasr9_nemotron35_20261012": (
+        "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B/blob/"
+        "c17667641642c4265ff2b7037dd101b7d4567634/README.md — Publisher-reported Open ASR "
+        "Leaderboard mean WER over 9 public English sets, captured October 12, 2026. "
+        "Long-form Open ASR mean WER is separately reported as 10.98%."
+    ),
+    "multi_openasr7_nemotron35_20261012": (
+        "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B/blob/"
+        "c17667641642c4265ff2b7037dd101b7d4567634/README.md — Publisher-reported Multilingual "
+        "Open ASR Leaderboard mean WER over 7 languages, captured October 12, 2026."
+    ),
+}
+
 # Keep new release protocols distinct from older English/French aggregates.
 
 for _row in RELEASE_ASR_WER_ROWS:

@@ -190,7 +190,7 @@ class ModelCatalogTests(unittest.TestCase):
                 self.assertEqual(cloud["pricing_source"], CLOUD_PRICING_SOURCES[cloud["vendor"]])
 
         for key, cloud in CLOUD_MODELS.items():
-            if cloud.get("pricing_captured_at") == "2026-11-11":
+            if cloud.get("pricing_captured_at") in {"2026-11-11", "2026-11-22"}:
                 self.assertTrue(cloud["pricing_source"].startswith("https://"))
                 continue
             if key.startswith("kimi") or key in {
@@ -798,7 +798,9 @@ class ModelCatalogTests(unittest.TestCase):
                     mtp = next(p for p in model.speculative_profiles if p.method == "mtp")
                     self.assertEqual(mtp.supported_ks, (1,))
                 else:
-                    self.assertEqual({p.method for p in model.speculative_profiles}, {"dspine"})
+                    self.assertEqual(
+                        {p.method for p in model.speculative_profiles}, {"dspine", "draft_model"}
+                    )
 
     def test_qwen38_27b_fp8_artifact_is_exact_and_smaller_than_native(self):
         model = MODELS["qwen38-27b"]
