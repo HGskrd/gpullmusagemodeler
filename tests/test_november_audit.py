@@ -375,7 +375,12 @@ def test_integer_artifact_labels_do_not_inherit_float_precision_slots(encoding, 
         "pplx-embed-v2-context-0.6b",
         "pplx-embed-v2-context-9b",
         "pplx-decider-v1.2",
+        "pplx-decider-v1.3",
         "granite-speech-5.0-470m-turboctc",
+        "inkling-2-small",
+        "inkling-2-mini",
+        "sov-transcribe-1",
+        "nvidia-nemotron-3.5-transcribe-30b-a4b",
     ],
 )
 def test_new_catalog_entries_execute_and_roundtrip_a_public_planner_report(key):
@@ -387,13 +392,13 @@ def test_new_catalog_entries_execute_and_roundtrip_a_public_planner_report(key):
 
     payload = copy.deepcopy(EXAMPLE_REQUEST)
     panel = payload["scenario"]["panel_a"]
-    panel["gpus"] = [{"uid": 1, "gpu_type": "H200", "count": 16}]
+    panel["gpus"] = [{"uid": 1, "gpu_type": "B300", "count": 8}]
     model = MODELS[key]
     panel["models"] = [
         {
             "model_key": key,
             "gpu_uid": 1,
-            "gpu_count": 16,
+            "gpu_count": 8,
             "prec": model.native_precision_key,
             "artifact_id": default_artifact_id(model, model.native_precision_key),
             "execution_backend": "auto",
@@ -412,3 +417,105 @@ def test_new_catalog_entries_execute_and_roundtrip_a_public_planner_report(key):
         replay = client.post("/api/v1/calculate", json={**payload, "scenario": result["scenario"]})
         assert replay.status_code == 200
         assert replay.get_json()["report"] == result["report"]
+
+
+def test_november_22_cloud_additions_and_tier_rules():
+    astra = CLOUD_MODELS["gpt-6.2-astra"]
+    sol = CLOUD_MODELS["gpt-6.2-sol"]
+    assert cloud_quote(astra)[0]["effective_in_per_m"] == 8.0
+    assert cloud_quote(astra, in_len=272_001)[0]["effective_in_per_m"] == 16.0
+    assert (
+        cloud_quote(astra, cache_write_tokens=100, cache_write_ttl="12h")[0][
+            "effective_cache_write_per_m"
+        ]
+        == 20.0
+    )
+    assert cloud_quote(astra, cloud_service_tier="flex")[0] is None
+    assert cloud_quote(sol, cloud_service_tier="flex")[0] is None
+    std_sol = cloud_quote(sol)[1]
+    assert cloud_quote(sol, cloud_service_tier="background_2h")[1] == pytest.approx(std_sol * 0.7)
+    assert cloud_quote(sol, cloud_service_tier="background_8h")[1] == pytest.approx(std_sol * 0.6)
+    assert cloud_quote(sol, cloud_service_tier="ultrafast", pricing_as_of="2027-02-28")[
+        1
+    ] == pytest.approx(std_sol * 3.0)
+    assert cloud_quote(sol, cloud_service_tier="ultrafast", pricing_as_of="2027-03-01")[
+        1
+    ] == pytest.approx(std_sol * 6.0)
+    assert cloud_quote(
+        CLOUD_MODELS["gpt-6.1-sol"], cloud_service_tier="ultrafast", pricing_as_of="2026-11-22"
+    )[1] == pytest.approx(cloud_quote(CLOUD_MODELS["gpt-6.1-sol"])[1] * 3.0)
+
+    neon = CLOUD_MODELS["gemini-4-neon"]
+    hydrogen = CLOUD_MODELS["gemini-4-hydrogen"]
+    assert cloud_quote(neon)[0]["effective_in_per_m"] == 3.0
+    assert cloud_quote(hydrogen)[0]["effective_in_per_m"] == 1.5
+    assert cloud_quote(neon, cache_write_tokens=1)[0] is None
+    assert cloud_quote(hydrogen, cloud_service_tier="priority")[1] == pytest.approx(
+        cloud_quote(hydrogen)[1] * 1.8
+    )
+
+    qwen4 = CLOUD_MODELS["qwen4-max"]
+    assert cloud_quote(qwen4)[0]["effective_in_per_m"] == 1.5
+    assert (
+        cloud_quote(qwen4, cache_write_tokens=100, cache_write_ttl="5m")[0][
+            "effective_cache_write_per_m"
+        ]
+        == 1.875
+    )
+    assert (
+        cloud_quote(qwen4, cache_write_tokens=100, cache_write_ttl="1h")[0][
+            "effective_cache_write_per_m"
+        ]
+        == 3.0
+    )
+    assert cloud_quote(qwen4, cloud_service_tier="batch")[1] == pytest.approx(
+        cloud_quote(qwen4)[1] * 0.5
+    )
+
+
+def test_november_22_local_models_looped_kv_artifacts_and_drafts():
+    for (key, _), profile in MODEL_ARTIFACT_PROFILES.items():
+        if profile.captured_at == "2026-11-22" and profile.storage_format_counts:
+            assert _storage_bytes(profile.storage_format_counts) == profile.total_weight_bytes, (
+                key,
+                profile.source_repo,
+            )
+
+    mini = configured("inkling-2-mini", "nvfp4")
+    assert mini.weight_bytes("nvfp4") == 19_525_870_752
+    assert (mini.layers, mini.kv_layer_count, mini.local_kv_layers) == (48, 48, 40)
+    assert mini.parameter_passes == pytest.approx(5.4 / 3.4)
+    # 40 SWA-1024 + 8 global logical visits with 8 KV heads * 128 head_dim * 2 (K+V) * 2 B (BF16).
+    expected_kv = (40 * 1024 + 8 * 8192) * 8 * 128 * 2 * 2
+    assert kv_cache_bytes_for_sequence(mini, 8192, "bf16") == expected_kv
+
+    small_nvfp4 = configured("inkling-2-small", "nvfp4")
+    small_fp8 = configured("inkling-2-small", "fp8")
+    assert small_nvfp4.weight_bytes("nvfp4") == 390_056_448_320
+    assert small_fp8.weight_bytes("fp8") == 619_379_896_320
+
+    dec13 = configured("pplx-decider-v1.3", "bf16")
+    assert dec13.weight_bytes("bf16") == 54_054_108_276
+    assert (
+        compute_decision(
+            dec13, (1, 1, 1), 1, 1024, GPUS["H200"], 0.9, 4, "bf16", EfficiencyParams()
+        )
+        is not None
+    )
+
+    sov = configured("sov-transcribe-1", "bf16")
+    assert sov.weight_bytes("bf16") == 53_283_115_580
+    assert sov.is_asr_model and sov.realtime_profile and not sov.realtime_profile.streaming
+
+    nt_bf16 = configured("nvidia-nemotron-3.5-transcribe-30b-a4b", "bf16")
+    nt_fp8 = configured("nvidia-nemotron-3.5-transcribe-30b-a4b", "fp8")
+    nt_fp4 = configured("nvidia-nemotron-3.5-transcribe-30b-a4b", "nvfp4")
+    assert nt_bf16.weight_bytes("bf16") == 67_495_450_710
+    assert nt_fp8.weight_bytes("fp8") == 34_666_946_014
+    assert nt_fp4.weight_bytes("nvfp4") == 21_553_247_662
+
+    assert configured("nemotron35-super-vl", "nvfp4").weight_bytes("nvfp4") == 75_010_189_968
+    qwen_art_repos = {p.source_repo for p in artifact_profiles("qwen38-27b")}
+    assert {"nvidia/Qwen3.8-27B-NVFP4", "nvidia/Qwen3.8-27B-NVFP4-QAD"} <= qwen_art_repos
+    draft_methods = [p.method for p in MODELS["qwen38-27b"].speculative_profiles]
+    assert draft_methods.count("draft_model") == 3

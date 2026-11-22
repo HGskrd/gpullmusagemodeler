@@ -14,6 +14,7 @@ from .model_class import (
     EmbeddingProfile,
     Model,
     RealtimeProfile,
+    SpeculativeProfile,
     _artifact_profile,
 )
 from .model_sources import OPEN_MODEL_ARCHITECTURE_SOURCES, ModelArchitectureSource
@@ -25,6 +26,7 @@ from .models_text import TEXT_MODELS
 from .specs import QuantizationScheme
 
 CAPTURED_AT = "2026-11-11"
+CAPTURED_AT_NOV22 = "2026-11-22"
 NOVEMBER_MODELS: dict[str, Model] = {}
 
 
@@ -42,11 +44,14 @@ def _profile(
     default=True,
     note="",
     runtime="",
+    captured_at=CAPTURED_AT,
+    label=None,
 ):
     pair, profile = _artifact_profile(
         model_key=key,
         precision_key=precision,
-        label=(
+        label=label
+        or (
             scheme.encoding
             if scheme
             else {"bf16": "Official BF16", "fp8": "Official FP8", "nvfp4": "Official NVFP4 / FP8"}[
@@ -66,12 +71,17 @@ def _profile(
         ),
         notes=note,
         quant_algo=scheme.encoding if scheme else precision,
-        captured_at=CAPTURED_AT,
+        captured_at=captured_at,
         kv_cache_format="BF16",
         scheme=scheme,
         storage_evidence="Pinned tensor headers/index; exact subset where explicitly documented.",
     )
-    model = NOVEMBER_MODELS.get(key) or LFM3_MODELS.get(key) or RELEASE_MODELS.get(key)
+    model = (
+        NOVEMBER_MODELS.get(key)
+        or LFM3_MODELS.get(key)
+        or RELEASE_MODELS.get(key)
+        or TEXT_MODELS.get(key)
+    )
     profile = replace(
         profile,
         active_weight_bytes_per_param_override=(
@@ -87,11 +97,11 @@ def _profile(
     MODEL_ARTIFACT_PROFILES[(key, profile.artifact_id)] = profile
 
 
-def _source(key, repo, rev, note):
+def _source(key, repo, rev, note, *, captured_at=CAPTURED_AT):
     OPEN_MODEL_ARCHITECTURE_SOURCES[key] = ModelArchitectureSource(
         "https://huggingface.co/" + repo,
         rev,
-        f"Captured {CAPTURED_AT}. {note} Throughput and quality are uncalibrated.",
+        f"Captured {captured_at}. {note} Throughput and quality are uncalibrated.",
     )
 
 
@@ -562,3 +572,517 @@ for precision, suffix, rev, size, counts, scheme, shares, traffic in (
         "Integer weight-only formats use BF16 compute, not FP4 peaks. Traffic is a "
         "header-derived bound; published BF16 quality is not a quantized quality measurement.",
     )
+
+# ---------------------------------------------------------------------------
+# 2026-11-22 biweekly audit additions (source-pinned; no weights downloaded)
+# ---------------------------------------------------------------------------
+
+_ink2s_note = (
+    "48-layer multimodal MoE (594.05B total / 17B active; 8 of 384 routed experts, "
+    "intermediate 2304, no shared experts). Hybrid 40 SWA-1024 + 8 global layers with "
+    "Q48/KV8/head_dim 128, Block AttnRes (6 layers/block), SConv kernel 4, 1M context. "
+    "Checkpoint includes 23-layer ViT vision tower and 5-layer MTP/DSpark tensors; "
+    "speculative speedup and vision latency remain unmodeled. Compute shares are "
+    "conservative operator-role proxies."
+)
+NOVEMBER_MODELS["inkling-2-small"] = Model(
+    key="inkling-2-small",
+    name="Inkling 2 Small 594B-A17B",
+    cat="Thinking Machines",
+    color="#D63B59",
+    total_params=594_050_672_720,
+    active_params=17e9,
+    active_weight_params=17e9,
+    is_moe=True,
+    layers=48,
+    hidden_dim=4608,
+    num_heads=48,
+    kv_heads=8,
+    head_dim=128,
+    is_mla=False,
+    attention_layers=48,
+    kv_layers=48,
+    local_attention_layers=40,
+    local_kv_layers=40,
+    local_attention_window=1024,
+    local_attention_heads=48,
+    local_kv_heads=8,
+    local_kv_head_dim=128,
+    global_kv_heads=8,
+    global_head_dim=128,
+    attention_residual_block_size=6,
+    moe_intermediate_dim=2304,
+    moe_routed_experts=384,
+    moe_active_experts=8,
+    moe_shared_experts=0,
+    max_context_tokens=1_048_576,
+    native_precision="nvfp4",
+    native_precision_label="Official NVFP4 / MXFP8 · 390.1 GB",
+    native_precision_note=_ink2s_note,
+    extra_capabilities=frozenset({"images", "reasoning"}),
+    quality_confidence=0.0,
+    attention_label="40 SWA 1024 + 8 global · Block AttnRes 6 · 8/384 MoE",
+    architecture_note=_ink2s_note,
+)
+_profile(
+    "inkling-2-small",
+    "nvfp4",
+    "thinkingmachines/Inkling-2-Small",
+    "885d78bfca61a7e9a498e33cfa7ad35850533b8c",
+    390_056_448_320,
+    None,
+    shares={"nvfp4": 0.82, "fp8": 0.16, "bf16": 0.02},
+    note=_ink2s_note,
+    captured_at=CAPTURED_AT_NOV22,
+    label="Official NVFP4 / MXFP8",
+)
+_profile(
+    "inkling-2-small",
+    "fp8",
+    "thinkingmachines/Inkling-2-Small-MXFP8",
+    "14f2cb29a5d0f4c1fda8f645fa339e936c2147a2",
+    619_379_896_320,
+    {
+        "F32": 534_528,
+        "BF16": 6_981_765_120,
+        "F8_E4M3": 587_068_342_272,
+        "U8": 18_345_885_696,
+    },
+    shares={"fp8": 0.96, "bf16": 0.04},
+    scheme=QuantizationScheme("MXFP8", (1, 32), "UE8M0"),
+    note="Exact 48-shard MXFP8 checkpoint (619.380 GB indexed; BF16 embeddings/head/vision/attention, MXFP8 experts).",
+    captured_at=CAPTURED_AT_NOV22,
+    label="Official MXFP8",
+)
+_source(
+    "inkling-2-small",
+    "thinkingmachines/Inkling-2-Small",
+    "885d78bfca61a7e9a498e33cfa7ad35850533b8c",
+    _ink2s_note,
+    captured_at=CAPTURED_AT_NOV22,
+)
+
+_ink2m_note = (
+    "Looped multimodal MoE: 24 physical layers (6 prelude + 12 core looped 3 passes + 6 coda = "
+    "48 logical executed layers; 40 SWA-1024 + 8 global logical visits). Per vLLM recipe, each "
+    "loop visit maintains its own KV and short-conv state (48 logical KV layers total). "
+    "26.39B physical total / 3.4B unique active / 5.4B effective active across 3 passes "
+    "(parameter_passes=5.4/3.4). Mixed NVFP4/MXFP8 checkpoint (19.526 GB indexed) includes "
+    "23-layer ViT vision tower and 3-layer DSpark/MTP weights; speculative speedup, short-conv "
+    "state, inter-pass rank-64 gating, and vision latency are unmodeled proxies."
+)
+NOVEMBER_MODELS["inkling-2-mini"] = Model(
+    key="inkling-2-mini",
+    name="Inkling 2 Mini 26B-A3.4B (3 loops)",
+    cat="Thinking Machines",
+    color="#E6647B",
+    total_params=26_388_646_440,
+    active_params=3.4e9,
+    active_weight_params=3.4e9,
+    parameter_passes=5.4 / 3.4,
+    is_moe=True,
+    layers=48,
+    hidden_dim=2304,
+    num_heads=24,
+    kv_heads=8,
+    head_dim=128,
+    is_mla=False,
+    attention_layers=48,
+    kv_layers=48,
+    local_attention_layers=40,
+    local_kv_layers=40,
+    local_attention_window=1024,
+    local_attention_heads=24,
+    local_kv_heads=8,
+    local_kv_head_dim=128,
+    global_kv_heads=8,
+    global_head_dim=128,
+    attention_residual_block_size=6,
+    moe_intermediate_dim=1152,
+    moe_routed_experts=128,
+    moe_active_experts=8,
+    moe_shared_experts=0,
+    max_context_tokens=1_048_576,
+    native_precision="nvfp4",
+    native_precision_label="Official NVFP4 / MXFP8 · 19.5 GB",
+    native_precision_note=_ink2m_note,
+    extra_capabilities=frozenset({"images", "reasoning"}),
+    quality_confidence=0.0,
+    attention_label="3 loops · 48 logical / 24 physical layers · 40 SWA 1024 + 8 global",
+    architecture_note=_ink2m_note,
+)
+_profile(
+    "inkling-2-mini",
+    "nvfp4",
+    "thinkingmachines/Inkling-2-Mini",
+    "b85c3cfa615fc413cc9af3379f491b963f3b586a",
+    19_525_870_752,
+    None,
+    shares={"nvfp4": 0.77, "fp8": 0.16, "bf16": 0.07},
+    note=_ink2m_note,
+    captured_at=CAPTURED_AT_NOV22,
+    label="Official NVFP4 / MXFP8",
+)
+_source(
+    "inkling-2-mini",
+    "thinkingmachines/Inkling-2-Mini",
+    "b85c3cfa615fc413cc9af3379f491b963f3b586a",
+    _ink2m_note,
+    captured_at=CAPTURED_AT_NOV22,
+)
+
+_decider13_key = "pplx-decider-v1.3"
+_decider13_repo = "perplexity-ai/" + _decider13_key
+_decider13_rev = "9c2ebb27470d3dec2ad7ab727727e40d142c7213"
+_decider13_note = (
+    "Qwen3.8-27B hybrid backbone (16 noncausal full + 48 causal linear); default separate "
+    "decision sequences and joint Locate span-extraction questions. Max default length 32,768 "
+    "formatted positions; Locate requires text-only state (<=128 questions) and disables "
+    "fast=True. Conservatively keeps FP32 Locate adapter (1,867,665,408 B) and span head "
+    "(13,171,348 B) resident alongside BF16 backbone (52,170,660,320 B) and BF16 readout "
+    "(2,611,200 B). BF16 compute is a planning proxy; CPU span decoding and vision latency "
+    "are unmodeled."
+)
+NOVEMBER_MODELS[_decider13_key] = replace(
+    NOVEMBER_MODELS["pplx-decider-v1.2"],
+    key=_decider13_key,
+    name="Perplexity Decider v1.3 + Locate (27B)",
+    total_params=26_556_844_949,
+    active_params=26_556_844_949,
+    active_weight_params=26_556_844_949,
+    max_context_tokens=32_768,
+    attention_label="16 noncausal full + 48 causal linear · decisions / Locate spans",
+    architecture_note=_decider13_note,
+    native_precision_label="BF16 backbone + FP32 Locate adapter/head",
+    native_precision_note=_decider13_note,
+    quality_confidence=0.0,
+)
+DECISION_PROFILES[_decider13_key] = DecisionProfile(
+    32_768,
+    f"https://huggingface.co/{_decider13_repo}/blob/{_decider13_rev}/README.md",
+    _decider13_note,
+    causal_attention=False,
+    forward_per_question=True,
+    max_options=255,
+    task_primitives=("choice", "boolean", "score", "span_extraction"),
+)
+_profile(
+    _decider13_key,
+    "bf16",
+    _decider13_repo,
+    _decider13_rev,
+    54_054_108_276,
+    {"BF16": 26_086_635_760, "F32": 470_209_189},
+    note=_decider13_note,
+    captured_at=CAPTURED_AT_NOV22,
+    label="Native BF16 + resident FP32 Locate",
+)
+_source(
+    _decider13_key,
+    _decider13_repo,
+    _decider13_rev,
+    _decider13_note,
+    captured_at=CAPTURED_AT_NOV22,
+)
+
+_sov_key = "sov-transcribe-1"
+_sov_repo = "salesforce-sovereign-intelligence/SOV-Transcribe-1"
+_sov_rev = "505d8fae243924c0d8acdc622f7f0abab344eba3"
+_sov_note = (
+    "Non-streaming multilingual ASR combining Whisper large-v3 audio encoder (32L, d=1280, "
+    "20 heads, ~637M params) + projector + Gemma 4 26B-A4B MoE decoder (30L: 25 SWA-1024 + "
+    "5 global, 8/128 routed experts, shared K=V on global layers). 16 kHz audio yields 375 "
+    "audio tokens per 30 s window (12.5 tok/s, 80 ms/tok); tested up to 30 min. Companion "
+    "5-layer BF16 DFlash drafter (859.4 MB) uses an explicit conservative unmeasured acceptance "
+    "prior (publisher reports ~2-3x wall-clock speedup on single requests, not a measured tau). "
+    "No comparable inline WER score published in card; capacity-only surface."
+)
+NOVEMBER_MODELS[_sov_key] = Model(
+    key=_sov_key,
+    name="Salesforce SOV-Transcribe-1 26.6B-A4.6B",
+    cat="Audio",
+    color="#00A1E0",
+    total_params=26_630_656_030,
+    active_params=4.6e9,
+    active_weight_params=4.6e9,
+    is_moe=True,
+    layers=30,
+    hidden_dim=2816,
+    num_heads=16,
+    kv_heads=2,
+    head_dim=512,
+    is_mla=False,
+    attention_layers=30,
+    kv_layers=30,
+    local_attention_layers=25,
+    local_kv_layers=25,
+    local_attention_window=1024,
+    local_attention_heads=16,
+    local_attention_head_dim=256,
+    local_kv_heads=8,
+    local_kv_head_dim=256,
+    global_kv_heads=2,
+    global_head_dim=512,
+    shared_key_value=True,
+    moe_routed_experts=128,
+    moe_active_experts=8,
+    max_context_tokens=262_144,
+    native_precision="bf16",
+    native_precision_label="Official BF16 · 53.3 GB",
+    native_precision_note=_sov_note,
+    capabilities_override=frozenset(),
+    quality_confidence=0.0,
+    attention_label="Whisper large-v3 encoder + Gemma 4 26B-A4B (25 SWA 1k + 5 global)",
+    architecture_note=_sov_note,
+    realtime_profile=RealtimeProfile(
+        label="Offline multilingual SALM ASR",
+        tokens_per_second=12.5,
+        audio_ms_per_token=80.0,
+        target_delay_ms=30_000,
+        state_tokens=375,
+        source=_sov_repo,
+        note=_sov_note,
+        audio_encoder_params=637e6,
+        audio_attention_layers=32,
+        audio_attention_heads=20,
+        audio_attention_head_dim=64,
+        streaming=False,
+        audio_chunk_seconds=30.0,
+        audio_frame_rate=50.0,
+        audio_embedding_rate=12.5,
+        decoder_params=4.0e9,
+    ),
+    speculative_profiles=(
+        SpeculativeProfile(
+            label="SOV-Transcribe-1 DFlash (430M, prior)",
+            method="dflash",
+            draft_params=429_689_088,
+            draft_layers=5,
+            parallel_draft=True,
+            default_k=15,
+            acceptance_alpha=0.6,
+            kv_overhead=0.0,
+            source="https://huggingface.co/salesforce-sovereign-intelligence/SOV-Transcribe-1-DFlash/tree/8c0b3f3a98507d2e3dd35b1bee0f147fa3bded05",
+            note="Captured 2026-11-22. Official 5-layer BF16 DFlash drafter (859,378,176 B, block_size=16, 15 drafted tokens). Publisher reports ~2-3x single-request wall-clock speedup without a measured mean acceptance length; alpha=0.60 is an explicitly conservative unmeasured planning prior.",
+            exact_weight_bytes=859_378_176,
+            active_params=429_689_088,
+            supported_ks=(15,),
+            proposed_tokens=15,
+            verify_anchor_positions=1,
+            draft_compute_precision="bf16",
+            draft_kv_heads=8,
+            draft_head_dim=128,
+            draft_kv_bytes=2.0,
+            draft_window=2048,
+        ),
+    ),
+)
+_profile(
+    _sov_key,
+    "bf16",
+    _sov_repo,
+    _sov_rev,
+    53_283_115_580,
+    {"BF16": 26_619_754_270, "F32": 10_901_760},
+    note=_sov_note,
+    captured_at=CAPTURED_AT_NOV22,
+)
+_source(_sov_key, _sov_repo, _sov_rev, _sov_note, captured_at=CAPTURED_AT_NOV22)
+
+_nt_key = "nvidia-nemotron-3.5-transcribe-30b-a4b"
+_nt_repo = "nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B"
+_nt_rev = "c17667641642c4265ff2b7037dd101b7d4567634"
+_nt_note = (
+    "Offline 40-language SALM ASR combining an ~800M Parallel Expert Encoder (32-layer d=1280 "
+    "Transformer ASR encoder + speaker diarization encoder) with the Nemotron-3.5-Lightning "
+    "hybrid Mamba-2/Transformer MoE backbone (52 layers: 23 Mamba-2 + 6 GQA Q32/KV2/d128 + "
+    "23 MoE 6/128 routed + 1 shared). 33.70B total / 4.3B active (3.5B LLM + ~0.8B encoder); "
+    "65,536-token context, recordings up to 1 hour in 30 s encoder chunks. Released in BF16 "
+    "(67.495 GB), ModelOpt FP8 (34.667 GB), and NVFP4 (21.553 GB). Bundled 2-layer MTP "
+    "speedup is left disabled pending measured acceptance calibration."
+)
+NOVEMBER_MODELS[_nt_key] = Model(
+    key=_nt_key,
+    name="NVIDIA Nemotron 3.5 Transcribe 30B-A4B",
+    cat="Audio",
+    color="#76B900",
+    total_params=33_697_781_029,
+    active_params=4.3e9,
+    active_weight_params=4.3e9,
+    is_moe=True,
+    layers=52,
+    hidden_dim=2688,
+    num_heads=32,
+    kv_heads=2,
+    head_dim=128,
+    is_mla=False,
+    attention_layers=6,
+    kv_layers=6,
+    linear_attention_layers=23,
+    linear_attention_heads=64,
+    linear_attention_head_dim=64,
+    linear_attention_k_heads=64,
+    linear_attention_k_head_dim=64,
+    linear_attention_conv_kernel=4,
+    moe_intermediate_dim=1856,
+    moe_routed_experts=128,
+    moe_active_experts=6,
+    moe_shared_experts=1,
+    max_context_tokens=65_536,
+    native_precision="bf16",
+    native_precision_label="Official BF16 · 67.5 GB",
+    native_precision_note=_nt_note,
+    capabilities_override=frozenset(),
+    quality_confidence=0.0,
+    attention_label="32L audio encoder + 23 Mamba-2 / 6 GQA / 23 MoE (6/128)",
+    architecture_note=_nt_note,
+    realtime_profile=RealtimeProfile(
+        label="Offline 40-language SALM ASR",
+        tokens_per_second=12.5,
+        audio_ms_per_token=80.0,
+        target_delay_ms=30_000,
+        state_tokens=375,
+        source=_nt_repo,
+        note=_nt_note,
+        audio_encoder_params=800e6,
+        audio_attention_layers=32,
+        audio_attention_heads=10,
+        audio_attention_head_dim=128,
+        streaming=False,
+        audio_chunk_seconds=30.0,
+        audio_frame_rate=100.0,
+        audio_embedding_rate=12.5,
+        decoder_params=3.5e9,
+    ),
+)
+_profile(
+    _nt_key,
+    "bf16",
+    _nt_repo,
+    _nt_rev,
+    67_495_450_710,
+    {"BF16": 33_646_888_256, "F32": 50_260_472, "U8": 632_302, "I64": 1},
+    note=_nt_note,
+    captured_at=CAPTURED_AT_NOV22,
+)
+_profile(
+    _nt_key,
+    "fp8",
+    "nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B-FP8",
+    "2b6209f89bec0da576d69183bfdabb3b6c05ade2",
+    34_666_946_014,
+    None,
+    shares={"fp8": 0.94, "bf16": 0.06},
+    note="Official ModelOpt FP8 checkpoint (34.667 GB indexed; retains BF16 embeddings/gates/conv1d/lm_head/audio encoder components).",
+    captured_at=CAPTURED_AT_NOV22,
+)
+_profile(
+    _nt_key,
+    "nvfp4",
+    "nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B-NVFP4",
+    "66c6adc4020179567074d0399cda2a4eeb2bb347",
+    21_553_247_662,
+    None,
+    shares={"nvfp4": 0.78, "fp8": 0.14, "bf16": 0.08},
+    note="Official ModelOpt NVFP4 checkpoint (21.553 GB indexed; mixed NVFP4/FP8/BF16 with retained BF16 encoder/head/gates).",
+    captured_at=CAPTURED_AT_NOV22,
+)
+_source(_nt_key, _nt_repo, _nt_rev, _nt_note, captured_at=CAPTURED_AT_NOV22)
+
+# Pinned NVIDIA NVFP4 artifacts for existing local models
+_profile(
+    "nemotron35-super-vl",
+    "nvfp4",
+    "nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4",
+    "ae1368329b1fc76b71534c5d04b87b35d9cc6e15",
+    75_010_189_968,
+    None,
+    shares={"nvfp4": 0.80, "fp8": 0.12, "bf16": 0.08},
+    note="Official NVIDIA QAD NVFP4 release (75.010 GB indexed across 88 shards; mixed NVFP4 experts, FP8 attention/Mamba projections, BF16 vision/embeddings/head). Compute shares are conservative operator-role proxies.",
+    captured_at=CAPTURED_AT_NOV22,
+    label="Official NVFP4 (QAD)",
+)
+_profile(
+    "qwen38-27b",
+    "nvfp4",
+    "nvidia/Qwen3.8-27B-NVFP4-QAD",
+    "cd46ab575a5a687f0bc3e54251016fc2cc1a6aef",
+    19_898_956_392,
+    None,
+    shares={"nvfp4": 0.80, "fp8": 0.10, "bf16": 0.10},
+    default=False,
+    note="Official NVIDIA ModelOpt QAD NVFP4 release (19.899 GB indexed across 64 shards; distinct from earlier 21.921 GB PTQ NVFP4 artifact). Compute shares are conservative operator-role proxies.",
+    captured_at=CAPTURED_AT_NOV22,
+    label="NVIDIA NVFP4 (QAD)",
+)
+
+# Official NVIDIA external draft models for Qwen 3.8 27B (released Nov 17, 2026)
+NOVEMBER_MODELS["qwen38-27b"] = replace(
+    TEXT_MODELS["qwen38-27b"],
+    speculative_profiles=(
+        *TEXT_MODELS["qwen38-27b"].speculative_profiles,
+        SpeculativeProfile(
+            label="NVIDIA Qwen3.5-4B Draft (SPEED-Bench)",
+            method="draft_model",
+            draft_params=4_205_751_296,
+            draft_layers=32,
+            parallel_draft=False,
+            default_k=15,
+            acceptance_alpha=0.8298540648911450,
+            kv_overhead=0.0,
+            source="https://huggingface.co/nvidia/Qwen3.5-4B-Qwen3.8-27B-Draft/tree/bc5ad93d03d96a9c1ef49748e00ec5130a7080de",
+            note="Captured 2026-11-22. Official NVIDIA BF16 standalone draft model (8,411,502,592 B, 4.21B params). Alpha fitted to SPEED-Bench qualitative mean tau=5.58 at block size 16 (long-context 32k tau=5.11); trained at 12,288 context. Transfer to other workloads requires calibration.",
+            exact_weight_bytes=8_411_502_592,
+            active_params=4_205_751_296,
+            supported_ks=(15,),
+            proposed_tokens=15,
+            verify_anchor_positions=1,
+            draft_compute_precision="bf16",
+            draft_kv_heads=4,
+            draft_head_dim=256,
+            draft_kv_bytes=2.0,
+        ),
+        SpeculativeProfile(
+            label="NVIDIA Qwen3.5-0.8B Draft (SPEED-Bench)",
+            method="draft_model",
+            draft_params=752_393_024,
+            draft_layers=24,
+            parallel_draft=False,
+            default_k=15,
+            acceptance_alpha=0.7473120036366827,
+            kv_overhead=0.0,
+            source="https://huggingface.co/nvidia/Qwen3.5-0.8B-Qwen3.8-27B-Draft/tree/6afca85a17ef55a7b89ec0be38cf62983f68d23b",
+            note="Captured 2026-11-22. Official NVIDIA BF16 standalone draft model (1,504,786,048 B, 0.75B params). Alpha fitted to SPEED-Bench qualitative mean tau=3.92 at block size 16 (long-context 32k tau=3.60); trained at 12,288 context. Transfer to other workloads requires calibration.",
+            exact_weight_bytes=1_504_786_048,
+            active_params=752_393_024,
+            supported_ks=(15,),
+            proposed_tokens=15,
+            verify_anchor_positions=1,
+            draft_compute_precision="bf16",
+            draft_kv_heads=2,
+            draft_head_dim=256,
+            draft_kv_bytes=2.0,
+        ),
+        SpeculativeProfile(
+            label="NVIDIA Llama-3.2-1B Draft (SPEED-Bench)",
+            method="draft_model",
+            draft_params=1_481_705_472,
+            draft_layers=16,
+            parallel_draft=False,
+            default_k=15,
+            acceptance_alpha=0.7087887720283081,
+            kv_overhead=0.0,
+            source="https://huggingface.co/nvidia/Llama-3.2-1B-Qwen3.8-27B-Draft/tree/a01c05f41e2cdaf1920433647f69021e03aca523",
+            note="Captured 2026-11-22. Official NVIDIA BF16 cross-family standalone draft model (2,963,410,944 B, 1.48B params, 128K context). Alpha fitted to SPEED-Bench qualitative mean tau=3.42 at block size 16 (long-context 32k tau=3.07). Transfer to other workloads requires calibration.",
+            exact_weight_bytes=2_963_410_944,
+            active_params=1_481_705_472,
+            supported_ks=(15,),
+            proposed_tokens=15,
+            verify_anchor_positions=1,
+            draft_compute_precision="bf16",
+            draft_kv_heads=8,
+            draft_head_dim=64,
+            draft_kv_bytes=2.0,
+        ),
+    ),
+)

@@ -1,34 +1,58 @@
-"""Primary-source hosted pricing snapshot captured 2026-11-11.
+"""Primary-source hosted pricing snapshot captured 2026-11-11 and refreshed 2026-11-22.
 
 Quality/verbosity are explicit predecessor proxies, assigned by cloud.py.
 Rates are USD per million tokens; storage is USD per million token-hours.
 """
 
 CLOUD_RELEASE_PROXIES = {
+    "gpt-6.2-astra": "gpt-6-astra",
+    "gpt-6.2-sol": "gpt-5.6-sol",
     "gpt-6.1-sol": "gpt-5.6-sol",
     "gpt-6.1-terra": "gpt-5.6-terra",
     "gpt-6-luna": "gpt-5.6-luna",
     "claude-fable-5.2": "claude-fable",
     "gemini-4-carbon": "gemini-pro",
+    "gemini-4-neon": "gemini-pro",
+    "gemini-4-hydrogen": "gemini-3.8-flash",
     "gemini-4-argon": "gemini-pro",
     "grok-4.7": "grok-4.6",
     "minimax-m3.1-flash": "deepseek-v4-flash",
+    "qwen4-max": "deepseek-v4-pro",
 }
+
+_CAPTURED_20261122 = frozenset(
+    {"gpt-6.2-astra", "gpt-6.2-sol", "gemini-4-neon", "gemini-4-hydrogen", "qwen4-max"}
+)
 
 
 def apply_cloud_release_updates(models: dict, preview: dict) -> None:
     """Keep stable old identities and current/historical price snapshots separate."""
     captured = "2026-11-11"
+    captured_nov22 = "2026-11-22"
     proxy_note = (
         "Quality and verbosity use an uncalibrated predecessor/deployment-class proxy; "
         "they are not measurements of this release."
     )
-    for suffix, parent, released, inp, cached, out in (
-        ("6.1-sol", "gpt-5.6-sol", "2026-09-29", 2.0, 0.10, 10.0),
-        ("6.1-terra", "gpt-5.6-terra", "2026-10-26", 1.0, 0.05, 5.0),
-        ("6-luna", "gpt-5.6-luna", "2026-09-22", 0.10, 0.01, 0.50),
+    for suffix, parent, released, inp, cached, out, supports_flex, has_ultrafast in (
+        ("6.2-astra", "gpt-6-astra", "2026-11-17", 8.0, 0.40, 40.0, False, True),
+        ("6.2-sol", "gpt-5.6-sol", "2026-11-17", 2.0, 0.10, 10.0, False, True),
+        ("6.1-sol", "gpt-5.6-sol", "2026-09-29", 2.0, 0.10, 10.0, True, True),
+        ("6.1-terra", "gpt-5.6-terra", "2026-10-26", 1.0, 0.05, 5.0, True, False),
+        ("6-luna", "gpt-5.6-luna", "2026-09-22", 0.10, 0.01, 0.50, True, False),
     ):
         key = f"gpt-{suffix}"
+        multipliers = {"fast": 2.0, "batch": 0.5}
+        tiers = ["standard", "fast", "batch"]
+        if supports_flex:
+            multipliers["flex"] = 0.5
+            tiers.append("flex")
+        if suffix in {"6.2-astra", "6.2-sol", "6.1-terra", "6-luna"}:
+            multipliers["background_2h"] = 0.7
+            multipliers["background_8h"] = 0.6
+            tiers.extend(("background_2h", "background_8h"))
+        if has_ultrafast:
+            multipliers["ultrafast"] = 3.0
+            tiers.append("ultrafast")
         models[key] = {
             "label": "GPT-" + suffix.replace("-", " ").title(),
             "vendor": "OpenAI",
@@ -49,15 +73,27 @@ def apply_cloud_release_updates(models: dict, preview: dict) -> None:
             "max_context_tokens": 1_050_000,
             "max_input_tokens": 922_000,
             "max_output_tokens": 128_000,
-            "service_tier_price_multipliers": {"fast": 2.0, "batch": 0.5, "flex": 0.5},
-            "supported_service_tiers": ("standard", "fast", "batch", "flex"),
+            "service_tier_price_multipliers": multipliers,
+            "supported_service_tiers": tuple(tiers),
             "region_price_multipliers": {"regional": 1.1},
             "pricing_source": f"https://developers.openai.com/api/docs/models/{key}",
-            "price_note": proxy_note,
+            "price_note": (
+                "Ultrafast promotion is 3x Standard through 2027-02-28 (6x starting 2027-03-01). "
+                if has_ultrafast
+                else ""
+            )
+            + (
+                "Flex processing is winding down and unsupported on new GPT-6.2 models. "
+                if not supports_flex
+                else ""
+            )
+            + proxy_note,
         }
-        if suffix == "6.1-sol":
-            models[key]["service_tier_price_multipliers"]["ultrafast"] = 6.0
-            models[key]["supported_service_tiers"] += ("ultrafast",)
+        if has_ultrafast:
+            models[key]["future_pricing"] = {
+                "effective_at": "2027-03-01",
+                "service_tier_price_multipliers": {**multipliers, "ultrafast": 6.0},
+            }
         # Existing releases keep their own identities and captured prices.
         models[parent].update(max_input_tokens=922_000, max_output_tokens=128_000)
     for key, row in models.items():
@@ -112,6 +148,33 @@ def apply_cloud_release_updates(models: dict, preview: dict) -> None:
             "context. Ordinary synchronous output cap; multihop long-decode "
             "continuation and repeated-input billing are not simulated. " + proxy_note,
         }
+    for variant, released, inp, cached, out in (
+        ("neon", "2026-11-18", 3.0, 0.15, 15.0),
+        ("hydrogen", "2026-11-12", 1.5, 0.075, 7.5),
+    ):
+        key = f"gemini-4-{variant}"
+        models[key] = {
+            "label": f"Gemini 4 {variant.title()}",
+            "vendor": "Google",
+            "api_model": key,
+            "released_at": released,
+            "in_per_m": inp,
+            "cached_in_per_m": cached,
+            "out_per_m": out,
+            "max_context_tokens": 1_048_576,
+            "max_output_tokens": 65_536,
+            "cache_mode": "implicit_only",
+            "supported_service_tiers": ("standard", "batch", "flex", "priority"),
+            "service_tier_price_multipliers": {"batch": 0.5, "flex": 0.5, "priority": 1.8},
+            "pricing_source": "https://aistudio.google.com/docs/pricing",
+            "price_note": "Standard GA rates. Unified input/thinking/output context. Ordinary "
+            "synchronous output cap; multihop long-decode continuation and repeated-input "
+            "billing are not simulated. " + proxy_note,
+        }
+    models["gemini-3.7-flash"]["price_note"] = (
+        "Deprecated 2026-10-08; retained for saved-scenario compatibility. "
+        "Promotional rates published through 2026-12-31."
+    )
     models["grok-4.7"] = {
         "label": "Grok 4.7",
         "vendor": "xAI",
@@ -147,9 +210,30 @@ def apply_cloud_release_updates(models: dict, preview: dict) -> None:
         "price_note": "Native MiniMax endpoint; output maximum from its official OpenAPI. "
         + proxy_note,
     }
+    models["qwen4-max"] = {
+        "label": "Qwen4-Max",
+        "vendor": "Alibaba",
+        "api_model": "qwen4-max",
+        "released_at": "2026-11-16",
+        "in_per_m": 1.50,
+        "cached_in_per_m": 0.075,
+        "out_per_m": 4.50,
+        "cache_write_per_m": 1.875,
+        "cache_write_1h_per_m": 3.00,
+        "default_cache_write_ttl": "5m",
+        "max_context_tokens": 1_000_000,
+        "supported_service_tiers": ("standard", "batch"),
+        "service_tier_price_multipliers": {"batch": 0.5},
+        "region_price_multipliers": {"global": 1.413 / 1.50},
+        "pricing_source": "https://www.alibabacloud.com/help/en/model-studio/model-pricing",
+        "price_note": "Alibaba Cloud Model Studio International (Singapore) list rates "
+        "($1.50/$0.075/$4.50; 5m write $1.875, 1h write $3.00). Global/Beijing region "
+        "rates are $1.413/$0.071/$4.24 (Batch $0.707/$2.12). Max output cap unverified "
+        "in public pricing table. " + proxy_note,
+    }
     for key in CLOUD_RELEASE_PROXIES:
         models[key].update(
-            pricing_captured_at=captured,
+            pricing_captured_at=captured_nov22 if key in _CAPTURED_20261122 else captured,
             quality=0.5,
             token_efficiency=1.0,
             capabilities=("tools", "ctx_128k", "images", "reasoning"),

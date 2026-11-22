@@ -687,8 +687,10 @@ AA_QUALITY_PLACEHOLDER: frozenset[str] = frozenset(
         "ms32",
         # K3.1 Pro launch has no retained comparable AA quality/verbosity anchor.
         "kimi-k3.1-pro",
-        # November open release has no directly comparable independent quality anchor.
+        # November open releases have no directly comparable independent quality anchors.
         "mistral-large-4",
+        "inkling-2-small",
+        "inkling-2-mini",
         # Pinned October release batch; vendor protocols are not independent AA anchors.
         "minimax-m3.1-flash",
         "nanbeige43-33b",

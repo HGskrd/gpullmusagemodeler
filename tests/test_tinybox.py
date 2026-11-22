@@ -18,7 +18,7 @@ from web.agent_contract import EXAMPLE_REQUEST
     [
         ("TINYBOX_RED_FLASH", 22000, 6, 32e9, 210, 32e9),
         ("TINYBOX_RED_KIMI", 30000, 4, 32e9, 300, 64e9),
-        ("TINYBOX_RED_WHALE", 50000, 14, 32e9, 210, 32e9),
+        ("TINYBOX_RED_WHALE", 51000, 14, 32e9, 210, 32e9),
     ],
 )
 def test_presets_keep_per_gpu_geometry_and_complete_system_cost(
@@ -54,7 +54,7 @@ def test_all_offered_options_and_only_compatible_combinations_are_represented():
     base = next(c for c in TINYBOX_CONFIGS if c.key == "TINYBOX_1700_G4_32_BOOT_NONE")
     assert base.price == 7000
     upgraded = TINYBOX_GPU_CONFIGS["TINYBOX_3400_G5_192_RAID16_6X9070XT"]
-    assert upgraded.price == 33000
+    assert upgraded.price == 34000
     assert GPUS[upgraded.key].mem == 16e9
     assert GPUS[upgraded.key].system_memory_gb == 192
 
