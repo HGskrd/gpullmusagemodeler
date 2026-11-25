@@ -1,6 +1,7 @@
 """Source-backed numerical and serving-contract regressions for the November audit."""
 
 from dataclasses import replace
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
@@ -9,6 +10,7 @@ from calc import (
     EfficiencyParams,
     _decode_attention_work,
     attention_kv_read_bytes_for_sequence,
+    communication_breakdown,
     compute_decision,
     compute_embedding,
     compute_memory,
@@ -22,9 +24,11 @@ from calc import (
 )
 from data import CLOUD_MODELS, GPUS, MODEL_ARTIFACT_PROFILES, MODELS, PRECISION_SPECS
 from data.artifacts import artifact_profiles, configured_model, default_artifact_id
+from data.hardware import GPU_TCO_PRICE_USD
+from data.hardware_picker import hardware_choices
 from data.specs import _storage_bytes
 from data.tinybox import TINYBOX_GPU_CONFIGS
-from engine.economics import _cloud_price_per_m_in_preset
+from engine.economics import _cloud_price_per_m_in_preset, current_cloud_pricing_revision
 
 
 def configured(key, precision="bf16", **settings):
@@ -519,3 +523,120 @@ def test_november_22_local_models_looped_kv_artifacts_and_drafts():
     assert {"nvidia/Qwen3.8-27B-NVFP4", "nvidia/Qwen3.8-27B-NVFP4-QAD"} <= qwen_art_repos
     draft_methods = [p.method for p in MODELS["qwen38-27b"].speculative_profiles]
     assert draft_methods.count("draft_model") == 3
+
+
+def test_cache_write_is_a_separate_input_bucket_and_model_studio_batch_excludes_caching():
+    astra = CLOUD_MODELS["gpt-6.2-astra"]
+    row, normalized = cloud_quote(astra, in_len=4096, cache_write_tokens=1024)
+    assert row["billed_input_tokens"] == 3072
+    assert row["billed_cached_input_tokens"] == 0
+    assert row["billed_cache_write_tokens"] == 1024
+    assert normalized * 4096 / 1e6 * row["success_rate"] == pytest.approx(0.034816)
+
+    long, normalized = cloud_quote(
+        astra, in_len=280_000, hit=0.25, cache_write_tokens=30_000, cache_write_ttl="12h"
+    )
+    assert long["effective_cache_write_per_m"] == 40
+    assert normalized * 280_000 / 1e6 * long["success_rate"] == pytest.approx(
+        (180_000 * 16 + 70_000 * 0.80 + 30_000 * 40) / 1e6
+    )
+    capped, _ = cloud_quote(astra, in_len=4096, hit=0.75, cache_write_tokens=2048)
+    assert capped["billed_cache_write_tokens"] == 1024
+    assert capped["billed_input_tokens"] == 0
+
+    qwen = CLOUD_MODELS["qwen4-max"]
+    batch, batch_cost = cloud_quote(qwen, hit=1, cloud_service_tier="batch")
+    assert batch["billed_cached_input_tokens"] == 0
+    assert batch_cost == cloud_quote(qwen, hit=0, cloud_service_tier="batch")[1]
+    assert cloud_quote(qwen, cache_write_tokens=100, cloud_service_tier="batch")[0] is None
+
+
+def test_current_quotes_roll_over_and_historical_prices_and_overrides_are_preserved():
+    carbon = CLOUD_MODELS["gemini-4-carbon"]
+    sol = CLOUD_MODELS["gpt-6.2-sol"]
+    with patch("engine.economics.datetime", wraps=datetime) as clock:
+        clock.now.return_value = datetime(2026, 11, 30, 23, 59, tzinfo=timezone.utc)
+        assert cloud_quote(carbon)[0]["effective_in_per_m"] == 2
+        before = current_cloud_pricing_revision()
+        clock.now.return_value = datetime(2026, 12, 1, tzinfo=timezone.utc)
+        assert cloud_quote(carbon)[0]["effective_in_per_m"] == 4
+        assert current_cloud_pricing_revision() != before
+        assert cloud_quote(carbon, pricing_as_of="2026-11-30")[0]["effective_in_per_m"] == 2
+        override = {**carbon, "price_source": "override", "in_per_m": 3}
+        assert cloud_quote(override)[0]["effective_in_per_m"] == 3
+        clock.now.return_value = datetime(2027, 3, 1, tzinfo=timezone.utc)
+        assert cloud_quote(sol, cloud_service_tier="ultrafast")[1] == pytest.approx(
+            6 * cloud_quote(sol)[1]
+        )
+
+
+def test_tokenhub_flash_rolls_over_at_noon_beijing():
+    flash = CLOUD_MODELS["hy4-flash"]
+    assert flash["api_model"] == "hy4-flash"
+    assert flash["max_context_tokens"] == 1_048_576
+    before, before_price = cloud_quote(flash, pricing_as_of="2026-11-30T03:59:59Z")
+    after, after_price = cloud_quote(flash, pricing_as_of="2026-11-30T04:00:00Z")
+    assert before["price_effective_at"] == "catalog_capture"
+    assert after["price_effective_at"] == "2026-11-30T12:00:00+08:00"
+    assert after_price == pytest.approx(2 * before_price)
+    assert cloud_quote(flash, pricing_as_of="2026-11-15")[0] is None
+
+
+@pytest.mark.parametrize(
+    "key,precision,target",
+    [
+        ("hy4", "bf16", 1_548_929_595_126 - 6_582_933_122),
+        ("hy4", "fp8", 786_294_748_086 - 3_367_867_202),
+        ("hy4-flash", "bf16", 440_520_833_910 - 1_691_372_866),
+        ("hy4-flash", "fp8", 287_073_129_974 - 973_185_986),
+        ("ling32-air", "fp8", 129_263_339_472 - 3_087_373_440),
+        ("mimo-v2.6-flash-rl", "nvfp4", 181_128_778_624 - 1_189_400_448),
+    ],
+)
+def test_late_november_checkpoint_footprints_and_host_placement(key, precision, target):
+    model = configured(key, precision)
+    host = 126_723_164_960 if key == "hy4-flash" else 0
+    assert model.weight_bytes(precision) == target
+    assert model.system_ram_weight_bytes == host
+    assert model.gpu_weight_bytes(precision) == target - host
+    assert model.kv_cache_bytes_per_elem(precision) == 2
+
+
+def test_hy4_flash_kv_residency_and_decode_gathers_are_distinct():
+    model = configured("hy4-flash")
+    seq = 4097
+    main_row = 2 * (512 + 64)
+    index = 12 * 1025 * 128 * 2
+    local = 30 * 512 * main_row
+    assert kv_cache_bytes_for_sequence(model, seq, "bf16") == 12 * seq * main_row + local + index
+    assert attention_kv_read_bytes_for_sequence(model, seq, "bf16") == (
+        12 * 2048 * main_row + local + index
+    )
+
+
+def test_new_gpu_profiles_preserve_sku_and_quote_boundaries():
+    choices = {choice.key: choice for choice in hardware_choices()}
+    rack = GPUS["HELIOS_MI450X"]
+    assert rack.mem == 288e9
+    assert rack.bw == 23.3e12
+    assert rack.min_count == rack.count_multiple == rack.node_size == 72
+    assert rack.default_tco_per_gpu_hour == 0
+    assert "Quote required" in rack.price_note
+    assert rack.key not in choices
+    for key, memory, bandwidth, price in (
+        ("RTX_SPARK_ASUS_GR1X_64", 64, 300e9, 4499.99),
+        ("RTX_SPARK_MSI_EDGEMESA_128", 128, 273e9, 7499),
+    ):
+        gpu = GPUS[key]
+        assert gpu.mem_gb == gpu.system_memory_gb == memory
+        assert gpu.bw == bandwidth
+        assert gpu.node_size == 1 and gpu.scale_up_p2p_bw_bidir == 0
+        model = MODELS["q08"]
+        efficiency = EfficiencyParams()
+        comm = communication_breakdown(model, 1, 2, 16, 128, gpu, efficiency)
+        assert comm.pp_cross_node_boundaries == 1
+        assert comm.pp_boundary == pytest.approx(
+            16 * model.hidden_size * 2 / (gpu.inter_node_bw * efficiency.bw_eff) + 3e-6
+        )
+        assert GPU_TCO_PRICE_USD[key] == price
+        assert choices[key].reviewed_at == "2026-11-25"

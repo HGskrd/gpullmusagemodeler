@@ -6,7 +6,7 @@ import copy
 import math
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any, Optional, cast
 
 import cloud_policy
@@ -30,6 +30,7 @@ from calc import (
     valid_strategies,
 )
 from data import (
+    CLOUD_MODELS,
     CORPO_CLOUD_DEFAULT,
     DAY_SHAPES,
     DEFAULT_COUNTRY,
@@ -1426,26 +1427,45 @@ def _scheduled_cloud_price(cloud: dict, field: str, profile: dict) -> tuple[floa
     return max(float(cloud.get(f"{band}_{field}", cloud[field])), 0.0), band
 
 
+def _pricing_time(value: str) -> datetime:
+    """Interpret date-only pricing boundaries as midnight UTC."""
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(value)
+    return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 def _dated_cloud_pricing(cloud: dict, profile: dict) -> tuple[dict, str]:
-    """Resolve a captured price history or successor for an explicitly dated workload."""
-    raw_as_of = profile.get("pricing_as_of")
+    """Resolve current or historical rates, retaining customer price overrides."""
     successor = cloud.get("future_pricing")
-    if not raw_as_of or cloud.get("price_source") == "override":
-        return cloud, "catalog_capture"
-    try:
-        as_of = date.fromisoformat(str(raw_as_of))
-    except ValueError:
-        return cloud, "catalog_capture"
     history = list(cloud.get("pricing_history", ()))
     if isinstance(successor, dict):
         history.append(successor)
-    eligible = [row for row in history if str(row.get("effective_at", "")) <= as_of.isoformat()]
+    if not history or cloud.get("price_source") == "override":
+        return cloud, "catalog_capture"
+    raw_as_of = profile.get("pricing_as_of")
+    try:
+        as_of = _pricing_time(str(raw_as_of)) if raw_as_of else datetime.now(timezone.utc)
+    except ValueError:
+        return cloud, "catalog_capture"
+    dated_rows = [(_pricing_time(row["effective_at"]), row) for row in history]
+    eligible = [(effective, row) for effective, row in dated_rows if effective <= as_of]
     if not eligible:
         return cloud, "catalog_capture"
-    selected = max(eligible, key=lambda row: str(row["effective_at"]))
+    _, selected = max(eligible, key=lambda pair: pair[0])
     prices = dict(cloud)
     prices.update({key: value for key, value in selected.items() if key != "effective_at"})
     return prices, str(selected["effective_at"])
+
+
+def current_cloud_pricing_revision() -> tuple[str, ...]:
+    """Invalidate economics caches when a catalog tariff crosses a boundary."""
+    profile = {"pricing_as_of": datetime.now(timezone.utc).isoformat()}
+    return tuple(
+        _dated_cloud_pricing(row, profile)[1]
+        for row in CLOUD_MODELS.values()
+        if row.get("pricing_history") or row.get("future_pricing")
+    )
 
 
 def _cloud_price_per_m_in_preset(
@@ -1469,10 +1489,10 @@ def _cloud_price_per_m_in_preset(
     exists in the catalog — i.e. spillover is *blocked* for this project."""
     in_len = float(profile["in_len"])
     out_len = float(profile["out_len"])
-    cached = in_len * min(max(prefix_hit_rate, 0.0), 1.0)
-    uncached = max(0.0, in_len - cached)
+    potential_cached = in_len * min(max(prefix_hit_rate, 0.0), 1.0)
     tokens_per_req = max(1.0, in_len + out_len)
-    cache_write_tokens = max(float(profile.get("cache_write_tokens", 0.0)), 0.0)
+    requested_cache_write = max(float(profile.get("cache_write_tokens", 0.0)), 0.0)
+    service_tier = str(profile.get("cloud_service_tier", "standard"))
     cache_storage_token_hours = max(float(profile.get("cache_storage_token_hours", 0.0)), 0.0)
 
     best: Optional[tuple[float, dict]] = None
@@ -1481,10 +1501,16 @@ def _cloud_price_per_m_in_preset(
         as_of = profile.get("pricing_as_of")
         if as_of and cloud.get("released_at") and str(as_of) < str(cloud["released_at"]):
             continue
-        if priced_cloud.get("cache_mode") == "implicit_only" and (
-            cache_write_tokens > 0 or cache_storage_token_hours > 0
+        cache_disabled = service_tier in priced_cloud.get("cache_disabled_service_tiers", ())
+        if (cache_disabled or priced_cloud.get("cache_mode") == "implicit_only") and (
+            requested_cache_write > 0 or cache_storage_token_hours > 0
         ):
             continue
+        cached = 0.0 if cache_disabled else potential_cached
+        # Cache creation uses the remaining input budget. Provider write rates
+        # include the input charge for these tokens.
+        cache_write_tokens = min(requested_cache_write, max(0.0, in_len - cached))
+        uncached = max(0.0, in_len - cached - cache_write_tokens)
         # Most cloud entries carry no capability list. Missing data is unknown, not
         # "can do nothing": such entries pass the gate and are flagged unverified.
         listed_capabilities = cloud.get("capabilities")
@@ -1536,7 +1562,6 @@ def _cloud_price_per_m_in_preset(
             else 0.0
         )
         cache_storage_price = max(float(priced_cloud.get("cache_storage_per_m_hour", 0.0)), 0.0)
-        service_tier = str(profile.get("cloud_service_tier", "standard"))
         supported_tiers = priced_cloud.get("supported_service_tiers")
         if supported_tiers is not None and service_tier not in supported_tiers:
             continue
@@ -1609,6 +1634,9 @@ def _cloud_price_per_m_in_preset(
                     "effective_price_multiplier": price_multiplier,
                     "effective_component_multipliers": component_multipliers,
                     "effective_cache_write_ttl": ttl,
+                    "billed_input_tokens": uncached,
+                    "billed_cached_input_tokens": cached,
+                    "billed_cache_write_tokens": cache_write_tokens,
                     "actual_output_tokens": actual_output,
                     "holiday_calendar_unverified": bool(
                         priced_cloud.get("peak_schedule_utc")

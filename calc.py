@@ -1612,8 +1612,8 @@ def _pp_boundary_oh(
     if intra + cross <= 0:
         return 0.0, 0
     msg = batch_tokens * m.hidden_size * 2
-    intra_time = intra * (msg / (g.scale_up_collective_bw * bw_eff))
-    cross_time = cross * (msg / (g.inter_node_bw * bw_eff))
+    intra_time = intra * (msg / (g.scale_up_collective_bw * bw_eff)) if intra else 0.0
+    cross_time = cross * (msg / (g.inter_node_bw * bw_eff)) if cross else 0.0
     latency = (intra + cross) * 3e-6
     return intra_time + cross_time + latency, cross
 

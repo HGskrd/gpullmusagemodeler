@@ -1086,3 +1086,237 @@ NOVEMBER_MODELS["qwen38-27b"] = replace(
         ),
     ),
 )
+
+
+# November 25 audit. Target footprints retain modality weights and exclude
+# separately identified draft modules. Drafters need runtime calibration.
+CAPTURED_AT_NOV25 = "2026-11-25"
+_hy4_repo = "tencent/Hy4"
+_hy4_rev = "c10c0de5b6f850703fb0a90e65d1c32b558b9167"
+_hy4_note = (
+    "Released multimodal Hy4: 770B text backbone, 49B active, and 21 full indexers "
+    "for 78 gated DSA layers with full-context MLA residency. Text capacity retains "
+    "2.470 GB of modality tensors and excludes DFly2 (6.583 GB BF16 / 3.368 GB FP8). "
+    "Four iHC streams, vision latency and the shared-cache drafter are uncalibrated."
+)
+NOVEMBER_MODELS["hy4"] = replace(
+    TEXT_MODELS["hy4-preview"],
+    key="hy4",
+    name="Hy4 770B-A49B",
+    quality_confidence=0.0,
+    extra_capabilities=frozenset({"images", "reasoning"}),
+    sparse_indexer_compression_ratio=1,
+    sparse_indexer_cache_elements_per_compressed_token=128,
+    attention_label="78 gated DSA layers · 21 full IndexCache producers · MLA",
+    native_precision="bf16",
+    native_precision_label="Official BF16 target",
+    native_precision_note=_hy4_note,
+    architecture_note=_hy4_note,
+)
+_source("hy4", _hy4_repo, _hy4_rev, _hy4_note, captured_at=CAPTURED_AT_NOV25)
+
+_hy4_flash_repo = "tencent/Hy4-flash"
+_hy4_flash_rev = "eccd3123eec73f2040f4c9ed0de1883593470510"
+_hy4_flash_runtime = "https://recipes.vllm.ai/tencent/Hy4-flash"
+_hy4_flash_note = (
+    "155.5B backbone, 63.5B Engram parameters and 11.3B active text parameters. "
+    "IndexPool groups four source tokens per shared 128-element index key; the 12 sparse layers retain "
+    "full-context main MLA KV, and 30 layers use a 512-token window. Target retains "
+    "0.933 GB of modality tensors and excludes DFly2 (1.691 GB BF16 / 0.973 GB FP8). "
+    "Fit assumes host offload of 126.723 GB of Engram tables per model copy, as supported "
+    "by the vLLM recipe. Runtime and shared-memory capacity, host transfers, iHC, "
+    "vision latency and draft acceptance need calibration."
+)
+NOVEMBER_MODELS["hy4-flash"] = Model(
+    key="hy4-flash",
+    name="Hy4 flash 220B-A11.3B",
+    cat="Tencent",
+    color="#00A6A6",
+    total_params=220e9,
+    active_params=11.3e9,
+    is_moe=True,
+    layers=42,
+    num_heads=32,
+    kv_heads=32,
+    head_dim=256,
+    is_mla=True,
+    mla_kv_dim=512,
+    mla_rope_dim=64,
+    mla_tp_supported=True,
+    hidden_dim=3072,
+    attention_value_head_dim=256,
+    local_attention_layers=30,
+    local_attention_window=512,
+    local_attention_heads=64,
+    sparse_attention_top_k=2048,
+    sparse_indexer_heads=16,
+    sparse_indexer_head_dim=128,
+    sparse_indexer_layers=12,
+    sparse_indexer_compression_ratio=4,
+    sparse_indexer_cache_elements_per_compressed_token=128,
+    moe_latent_dim=1536,
+    moe_intermediate_dim=1536,
+    moe_routed_experts=512,
+    moe_active_experts=16,
+    moe_shared_experts=1,
+    conditional_memory_params=63_360_615_936,
+    conditional_memory_weight_bytes=126_723_164_960,
+    conditional_memory_lookup_bytes_per_token=4 * 2 * 768 * 2,
+    conditional_memory_layers=(1, 11, 21, 31),
+    conditional_memory_on_host=True,
+    max_context_tokens=1_048_576,
+    quality_confidence=0.0,
+    extra_capabilities=frozenset({"images", "reasoning"}),
+    attention_label="12 IndexPool sparse MLA + 30 SWA 512 · host Engram",
+    native_precision="bf16",
+    native_precision_label="Official BF16 target",
+    native_precision_note=_hy4_flash_note,
+    architecture_note=_hy4_flash_note,
+)
+_source(
+    "hy4-flash", _hy4_flash_repo, _hy4_flash_rev, _hy4_flash_note, captured_at=CAPTURED_AT_NOV25
+)
+
+_ling_key = "ling32-air"
+_ling_repo = "inclusionAI/Ling-3.2-air"
+_ling_rev = "ff099487f6f57165e6fa9386ad61fddfafc78b76"
+_ling_note = (
+    "124B / 5.5B publisher counts. The FP8 target includes 0.832 GB of BF16 vision "
+    "tensors and excludes the 3.087 GB next-token module. Conservative FP32 KDA "
+    "state and BF16 convolution buffers. The publisher reports Intelligence Index "
+    "v5.0.1 of 23; routing quality and verbosity remain uncalibrated. SGLang's "
+    "published four-GPU recipe uses a development image; throughput and MTP acceptance "
+    "are workload dependent."
+)
+NOVEMBER_MODELS[_ling_key] = replace(
+    RELEASE_MODELS["ling31-flash-560b-a25b"],
+    key=_ling_key,
+    name="Ling 3.2 Air 124B-A5.5B",
+    total_params=124e9,
+    active_params=5.5e9,
+    layers=42,
+    num_heads=32,
+    kv_heads=32,
+    hidden_dim=2560,
+    attention_layers=7,
+    kv_layers=7,
+    linear_attention_layers=35,
+    linear_attention_heads=32,
+    linear_attention_k_heads=32,
+    moe_intermediate_dim=768,
+    mla_tp_supported=True,
+    quality_confidence=0.0,
+    attention_label="35 KDA + 7 gated MLA · 262K context",
+    capabilities_override=frozenset({"tools", "reasoning", "ctx_128k", "images"}),
+    native_precision_label="Official block FP8 target",
+    native_precision_note=_ling_note,
+    architecture_note=_ling_note,
+)
+_source(_ling_key, _ling_repo, _ling_rev, _ling_note, captured_at=CAPTURED_AT_NOV25)
+
+for (
+    _key,
+    _precision,
+    _repo,
+    _rev,
+    _indexed_bytes,
+    _draft_bytes,
+    _routed_params,
+    _runtime,
+) in (
+    (
+        "hy4",
+        "bf16",
+        _hy4_repo,
+        _hy4_rev,
+        1_548_929_595_126,
+        6_582_933_122,
+        0,
+        "https://github.com/Tencent-Hunyuan/Hy4",
+    ),
+    (
+        "hy4",
+        "fp8",
+        "tencent/Hy4-FP8",
+        "d063b5853ecf56e0776266dab28305fc17a137cc",
+        786_294_748_086,
+        3_367_867_202,
+        77 * 8 * 3 * 6144 * 2048,
+        "https://github.com/Tencent-Hunyuan/Hy4",
+    ),
+    (
+        "hy4-flash",
+        "bf16",
+        _hy4_flash_repo,
+        _hy4_flash_rev,
+        440_520_833_910,
+        1_691_372_866,
+        0,
+        _hy4_flash_runtime,
+    ),
+    (
+        "hy4-flash",
+        "fp8",
+        "tencent/Hy4-flash-FP8",
+        "8a1b19890d3533aefc730f8b41f4b55f50cc31c0",
+        287_073_129_974,
+        973_185_986,
+        41 * 16 * 3 * 1536 * 1536,
+        _hy4_flash_runtime,
+    ),
+    (
+        _ling_key,
+        "fp8",
+        _ling_repo,
+        _ling_rev,
+        129_263_339_472,
+        3_087_373_440,
+        40 * 8 * 3 * 2560 * 768,
+        f"https://huggingface.co/{_ling_repo}",
+    ),
+):
+    _model = NOVEMBER_MODELS[_key]
+    _routed_share = _routed_params / _model.active_params
+    shares = {"fp8": _routed_share, "bf16": 1.0 - _routed_share} if _routed_share else {"bf16": 1.0}
+    _profile(
+        _key,
+        _precision,
+        _repo,
+        _rev,
+        _indexed_bytes - _draft_bytes,
+        None,
+        shares=shares,
+        active_bytes=_model.active_params * 2 - _routed_params,
+        note=(
+            f"{_indexed_bytes:,} indexed bytes; {_draft_bytes:,} draft bytes excluded. "
+            "FP8 traffic uses routed experts at 1 B/parameter and other operators "
+            "at 2 B/parameter as an uncalibrated proxy. " + _model.architecture_note
+        ),
+        runtime=_runtime,
+        captured_at=CAPTURED_AT_NOV25,
+    )
+
+_mimo_nvfp4_repo = "nvidia/MiMo-V2.6-Flash-RL-NVFP4"
+_mimo_nvfp4_routed_params = 47 * 8 * 3 * 4096 * 2048
+_mimo_nvfp4_routed_share = _mimo_nvfp4_routed_params / 15e9
+_profile(
+    "mimo-v2.6-flash-rl",
+    "nvfp4",
+    _mimo_nvfp4_repo,
+    "a8e51405a16b441ff0a08ef272ec6256d6ac822a",
+    181_128_778_624 - 1_189_400_448,
+    None,
+    shares={"nvfp4": _mimo_nvfp4_routed_share, "bf16": 1.0 - _mimo_nvfp4_routed_share},
+    active_bytes=_mimo_nvfp4_routed_params * 0.5625 + (15e9 - _mimo_nvfp4_routed_params) * 2,
+    label="NVIDIA ModelOpt NVFP4 target",
+    note=(
+        "November 20 artifact. Exact target bytes from the main checkpoint index "
+        "minus 1.189 GB of draft tensors; 1.927 GB of modality weights retained. "
+        "ModelOpt NVFP4 covers experts and attention QKV. Active traffic and compute "
+        "charge only routed experts at NVFP4 and use a BF16 proxy for other operators. "
+        "NVIDIA paired IFBench: 53.67 NVFP4 vs 54.13 source; Terminal-Bench 2.1: "
+        "87.22 vs 86.24. Vendor results do not update global routing quality."
+    ),
+    runtime=f"https://huggingface.co/{_mimo_nvfp4_repo} (vLLM nightly, Blackwell TP8 recipe)",
+    captured_at=CAPTURED_AT_NOV25,
+)

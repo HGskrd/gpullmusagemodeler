@@ -691,6 +691,9 @@ AA_QUALITY_PLACEHOLDER: frozenset[str] = frozenset(
         "mistral-large-4",
         "inkling-2-small",
         "inkling-2-mini",
+        "hy4",
+        "hy4-flash",
+        "ling32-air",
         # Pinned October release batch; vendor protocols are not independent AA anchors.
         "minimax-m3.1-flash",
         "nanbeige43-33b",

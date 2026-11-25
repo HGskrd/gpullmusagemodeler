@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-25
+
+- Corrected hosted input billing to charge ordinary input, cache reads and cache writes separately. Applied effective rates to default quotes and refreshed cached recommendations across cutovers. Model Studio file Batch uses uncached rates.
+- Added released Tencent Hy4 and Hy4 flash with pinned BF16 and FP8 target footprints, and TokenHub pricing with Beijing-time promotion cutoffs. Hy4 flash models host-resident Engram tables and separate IndexPool and sliding-window residency. Bundle sizes and uncalibrated draft assumptions are documented on the model cards.
+- Added inclusionAI Ling-3.2-air FP8 and NVIDIA ModelOpt NVFP4 for MiMo V2.6 Flash RL. The pinned target footprints keep modality tensors and exclude optional drafters.
+- Added the quote-only AMD Helios MI450X 72-GPU reference, refreshed MI455X availability, and added the ASUS GR1X 64 GB and MSI EdgeMesa 128 GB RTX Spark retail SKUs. Pipeline stages on separate single-device systems use the network bandwidth.
+
 ## 2026-11-22
 
 - Updated Tinybox 3400 W tall-case + second-PSU pricing from $1,000 to $2,000 across all 78 affected configurator combinations (64 GPU-populated profiles; `tinybox red whale` $50,000 → $51,000) to match live `tinybox.js`.

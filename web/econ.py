@@ -4,6 +4,7 @@ from flask import Blueprint, abort, current_app, g, render_template, request
 
 from engine.economics import (
     compute_revenue_projection,
+    current_cloud_pricing_revision,
 )
 from presentation.econ import compute_swap_recs, econ_payload
 from web.cache import FingerprintCache, scenario_fingerprint
@@ -71,7 +72,9 @@ def swaps():
     if state is None:
         return ""
     cache: FingerprintCache = current_app.extensions["swap_recommendation_cache"]
-    fingerprint = scenario_fingerprint(state) + repr([(am.uid, am.gpu_uid) for am in state.models])
+    fingerprint = scenario_fingerprint(state) + repr(
+        ([(am.uid, am.gpu_uid) for am in state.models], current_cloud_pricing_revision())
+    )
     cached = cache.get(fingerprint)
     if cached is None:
         p = compute_revenue_projection(state)
