@@ -75,6 +75,15 @@ class GPUCard:
     note: str | None = None
 
 
+RTX_SPARK_REVIEWED_AT = "2026-11-25"
+ASUS_GR1X_SPEC = "https://www.asus.com/displays-desktops/mini-pcs/proart-mini-pc-series/proart-gr1x-mini-pc/techspec/"
+ASUS_GR1X_BUY = "https://www.bestbuy.com/product/asus-proart-gr1x-agent-computer-nvidia-rtx-spark-n1x-20-core-2026-64gb-memory-1tb-storage-windows-11-home-black/JJGHGSF5H2/sku/6692907"
+MSI_EDGEMESA_BUY = "https://www.newegg.com/p/N82E16883151932"
+MI450X_SPEC = "https://www.amd.com/en/products/accelerators/instinct/mi400/mi450x.html"
+AMD_MI400_AVAILABILITY = (
+    "https://newsroom.amd.com/documents/2026/11/84f4476b-f064-4f0f-957c-fe484853e178.pdf"
+)
+
 RADEON_GPU_SPECS_CAPTURED_AT = "2026-08-19"
 RADEON_GPU_SPEC_SOURCES = {
     "RadeonRX9070XT": "https://www.amd.com/en/products/graphics/desktops/radeon/9000-series/amd-radeon-rx-9070xt.html",
@@ -172,6 +181,35 @@ GPUS: dict[str, GPU] = {
         71150000000000.0,
         64e9,
         1,
+    ),
+    # N1X desktop compute uses the existing GB10 dense roofline proxy.
+    "RTX_SPARK_ASUS_GR1X_64": GPU(
+        "RTX_SPARK_ASUS_GR1X_64",
+        "ASUS ProArt GR1X N1X 64GB",
+        "nv",
+        64e9,
+        300e9,
+        125e12,
+        250e12,
+        0.0,
+        1,
+        system_memory_gb=64,
+        inter_node_bw=1.25e9,
+        price_note="US retail 64GB/1TB configuration at $4,499.99, reviewed 2026-11-25. Energy uses the published 140 W TDP as a proxy for wall power.",
+    ),
+    "RTX_SPARK_MSI_EDGEMESA_128": GPU(
+        "RTX_SPARK_MSI_EDGEMESA_128",
+        "MSI EdgeMesa N AI+ N1X 128GB",
+        "nv",
+        128e9,
+        273e9,
+        125e12,
+        250e12,
+        0.0,
+        1,
+        system_memory_gb=128,
+        inter_node_bw=1.25e9,
+        price_note="US retail X-005US 128GB/4TB configuration at $7,499, reviewed 2026-11-25. The 240 W adapter rating is an upper-bound TCO power proxy.",
     ),
     "DGX_SPARK": GPU(
         "DGX_SPARK", "DGX Spark GB10 128GB", "nv", 128e9, 273e9, 125e12, 250e12, 25e9, 1
@@ -278,7 +316,7 @@ GPUS: dict[str, GPU] = {
     ),
     "HELIOS_MI455X": GPU(
         "HELIOS_MI455X",
-        "AMD Helios Preview (72× MI455X) 432GB/GPU",
+        "AMD Helios (72× MI455X) 432GB/GPU",
         "amd",
         432e9,
         23.3e12,
@@ -288,6 +326,20 @@ GPUS: dict[str, GPU] = {
         72,
         min_count=72,
         count_multiple=72,
+    ),
+    "HELIOS_MI450X": GPU(
+        "HELIOS_MI450X",
+        "AMD Helios (72× MI450X) 288GB/GPU",
+        "amd",
+        288e9,
+        23.3e12,
+        5e15,
+        20.1e15,
+        3.6e12,
+        72,
+        min_count=72,
+        count_multiple=72,
+        inter_node_bw=300e9,  # 600 GB/s aggregate bidirectional per accelerator
     ),
     "MI400": GPU(
         "MI400",
@@ -588,6 +640,8 @@ GPU_FP4_FLOPS = {
     "RTXPRO5000_BW_72": 1071000000000000.0,
     "RTX5090": 1676000000000000.0,
     "DGX_SPARK": 500e12,
+    "RTX_SPARK_ASUS_GR1X_64": 500e12,
+    "RTX_SPARK_MSI_EDGEMESA_128": 500e12,
     "GB200": 10e15,
     "B200": 9e15,
     "B300": 15e15,
@@ -598,6 +652,7 @@ GPU_FP4_FLOPS = {
     "MI355X": 10.1e15,
     "MI455X": 40.3e15,
     "HELIOS_MI455X": 40.3e15,
+    "HELIOS_MI450X": 40.3e15,
     "MI400": 40.3e15,
 }
 # Published inference headline retained for display/provenance only. NVIDIA
@@ -625,6 +680,7 @@ GPU_TDP_WATTS = {
     "RTX4090": 450,
     "RTX3090": 350,
     "DGX_SPARK": 140,
+    "RTX_SPARK_ASUS_GR1X_64": 140,
     "GB200": 1200,
     "B200": 1000,
     "B300": 1400,
@@ -718,6 +774,8 @@ GPU_TCO_PRICE_USD: dict[str, float] = {
     "RTX4090": 2_264.0,
     "RTX3090": 1_144.0,
     "DGX_SPARK": 3_999.0,
+    "RTX_SPARK_ASUS_GR1X_64": 4_499.99,
+    "RTX_SPARK_MSI_EDGEMESA_128": 7_499.0,
     "A6000": 3_500.0,
     "A4000": 900.0,
     "A2000_MOBILE": 600.0,  # proxy: no standalone mobile-GPU price
@@ -730,6 +788,7 @@ GPU_TCO_PRICE_USD: dict[str, float] = {
     "MI355X": 27_500.0,  # proxy: liquid-cooled MI350X variant
     "MI455X": 5_250_000.0 / 72.0,
     "HELIOS_MI455X": 5_250_000.0 / 72.0,
+    "HELIOS_MI450X": 0.0,  # quote required
     "MI400": 5_250_000.0 / 72.0,
     "RadeonProW7900": 3_999.0,
     "RadeonRX9070XT": 599.0,  # official launch SEP; board-partner pricing varies
@@ -772,6 +831,9 @@ GPU_TCO_PRICE_USD: dict[str, float] = {
 GPU_TCO_COMPLETE_SYSTEMS = frozenset(
     {
         "DGX_SPARK",
+        "RTX_SPARK_ASUS_GR1X_64",
+        "RTX_SPARK_MSI_EDGEMESA_128",
+        "HELIOS_MI450X",
         "GB200",
         "GB300",
         "DGX_STATION_GB300",
@@ -792,7 +854,10 @@ GPU_TCO_COMPLETE_SYSTEMS = frozenset(
 # Rubin board power is intentionally unpublished in the performance catalog.  The
 # TCO default still needs an energy term, so use a conservative 2 kW per-GPU rack
 # proxy without turning that estimate into a published TDP claim.
-GPU_TCO_POWER_WATTS_OVERRIDE = {"RUBIN_NVL72": 2_000.0}
+GPU_TCO_POWER_WATTS_OVERRIDE = {
+    "RUBIN_NVL72": 2_000.0,
+    "RTX_SPARK_MSI_EDGEMESA_128": 240.0,
+}
 
 GPU_TCO_PRICE_SOURCES = {
     "NVIDIA current market": "https://gpupoet.com/gpu/price-compare",
@@ -801,6 +866,8 @@ GPU_TCO_PRICE_SOURCES = {
     "NVIDIA Rubin rack estimate": "https://www.tomshardware.com/tech-industry/artificial-intelligence/nvidias-memory-costs-soar-485-percent-latest-ai-systems-now-cost-usd7-8-million-to-build-memory-now-comprises-25-percent-of-the-total-cost-rubin-gpus-a-mere-usd50-000-apiece",
     "NVIDIA DGX Station channel pricing": "https://www.servethehome.com/nvidia-dgx-station-systems-available-at-last-gb300-gb200-workstations-for-your-desktop/",
     "NVIDIA RTX PRO official marketplace": "https://marketplace.nvidia.com/en-us/enterprise/laptops-workstations/nvidia-rtx-pro-6000-blackwell-workstation-edition/",
+    "ASUS ProArt GR1X 64GB US retail": ASUS_GR1X_BUY,
+    "MSI EdgeMesa X-005US 128GB US retail": MSI_EDGEMESA_BUY,
     "NVIDIA DGX Spark official marketplace": "https://marketplace.nvidia.com/en-us/enterprise/personal-ai-supercomputers/dgx-spark/",
     "NVIDIA Jetson Thor official marketplace": "https://marketplace.nvidia.com/en-us/enterprise/robotics-edge/jetson-thor-developer-kit/",
     "AMD MI250X current refurbished market": "https://harddiskdirect.com/p41933-001-1722798.html",
@@ -892,7 +959,9 @@ PREVIEW_ASSUMPTIONS: dict[str, dict[str, object]] = {
         ),
     },
     "gpu:MI455X": {
-        "status": "launched 2026-07-23; Helios volume deployments expected in 2H 2026",
+        "status": "launched 2026-07-23; AMD reported volume shipments in 2H 2026",
+        "captured_at": "2026-11-25",
+        "availability_source": AMD_MI400_AVAILABILITY,
         "source": "https://www.amd.com/en/products/accelerators/instinct/mi400/mi455x.html",
         "assumptions": (
             "AMD publishes 432 GB HBM4, 23.3 TB/s, 5.0 PF dense BF16, 20.1 PF FP8, 40.3 PF MXFP4, and 3.6 TB/s bidirectional scale-up per GPU",
@@ -901,12 +970,24 @@ PREVIEW_ASSUMPTIONS: dict[str, dict[str, object]] = {
         ),
     },
     "gpu:HELIOS_MI455X": {
-        "status": "AMD reference design; OEM volume deployments expected in 2H 2026",
+        "status": "AMD reference design; early Helios racks online in 2H 2026",
+        "captured_at": "2026-11-25",
+        "availability_source": AMD_MI400_AVAILABILITY,
         "source": "https://www.amd.com/en/products/rackscale-solutions/helios.html",
         "assumptions": (
             "the selectable system represents the complete 72-GPU Helios rack with Venice CPUs and Vulcano networking",
             "AMD publishes 432 GB HBM4, 23.3 TB/s, 5.0 PF dense BF16, 20.1 PF FP8, 40.3 PF MXFP4, and 3.6 TB/s bidirectional scale-up per GPU",
             "AMD publishes 31 TB HBM4, 2.9 EF FP4, 1.4 EF FP8, 260 TB/s scale-up, and 43 TB/s scale-out at rack level; 1.5 kW/GPU remains a planner proxy",
+        ),
+    },
+    "gpu:HELIOS_MI450X": {
+        "status": "announced 2026-11-12; 72-GPU Helios rack reference, quote required",
+        "captured_at": "2026-11-25",
+        "source": MI450X_SPEC,
+        "assumptions": (
+            "Per GPU: 288 GB HBM4, 23.3 TB/s memory bandwidth, 5 PF dense BF16, 20.1 PF FP8, and 40.3 PF MXFP4",
+            "3.6 TB/s bidirectional scale-up and 600 GB/s bidirectional scale-out per accelerator",
+            "Rack power and configuration-specific acquisition cost are unverified",
         ),
     },
     "gpu:TT_GALAXY_BLACKHOLE": {
@@ -1275,13 +1356,31 @@ GPU_CARDS: list[GPUCard] = [
         (GPUPlannerOption("Add", "DGX_SPARK"),),
         "Planner uses the GB10 128GB/273GB/s profile. Dense BF16/FP8 rooflines are derived from NVIDIA's published sparse FP4 figure.",
     ),
+    GPUCard(
+        "ASUS ProArt GR1X",
+        "NVIDIA",
+        "RTX Spark N1X desktop",
+        "64 GB LPDDR5X shared · 300 GB/s",
+        "US retail Windows 11 Arm mini PC, 1 TB SSD",
+        (GPUPlannerOption("Add", "RTX_SPARK_ASUS_GR1X_64"),),
+        "Shared CPU/GPU memory. Peak bandwidth and 140 W TDP from ASUS. Dense compute uses the GB10 roofline proxy.",
+    ),
+    GPUCard(
+        "MSI EdgeMesa N AI+",
+        "NVIDIA",
+        "RTX Spark N1X desktop",
+        "128 GB LPDDR5X shared · 273 GB/s",
+        "US retail Windows 11 Arm mini PC, X-005US, 4 TB SSD",
+        (GPUPlannerOption("Add", "RTX_SPARK_MSI_EDGEMESA_128"),),
+        "Shared CPU/GPU memory. Listed peak bandwidth and 240 W power adapter. Dense compute uses the GB10 roofline proxy.",
+    ),
     # ── AMD: newest generation first ────────────────────────────────────────
     GPUCard(
         "AMD Helios (72× MI455X + Venice)",
         "AMD",
         "CDNA 5 rackscale reference design (preliminary)",
         "31 TB HBM4 total · 432 GB / GPU",
-        "72-GPU ORW rack with EPYC Venice, UALink and Pensando Vulcano networking; OEM volume deployments expected in 2H 2026",
+        "72-GPU ORW rack with EPYC Venice, UALink and Pensando Vulcano networking; AMD has reported early customer deployments",
         (GPUPlannerOption("Add Preview", "HELIOS_MI455X"),),
         "System-only profile: 2.9 EF FP4, 1.4 EF FP8, 260 TB/s scale-up, and 43 TB/s scale-out. The count is constrained to one or more 72-GPU racks.",
     ),
@@ -1290,9 +1389,18 @@ GPU_CARDS: list[GPUCard] = [
         "AMD",
         "CDNA 5",
         "432 GB HBM4, 23.3 TB/s",
-        "Helios volume deployments expected in 2H 2026",
+        "AMD has reported volume shipments for Helios deployments",
         (GPUPlannerOption("Add", "MI455X"),),
         "AMD publishes dense BF16, FP8, MXFP4, memory, bandwidth, and scale-up specifications. Power remains a planner proxy; the MI400 key is retained only for saved-plan compatibility.",
+    ),
+    GPUCard(
+        "AMD Helios (72× MI450X)",
+        "AMD",
+        "CDNA 5 rackscale reference design",
+        "20.736 TB HBM4 total · 288 GB / GPU",
+        "Quote-only 72-GPU Helios configuration",
+        (GPUPlannerOption("Add rack reference", "HELIOS_MI450X"),),
+        "Announced November 12, 2026. Count is constrained to whole racks. Power and acquisition quote remain unverified.",
     ),
     GPUCard(
         "MI355X",

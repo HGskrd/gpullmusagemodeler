@@ -6,7 +6,15 @@ explicitly labeled vendor preorders are offered; cloud-only products are outside
 
 from dataclasses import dataclass
 
-from .hardware import GPU_CARDS, GPUS, GPUCard
+from .hardware import (
+    ASUS_GR1X_BUY,
+    ASUS_GR1X_SPEC,
+    GPU_CARDS,
+    GPUS,
+    MSI_EDGEMESA_BUY,
+    RTX_SPARK_REVIEWED_AT,
+    GPUCard,
+)
 from .tinybox import TINYBOX_GPU_CONFIGS, TINYBOX_PRESET_KEYS
 
 HARDWARE_REVIEWED_AT = "2026-10-17"
@@ -14,7 +22,8 @@ HARDWARE_REVIEWED_AT = "2026-10-17"
 UNAVAILABLE_HARDWARE = {
     "RUBIN_NVL72": "Preliminary platform; purchasable configuration not verified.",
     "MI455X": "Helios deployment profile; independent purchase not verified.",
-    "HELIOS_MI455X": "Preliminary reference system; purchase not verified.",
+    "HELIOS_MI455X": "Early customer deployments reported; purchase quote required.",
+    "HELIOS_MI450X": "Quote-only rack; purchasable configuration unverified.",
     "MI400": "Compatibility alias for saved plans.",
     "CrescentIsland": "Announced product; purchasable configuration not verified.",
     "MAC_STUDIO_M5_ULTRA": "512GB configuration starts shipping after this review date.",
@@ -31,7 +40,13 @@ RYZEN_SOURCE = "https://www.amd.com/en/products/processors/desktops/ryzen/ryzen-
 RYZEN_BUY = "https://www.gmktec.com/products/amd-ryzen%E2%84%A2-ai-max-395-evo-x2-ai-mini-pc"
 GEFORCE_TENSOR_SOURCE = "https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf"
 PRO_TENSOR_SOURCE = "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1.0.pdf"
+RTX_SPARK_PURCHASE_SOURCES = {
+    "RTX_SPARK_ASUS_GR1X_64": ASUS_GR1X_BUY,
+    "RTX_SPARK_MSI_EDGEMESA_128": MSI_EDGEMESA_BUY,
+}
 HARDWARE_SOURCES = {
+    "RTX_SPARK_ASUS_GR1X_64": ASUS_GR1X_SPEC,
+    "RTX_SPARK_MSI_EDGEMESA_128": MSI_EDGEMESA_BUY,
     **{key: config.source for key, config in TINYBOX_GPU_CONFIGS.items()},
     **dict.fromkeys(("RTX5090", "RTX4090", "RTX3090"), GEFORCE_TENSOR_SOURCE),
     "RTXPRO6000_BW_WS": PRO_TENSOR_SOURCE,
@@ -106,6 +121,10 @@ def hardware_choices() -> list[HardwareChoice]:
                 runtime = "Furiosa SDK and compiled supported models; verify model and precision coverage."
             if key == "RYZEN_AI_MAX_395_128":
                 specs = "128 GB system RAM; 96 GB GPU allocation budget, not 128 GB dedicated VRAM. Peak bandwidth 256 GB/s; sustained bandwidth 200 GB/s and BF16/FP8 rooflines 29.7 TFLOPS are uncalibrated conservative proxies. 120 W is an APU power budget, not whole-PC wall power."
+            elif key in RTX_SPARK_PURCHASE_SOURCES:
+                runtime = (
+                    "Windows on Arm CUDA. Validate runtime and precision support for this SKU."
+                )
             elif key in {"A100_80_PCIE", "A100_40", "H100_PCIE"}:
                 specs += (
                     " PCIe-only local topology assumed; optional NVLink bridges are not included."
@@ -133,6 +152,14 @@ def hardware_choices() -> list[HardwareChoice]:
             tinybox = TINYBOX_GPU_CONFIGS.get(key)
             if tinybox:
                 channel = tinybox.availability
+            purchase_source = RTX_SPARK_PURCHASE_SOURCES.get(key, source)
+            reviewed_at = HARDWARE_REVIEWED_AT
+            if key == "RYZEN_AI_MAX_395_128":
+                purchase_source = RYZEN_BUY
+            if key in RTX_SPARK_PURCHASE_SOURCES:
+                reviewed_at = RTX_SPARK_REVIEWED_AT
+            if tinybox:
+                reviewed_at = tinybox.reviewed_at
             choices.append(
                 HardwareChoice(
                     key,
@@ -143,8 +170,8 @@ def hardware_choices() -> list[HardwareChoice]:
                     specs,
                     runtime,
                     source,
-                    RYZEN_BUY if key == "RYZEN_AI_MAX_395_128" else source,
-                    tinybox.reviewed_at if tinybox else HARDWARE_REVIEWED_AT,
+                    purchase_source,
+                    reviewed_at,
                 )
             )
     return choices
@@ -196,6 +223,13 @@ PICKER_FAMILIES = {
         ),
         ("Jetson", (("JETSON_AGX_THOR", "AGX Thor · 128 GB"),)),
         ("DGX", (("DGX_SPARK", "Spark · 128 GB"), ("DGX_STATION_GB300", "Station GB300"))),
+        (
+            "RTX Spark",
+            (
+                ("RTX_SPARK_ASUS_GR1X_64", "ASUS GR1X · 64 GB"),
+                ("RTX_SPARK_MSI_EDGEMESA_128", "MSI EdgeMesa · 128 GB"),
+            ),
+        ),
         ("RTX A", (("A6000", "A6000 · 48 GB"), ("A4000", "A4000 · 16 GB"))),
         ("Ampere", (("A10", "A10 · 24 GB"), ("A30", "A30 · 24 GB"), ("A40", "A40 · 48 GB"))),
         ("V / T", (("V100", "V100 · 32 GB"), ("T4", "T4 · 16 GB"))),

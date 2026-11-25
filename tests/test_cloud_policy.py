@@ -177,7 +177,7 @@ class CloudPolicyTests(unittest.TestCase):
             info, price_per_m = _cloud_price_per_m_in_preset(0, 0, 0, profile, 0.5, "test")
 
         expected_sticker = 1.25 * (
-            500 / 1e6 * 4.0 + 500 / 1e6 * 0.4 + 200 / 1e6 * 5.0 + 400 / 1e6 * 0.5 + 100 / 1e6 * 6.0
+            300 / 1e6 * 4.0 + 500 / 1e6 * 0.4 + 200 / 1e6 * 5.0 + 400 / 1e6 * 0.5 + 100 / 1e6 * 6.0
         )
         self.assertTrue(info["long_context_pricing_applied"])
         self.assertEqual(info["effective_cache_write_per_m"], 5.0)

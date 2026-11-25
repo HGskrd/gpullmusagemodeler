@@ -129,7 +129,7 @@ def test_picker_has_compact_families_and_no_unavailable_options(client):
     assert "Jotunn" not in html
     assert "MI440X" not in html
     assert "<details" not in html
-    assert "Edge" not in html
+    assert '<span class="gpu-picker-family-name">Edge</span>' not in html
 
 
 @pytest.mark.parametrize(

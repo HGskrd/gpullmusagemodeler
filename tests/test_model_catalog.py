@@ -190,7 +190,7 @@ class ModelCatalogTests(unittest.TestCase):
                 self.assertEqual(cloud["pricing_source"], CLOUD_PRICING_SOURCES[cloud["vendor"]])
 
         for key, cloud in CLOUD_MODELS.items():
-            if cloud.get("pricing_captured_at") in {"2026-11-11", "2026-11-22"}:
+            if cloud.get("pricing_captured_at") in {"2026-11-11", "2026-11-22", "2026-11-25"}:
                 self.assertTrue(cloud["pricing_source"].startswith("https://"))
                 continue
             if key.startswith("kimi") or key in {
@@ -276,6 +276,8 @@ class ModelCatalogTests(unittest.TestCase):
                     record["captured_at"],
                     "2026-11-11"
                     if key in {"gpu:RUBIN_NVL72", "gpu:CrescentIsland", "gpu:TT_GALAXY_BLACKHOLE"}
+                    else "2026-11-25"
+                    if key in {"gpu:MI455X", "gpu:HELIOS_MI455X", "gpu:HELIOS_MI450X"}
                     else PREVIEW_ASSUMPTIONS_CAPTURED_AT,
                 )
                 self.assertTrue(str(record["source"]).startswith("https://"))

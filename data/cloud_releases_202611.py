@@ -18,6 +18,8 @@ CLOUD_RELEASE_PROXIES = {
     "grok-4.7": "grok-4.6",
     "minimax-m3.1-flash": "deepseek-v4-flash",
     "qwen4-max": "deepseek-v4-pro",
+    "hy4": "deepseek-v4-pro",
+    "hy4-flash": "deepseek-v4-flash",
 }
 
 _CAPTURED_20261122 = frozenset(
@@ -224,16 +226,52 @@ def apply_cloud_release_updates(models: dict, preview: dict) -> None:
         "max_context_tokens": 1_000_000,
         "supported_service_tiers": ("standard", "batch"),
         "service_tier_price_multipliers": {"batch": 0.5},
+        "cache_disabled_service_tiers": ("batch",),
         "region_price_multipliers": {"global": 1.413 / 1.50},
         "pricing_source": "https://www.alibabacloud.com/help/en/model-studio/model-pricing",
         "price_note": "Alibaba Cloud Model Studio International (Singapore) list rates "
         "($1.50/$0.075/$4.50; 5m write $1.875, 1h write $3.00). Global/Beijing region "
         "rates are $1.413/$0.071/$4.24 (Batch $0.707/$2.12). Max output cap unverified "
-        "in public pricing table. " + proxy_note,
+        "in public pricing table. Model Studio file Batch does not receive cache discounts. "
+        + proxy_note,
     }
+    # USD comparison uses the exchange-rate approximation implied by Tencent's
+    # published 2 CNY / about $0.281 Flash output rate. Billing itself is in CNY.
+    usd_per_cny = 0.1405
+    for key, label, released, cny_rates, standard_from in (
+        ("hy4", "Hy4", "2026-11-04", (6, 0.30, 18), "2027-01-01T00:00:00+08:00"),
+        ("hy4-flash", "Hy4 flash", "2026-11-16", (0.50, 0.02, 2), "2026-11-30T12:00:00+08:00"),
+    ):
+        rate_fields = ("in_per_m", "cached_in_per_m", "out_per_m")
+        standard = {field: amount * usd_per_cny for field, amount in zip(rate_fields, cny_rates)}
+        models[key] = {
+            "label": f"Tencent {label} · TokenHub",
+            "vendor": "Tencent",
+            "api_model": key,
+            "released_at": released,
+            **{field: rate * 0.5 for field, rate in standard.items()},
+            "future_pricing": {"effective_at": standard_from, **standard},
+            "max_context_tokens": 1_048_576,
+            "cache_mode": "implicit_only",
+            "supported_service_tiers": ("standard",),
+            "pricing_source": "https://cloud.tencent.com/document/product/1823/130055/",
+            "price_note": (
+                f"TokenHub Guangzhou/Singapore list rates (CNY per million input / cached input "
+                f"/ output): {cny_rates[0]:g} / {cny_rates[1]:g} / {cny_rates[2]:g}. "
+                f"50% promotion ends at {standard_from} Beijing time. USD values are estimates "
+                f"using Tencent's launch conversion (USD {usd_per_cny} per CNY). "
+                "Output cap is unpublished. " + proxy_note
+            ),
+        }
     for key in CLOUD_RELEASE_PROXIES:
         models[key].update(
-            pricing_captured_at=captured_nov22 if key in _CAPTURED_20261122 else captured,
+            pricing_captured_at=(
+                "2026-11-25"
+                if key in {"hy4", "hy4-flash"}
+                else captured_nov22
+                if key in _CAPTURED_20261122
+                else captured
+            ),
             quality=0.5,
             token_efficiency=1.0,
             capabilities=("tools", "ctx_128k", "images", "reasoning"),
